@@ -46,7 +46,7 @@ class DeepFakeVideoDataset(Dataset):
         # PyTorch erwartet Labels oft als Float-Tensoren für bestimmte Loss-Funktionen
         return video_tensor, torch.tensor(label, dtype=torch.float32)
 
-def get_dataloaders(base_dir="Processed_Dataset/frames", batch_size=4):
+def get_dataloaders(base_dir="Processed_Dataset/frames", batch_size=4, test_split=0.2):
     """
     Sucht alle Daten, macht einen Train/Test Split und erstellt die DataLoader.
     """
@@ -68,7 +68,7 @@ def get_dataloaders(base_dir="Processed_Dataset/frames", batch_size=4):
     # 3. Train / Validation Split (80% Training, 20% Validierung/Test)
     # random_state=42 sorgt dafür, dass die Aufteilung bei jedem Start gleich bleibt
     X_train, X_val, y_train, y_val = train_test_split(
-        all_folders, all_labels, test_size=0.2, random_state=42, stratify=all_labels
+        all_folders, all_labels, test_size=test_split, random_state=42, stratify=all_labels
     )
 
     # 4. Image Transforms definieren

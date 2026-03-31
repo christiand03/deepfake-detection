@@ -18,7 +18,8 @@ def test_get_dataloaders():
 
     train_loader, val_loader, _, _ = get_dataloaders(
         base_dir=dummy_data_path, 
-        batch_size=1
+        batch_size=1,
+        test_split=0.5
     )
 
     # Test 1: Sind es die richtigen Klassen?
