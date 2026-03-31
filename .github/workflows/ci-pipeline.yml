@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9"] # Hier eure Python-Version eintragen
+        python-version: ["3.13.5"] # Hier eure Python-Version eintragen
 
     steps:
       # 1. Code aus dem Repository auschecken
