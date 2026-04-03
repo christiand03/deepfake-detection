@@ -5,6 +5,7 @@ import torchaudio
 import numpy as np
 from decord import VideoReader, cpu
 from transformers import AutoImageProcessor, AutoProcessor
+from tqdm import tqdm
 
 class MultimodalPreprocessor:
     def __init__(self, 
@@ -68,7 +69,7 @@ class MultimodalPreprocessor:
         
         # Überspringen, falls schon verarbeitet
         if os.path.exists(output_path):
-            print(f"Skip {filename}, if Data already exists.")
+            #print(f"Skip {filename}, if Data already exists.")
             return
 
         try:
@@ -79,7 +80,7 @@ class MultimodalPreprocessor:
             try:
                 audio_tensor = self.extract_audio_tensor(input_video_path)
             except Exception as e:
-                print(f"Warning: Audio for {filename} can not extracted. ({e})")
+                tqdm.write(f"Warning: Audio for {filename} cannot be extracted. ({e})")
                 audio_tensor = None
                 
             # Daten in Dictionary 
@@ -90,10 +91,10 @@ class MultimodalPreprocessor:
             
             # Als PyTorch Tensor-Datei abspeichern
             torch.save(processed_data, output_path)
-            print(f"Successfully processed and saved: {output_path}")
+            #print(f"Successfully processed and saved: {output_path}")
             
         except Exception as e:
-            print(f"Error during processing of {input_video_path}: {e}")
+            tqdm.write(f"Error during processing of {input_video_path}: {e}")
 
 
 if __name__ == "__main__":
@@ -106,8 +107,8 @@ if __name__ == "__main__":
     
     # Alle .mp4 Dateien finden
     video_files = glob.glob(os.path.join(RAW_DATA_DIR, "*.mp4"))
-    print(f"Gefundene Videos: {len(video_files)}")
+    print(f"Founnded Videos: {len(video_files)}")
     
     # Schleife über alle Videos
-    for video_path in video_files:
+    for video_path in tqdm(video_files, desc="Processing Videos", unit="Video"):
         preprocessor.process_and_save(video_path, PROCESSED_DATA_DIR)
