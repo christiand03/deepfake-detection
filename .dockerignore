@@ -1,0 +1,41 @@
+# Git
+.git/
+.github/
+
+# DVC data (large files, not needed in image)
+.dvc/
+Datasets/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# ML artifacts
+data/
+outputs/
+logs/
+wandb/
+*.pt
+*.pth
+*.h5
+*.ckpt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker (prevent recursive builds)
+Dockerfile
+.dockerignore
+.devcontainer/
+
+# Misc
+__pycache__/
+*.pyc
+*.log
+.cache/
