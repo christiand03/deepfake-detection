@@ -1,0 +1,26 @@
+# Explainable AI (xAI) & Modell-Transparenz
+
+Der "Depth-over-Breadth" Leitgedanke fußt auf den xAI-Erkenntnissen des Systems. Das Projekt muss belegen, *warum* das Netz eine Fälschung identifiziert hat.
+
+## 1. Technologische Ansätze: Abkehr von Grad-CAM
+- **Das Problem:** Algorithmen wie Grad-CAM wurden primär für Convolutional Neural Networks entwickelt. Sie machen sich die topologischen Informationen der finalen Convolution-Matrix zunutze. Transformer besitzen solche topographischen Restriktionen im Backend nicht (sie nutzen flache Token).
+- **Die Lösung 1 - Attention Rollout:** Eine intuitive SOTA-Methode. Man "rollt" die Attention-Weights (Softmax-Scores nach Q*K) Schicht für Schicht (Layer) hinunter auf den ersten Video-Patch zurück. Relativ leicht auf Backbones anwendbar, gibt einen ersten Indikator ("Guckt das Modell auf den Mund oder die Wand?").
+- **Die Lösung 2 - Layer-wise Relevance Propagation (LRP):** Der aktuelle Benchmark, insbesondere für den Einsatz in Transformern (vgl. die Arbeit von *Hila Chefer et al.*). Mathematisch anspruchsvoll: Es kalkuliert nicht nur, wo die Aufmerksamkeit lag, sondern explizit, ob dieses Pixel positiv (Richtung 'Fake') oder negativ zur Klassifikationsentscheidung beigetragen hat.
+
+## 2. Visualisierung & Darstellung der xAI-Daten
+Bilder und Graphen entscheiden maßgeblich über die visuelle Kompetenz der Diplom/Belegarbeit.
+- **Grid-Darstellung (Plotting):** Ein konsistentes, mehrspaltiges Plot-Grid bauen.
+  - Spalte 1: O-Ton/Original-Video-Frame (Grundlage)
+  - Spalte 2: (In Phase 3/4) Das veränderte Bild (Rauschen/FGSM-Angriff).
+  - Spalte 3: Die LRP-Heatmap überlagert (Overlay-Opazität 50%).
+- **Tracking:** Dieses Grid-Plot wird (via W&B) während des Trainings mit einem bestimmten Seed-Beispiel generiert. So beobachtet das Team, wie sich die Attention im Laufe der 50 Epochen von "wirrem Suchen am Rand" präzise auf den Mund "verschiebt".
+
+## 3. Plotting-Standards (`plot_style.py`)
+- Python-Dateien zum Generieren der Graphen (Loss, Accuracy, Precision/Recall, Heatmaps) sollten an Tag 1 in einer `src/utils/plot_style.py` zentral definiert werden.
+- Nutzt etablierte SOTA-Styles, beispielsweise die Bibliothek **SciencePlots**. Dies liefert Layouts ähnlich formatierter IEEE-/CVPR-Wissenschaftspapers (inkl. korrekter CMYK-Farben ohne bunte Hintergrundgitter).
+- Ergänzend ist eine `plot_style.md` beizulegen, die Farbcodes und Schriftarten für mögliche Frontend-Tools oder KI-Assistenten bereitstellt.
+
+## Weiterführende Recherche
+- "Transformer Interpretability Beyond Attention Visualization" (Chefer)
+- "LRP for Deepfake Detection"
+- "matplotlib-scienceplots repository"
