@@ -9,7 +9,7 @@ Während der Fokus massiv auf der Backend-ML-Entwicklung liegt, bietet eine saub
 
 ## 2. Backend / API Schnittstelle
 Das PyTorch/Python-Modell muss an die React-Application angebunden werden.
-- **Framework:** `FastAPI`. 
+- **Framework:** `FastAPI`.
 - **Verarbeitung:** FastAPI stellt REST-Endpoints zur Verfügung, akzeptiert kleine Video-Uploads, leitet diese durch eine Inference-Pipeline in den geladenen Spatio-Temporal-Head und liefert als JSON:
   - `Confidence Score` (Fake / Real).
   - `Base64 encodiertes Bild` der gerenderten LRP-Heatmap.

@@ -4,8 +4,8 @@ Diese To-Do-Liste bietet einen konkreten Zeitplan für das Projekt "Unmasking De
 
 ## Meilenstein 1: Projekt-Fundament & Tools (Tag 1-7)
 - [x] **Repository aufsetzen:** Git-Repo mit *Cookiecutter Data Science* Ordnerstruktur generieren (Phase 1).
-- [ ] **Environment sichern:** Dockerfile oder VS Code DevContainer inkl. lokaler GPU-Treiber-Schnittstellen konfigurieren und verifizieren.
-- [ ] **Formatting (Ruff) forcieren:** Linter & automatische Formatierung in IDE integrieren und `.pre-commit-config.yaml` einrichten.
+- [x] **Environment sichern:** Dockerfile oder VS Code DevContainer inkl. lokaler GPU-Treiber-Schnittstellen konfigurieren und verifizieren.
+- [x] **Formatting (Ruff) forcieren:** Linter & automatische Formatierung in IDE integrieren und `.pre-commit-config.yaml` einrichten.
 - [x] **Paper-Setup:** Projekt in *Overleaf* einrichten (IEEE Standard) und *Zotero* für automatische Quellen einbinden.
 
 ## Meilenstein 2: Datasets & Daten Pipeline (Woche 2-4)

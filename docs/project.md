@@ -1,7 +1,7 @@
 # Projektüberblick & Zielsetzung
 
 ## 1. Executive Summary & Forschungsphilosophie
-Dieses Projekt, mit dem Arbeitstitel **"Unmasking Deception: Ein progressiver, multimodaler xAI-Ansatz zur Erkennung von Deepfakes in politischen Reden unter Berücksichtigung von Adversarial Robustness"**, verfolgt einen ambitionierten Ansatz zur Deepfake-Detektion. 
+Dieses Projekt, mit dem Arbeitstitel **"Unmasking Deception: Ein progressiver, multimodaler xAI-Ansatz zur Erkennung von Deepfakes in politischen Reden unter Berücksichtigung von Adversarial Robustness"**, verfolgt einen ambitionierten Ansatz zur Deepfake-Detektion.
 Im Gegensatz zu traditionellen Benchmark-Studien ("Breadth-over-Depth"), die viele Modelle oberflächlich vergleichen, fokussiert sich diese Arbeit auf **"Depth-over-Breadth"**. Es wird ein hochmodernes, Transformer-basiertes Modell eingesetzt und tiefgreifend analysiert. Der Fokus liegt dabei auf **Explainable AI (xAI)**: Es geht nicht nur darum, *ob* ein Deepfake erkannt wird, sondern *warum*.
 
 ## 2. Motivation und Problemstellung

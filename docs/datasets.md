@@ -29,7 +29,7 @@ Die Qualität des Deep-Learning-Projekts steht und fällt mit den Trainingsdaten
 
 ### D: Face Cropping Dilemma (Tight vs. Context-Aware)
 - **Problem:** Zu enges Schneiden eliminiert Spuren im Hintergrund. Gar kein Cropping zerstört die Auflösung der Lippen auf dem 224x224 Tensor.
-- **Vermeidung (Context-Aware Cropping):** Statt nur das Gesicht extrem nah (Kinn bis Stirn) auszuschneiden, wird ein **Skalierungsfaktor von 1.3x - 1.5x** verwendet. Dies fängt die Blending-Kanten am Hals und Schulteransätze ein, an denen oft Artefakte von Lip-Sync-Algorithmen sichtbar werden. 
+- **Vermeidung (Context-Aware Cropping):** Statt nur das Gesicht extrem nah (Kinn bis Stirn) auszuschneiden, wird ein **Skalierungsfaktor von 1.3x - 1.5x** verwendet. Dies fängt die Blending-Kanten am Hals und Schulteransätze ein, an denen oft Artefakte von Lip-Sync-Algorithmen sichtbar werden.
 
 ## 3. Der Offline-Preprocessing Workflow
 Die Dataloader (PyTorch) dürfen niemals rohe MP4s laden. Die CPU wäre der Bottleneck. Alle Videos werden *vorab* prozessiert.
@@ -46,7 +46,7 @@ Die Dataloader (PyTorch) dürfen niemals rohe MP4s laden. Die CPU wäre der Bott
    - Speicherung der Tensor-Arrays (`[batch, frames, channels, height, width]`) in einer hochperformanten `.h5`-Datenbank.
 
 ## 4. Quality Assurance (QA) Check
-- **Sanity-Check-Skript:** Nimm ein `.h5`-Paket, wandle den Video-Tensor zurück in ein Video, füge den Audio-Tensor hinzu, speichere es als `.mp4` ab und *schaue es dir an*. 
+- **Sanity-Check-Skript:** Nimm ein `.h5`-Paket, wandle den Video-Tensor zurück in ein Video, füge den Audio-Tensor hinzu, speichere es als `.mp4` ab und *schaue es dir an*.
 - *Check:* Sitzt das Cropping? Zittert das Bild? Ist es perfekt zeitsynchron?
 
 ## 5. Weiterführende Recherche

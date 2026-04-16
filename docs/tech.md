@@ -5,7 +5,7 @@ Ein professioneller Tech-Stack sorgt für fehlerfreien Code und stellt sicher, d
 ## 1. Code-Formatierung und Linting
 - **Ruff:** Der absolute Standard. Ersetzt `Black`, `Flake8` und `isort`. Er ist in Rust geschrieben und extrem schnell.
   - *Setup:* Ruff als automatischen Formatter in VS Code einrichten (`"editor.formatOnSave": true`).
-- **Pre-commit Hooks:** Der Git-Türsteher. Blockiert `git commit`, wenn Code nicht richtig durch Ruff formatiert ist oder fehlerhafte Type Hints vorliegen. 
+- **Pre-commit Hooks:** Der Git-Türsteher. Blockiert `git commit`, wenn Code nicht richtig durch Ruff formatiert ist oder fehlerhafte Type Hints vorliegen.
 
 ## 2. Type Hinting & Tensor-Operationen
 Normale Python-Type-Hints (`x: torch.Tensor`) reichen in der Deep-Learning-Architektur nicht aus, da Dimensionen unklar bleiben.
