@@ -16,6 +16,12 @@ https://github.com/YZY-stack/DF40 #kein ton
 https://github.com/OUC-VAS/Celeb-DF-PP (2025) #kein ton
 https://github.com/xyyandxyy/IDForge (2024) #Überlegen
 
+https://github.com/DASH-Lab/FakeAVCeleb # Audio + Visual
+https://www.kaggle.com/c/deepfake-detection-challenge/data # Audio + Visual
+https://www.kaggle.com/datasets/elin75/localized-audio-visual-deepfake-dataset-lav-df # Audio + Visual
+https://huggingface.co/datasets/ControlNet/AV-Deepfake1M-PlusPlus # Audio + Visual
+https://huggingface.co/datasets/ControlNet/AV-Deepfake1M # Audio + Visual
+https://swan-df.github.io # Visual + Audio und nicht so groß 30 Personen a 960 Personen
 
 # Audio
 https://huggingface.co/datasets/mueller91/In-The-Wild
