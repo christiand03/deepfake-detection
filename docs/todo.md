@@ -22,6 +22,7 @@ Diese To-Do-Liste bietet einen konkreten Zeitplan für das Projekt "Unmasking De
 - [ ] **Weights & Biases init:** WandB Account verlinken, Project anlegen, `WandBLogger` in PyTorch Lightning einfangen.
 - [ ] **Baseline (ISTVT / Wav2Vec 2.0):** Integration der frozen Feature-Extractor Backbones (Achtung auf `einops` und `jaxtyping`).
 - [ ] **Overfit-Test:** Prüfen ob der ISTVT auf 1 Batch konvergieren kann.
+- [ ] DVC Pipeline einrichten
 
 ## Meilenstein 4: Fusion & xAI Visualisierung (Monat 3)
 - [ ] **Cross-Attention Head (Pair Programming):** Beide Personen programmieren den Fusions-Head, der Features verknüpft. Training auf Gesamt-Dataset.

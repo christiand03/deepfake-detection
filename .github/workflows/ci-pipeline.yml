@@ -8,16 +8,16 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.13.5"] # Hier eure Python-Version eintragen
+        python-version: ["3.11"]
 
     steps:
       # 1. Code aus dem Repository auschecken
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # 2. Python-Umgebung aufsetzen
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -28,12 +28,11 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      # 4. Linter ausführen
-      - name: Lint with flake8
+      # 4. Linter ausführen (ruff)
+      - name: Lint with ruff
         run: |
-          # Stoppt den Build bei Fehlern. Zeigt an, wo die Fehler sind.
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+          ruff check src/ tests/
+          ruff format --check src/ tests/
 
       # 5. Tests mit pytest ausführen
       - name: Test with pytest
