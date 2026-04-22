@@ -7,10 +7,10 @@ Diese To-Do-Liste bietet einen konkreten Zeitplan für das Projekt "Unmasking De
 - [x] **Environment sichern:** Dockerfile oder VS Code DevContainer inkl. lokaler GPU-Treiber-Schnittstellen konfigurieren und verifizieren.
 - [x] **Formatting (Ruff) forcieren:** Linter & automatische Formatierung in IDE integrieren und `.pre-commit-config.yaml` einrichten.
 - [x] **Paper-Setup:** Projekt in *Overleaf* einrichten (IEEE Standard) und *Zotero* für automatische Quellen einbinden.
-- [ ] DVC einrichten
+- [x] DVC einrichten
 
 ## Meilenstein 2: Datasets & Daten Pipeline (Woche 2-4)
-- [ ] **Download:** Beschaffung der Rohmaterialien (FakeAVCeleb, WLD, PDD Testset).
+- [x] **Download:** Beschaffung der Rohmaterialien (FakeAVCeleb, WLD, PDD Testset).
 - [ ] **Modulare Dataloader (Pytest):** Eine robuste Video/Audio-Klasse programmieren.
 - [ ] **FFmpeg Synchronisation:** Audio auf Mono, 16kHz resampeln, Video fps fixieren.
 - [ ] **Kontext-Aware Cropping (MediaPipe):** Gesichtsextraktion (Faktor 1.4x), Splitten zu 16-Frame Chunks.
