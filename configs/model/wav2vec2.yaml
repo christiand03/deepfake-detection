@@ -1,0 +1,18 @@
+_target_: src.models.wav2vec2_module.Wav2Vec2DeepfakeModule
+
+# Modellselection
+model_name_or_path: "facebook/wav2vec2-base"
+freeze_feature_extractor: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.00005
+  weight_decay: 0.01
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  _partial_: true
+  mode: min
+  factor: 0.5
+  patience: 3

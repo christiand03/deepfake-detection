@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - override /data:
+  - override /model: wav2vec2
+  - override /logger: wandb
+  - override /trainer: gpu
+
+#später Audio-Daten-Config eintragen!
+# - override /data: deepfake_audio
+
+tags: ["wav2vec2", "audio", "baseline"]
