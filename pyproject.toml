@@ -14,7 +14,10 @@ select = [
     "SIM",  # flake8-simplify
     "TCH",  # flake8-type-checking
 ]
-ignore = ["E501"]
+ignore = ["E501", "F722"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/models/*" = ["F821"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
