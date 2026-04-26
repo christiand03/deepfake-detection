@@ -1,0 +1,22 @@
+defaults:
+  - model_checkpoint
+  - early_stopping
+  - model_summary
+  - rich_progress_bar
+  - _self_
+
+model_checkpoint:
+  dirpath: ${paths.output_dir}/checkpoints
+  filename: "epoch_{epoch:03d}-val_loss_{val/loss:.3f}" # Name angepasst
+  monitor: "val/loss" #angepasst auf loss
+  mode: "min" # auf min geändert
+  save_last: True
+  auto_insert_metric_name: False
+
+early_stopping:
+  monitor: "val/loss" #angepasst auf loss
+  patience: 15 # number of epochs with no improvement after which training will be stopped
+  mode: "min" #auf min geändert
+
+model_summary:
+  max_depth: -1
