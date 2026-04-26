@@ -18,8 +18,8 @@ Diese To-Do-Liste bietet einen konkreten Zeitplan für das Projekt "Unmasking De
 - [ ] **Sanity-Check Test:** Rekonstruktion eines `.h5` Tensors zu `.mp4` inkl. Audio – Visueller Check. *(Niemals ohne Pass starten!)*
 
 ## Meilenstein 3: Architektur & MLOps Framework (Monat 2)
-- [ ] **Konfiguration (Hydra):** Strukturieren einer sauberen `config.yaml` um Hardcoding zu stoppen.
-- [ ] **Weights & Biases init:** WandB Account verlinken, Project anlegen, `WandBLogger` in PyTorch Lightning einfangen.
+- [x] **Konfiguration (Hydra):** Strukturieren einer sauberen `config.yaml` um Hardcoding zu stoppen.
+- [x] **Weights & Biases init:** WandB Account verlinken, Project anlegen, `WandBLogger` in PyTorch Lightning einfangen.
 - [ ] **Baseline (ISTVT / Wav2Vec 2.0):** Integration der frozen Feature-Extractor Backbones (Achtung auf `einops` und `jaxtyping`).
 - [ ] **Overfit-Test:** Prüfen ob der ISTVT auf 1 Batch konvergieren kann.
 - [ ] DVC Pipeline einrichten
