@@ -3,3 +3,8 @@ defaults:
 
 accelerator: gpu
 devices: 1
+
+#Transformeroptimierung
+
+precision: "bf16-mixed"
+accumulate_grad_batches: 1
