@@ -24,7 +24,8 @@ def assign_splits(
     to that identity inherit the same split assignment.
 
     Args:
-        metadata: DataFrame with at least an identity column.
+        metadata: DataFrame with at least an identity column and the required
+            label columns: ``label``, ``label_video``, ``label_audio``.
         val_ratio: Fraction of identities for validation.
         test_ratio: Fraction of identities for test.
         identity_col: Column name containing the identity identifier.
@@ -34,10 +35,13 @@ def assign_splits(
         Copy of metadata with an added ``split`` column.
 
     Raises:
-        ValueError: If ratios are invalid or identity column is missing.
+        ValueError: If ratios are invalid, identity column is missing, or
+            required label columns are absent.
     """
-    if identity_col not in metadata.columns:
-        msg = f"Column '{identity_col}' not found in metadata. Available: {list(metadata.columns)}"
+    required_cols = {identity_col, "label", "label_video", "label_audio"}
+    missing = required_cols - set(metadata.columns)
+    if missing:
+        msg = f"Required columns missing from metadata: {sorted(missing)}. Available: {list(metadata.columns)}"
         raise ValueError(msg)
 
     if not 0 < val_ratio + test_ratio < 1:

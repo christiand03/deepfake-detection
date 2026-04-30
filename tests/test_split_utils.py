@@ -27,6 +27,8 @@ def sample_metadata() -> pd.DataFrame:
                     "video_id": f"vid_{identity}",
                     "identity_id": f"person_{identity}",
                     "label": identity % 2,  # alternating real/fake
+                    "label_video": identity % 2,
+                    "label_audio": (identity + 1) % 2,
                     "h5_path": f"data/chunk_{identity}_{chunk}.h5",
                 }
             )
@@ -44,6 +46,8 @@ def small_metadata() -> pd.DataFrame:
                 "video_id": f"vid_{identity}",
                 "identity_id": f"person_{identity}",
                 "label": 0,
+                "label_video": 0,
+                "label_audio": 0,
                 "h5_path": f"data/chunk_{identity}.h5",
             }
         )
@@ -104,8 +108,14 @@ class TestAssignSplits:
         assert (id_splits == "test").sum() >= 1
 
     def test_missing_identity_column_raises(self, sample_metadata: pd.DataFrame) -> None:
-        with pytest.raises(ValueError, match="not found in metadata"):
+        with pytest.raises(ValueError, match="missing from metadata"):
             assign_splits(sample_metadata, identity_col="nonexistent")
+
+    def test_missing_label_columns_raises(self, sample_metadata: pd.DataFrame) -> None:
+        """Metadata without label_video / label_audio must be rejected."""
+        incomplete = sample_metadata.drop(columns=["label_video", "label_audio"])
+        with pytest.raises(ValueError, match="missing from metadata"):
+            assign_splits(incomplete)
 
     def test_invalid_ratios_raises(self, sample_metadata: pd.DataFrame) -> None:
         with pytest.raises(ValueError, match="must be between 0 and 1"):

@@ -1,0 +1,36 @@
+# @package _global_
+
+data:
+  # Root of the raw AV-Deepfake1M video tree:  data/train/{identity}/{clip}/{segment}/{variant}.mp4
+  root: data/train
+  # Root of the JSON sidecar tree: data/train_metadata/train_metadata/{identity}/{clip}/{segment}/{variant}.json
+  metadata_root: data/train_metadata/train_metadata
+  # Where FFmpeg-normalised AV files are written (persistent — re-runs skip already-done files)
+  normalized_dir: data/normalized
+  # Where per-split HDF5 + CSV outputs land
+  output_dir: data/processed
+
+preprocessing:
+  num_frames: 16
+  target_fps: 25
+  sample_rate: 16000
+  # 16 frames / 25 fps * 16000 Hz = 10240 samples per chunk
+  audio_samples_per_chunk: 10240
+
+face_extraction:
+  crop_scale: 1.4
+  target_size: 224
+  # Path to the face_landmarker.task model bundle (mediapipe >= 0.10 Tasks API).
+  # Download from: https://storage.googleapis.com/mediapipe-models/face_landmarker/
+  #   face_landmarker/float16/1/face_landmarker.task
+  model_path: models/face_landmarker.task
+
+run:
+  # Set to a positive integer to cap the number of videos processed (useful for smoke runs)
+  max_videos: null
+  # Identity-based split ratios (applied after scanning; overrides JSON sidecar split field)
+  val_ratio: 0.15
+  test_ratio: 0.15
+  # Skip videos whose video_id already appears in an existing output CSV
+  skip_existing: true
+  log_level: INFO
