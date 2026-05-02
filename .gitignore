@@ -41,7 +41,7 @@ data/
 outputs/
 logs/
 wandb/
-models/
+models/weights
 
 # ============================================================
 # Datasets (tracked via DVC, not Git)
