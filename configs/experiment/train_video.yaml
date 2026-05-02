@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+
+tags: ["videomae", "video", "baseline"]
