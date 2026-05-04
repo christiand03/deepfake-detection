@@ -1,6 +1,5 @@
 _target_: src.models.VideoMAE_module.VideoMAEModule
-
 model_name_or_path: "MCG-NJU/videomae-base"
-num_labels: 2  # Real vs Fake
-learning_rate: 0.0001
+num_labels: 2
+learning_rate: 1e-4
 weight_decay: 0.05
