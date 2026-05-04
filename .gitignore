@@ -71,3 +71,13 @@ desktop.ini
 *.log
 .cache/
 /data
+
+# ============================================================
+# Ausnahmen (Exceptions)
+# ============================================================
+# Den src-Ordner selbst nicht ignorieren
+!src/
+
+# Spezifische Unterordner im src-Ordner explizit wieder einschließen
+!src/data/
+!src/models/
