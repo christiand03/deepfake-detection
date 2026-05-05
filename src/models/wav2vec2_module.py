@@ -57,7 +57,7 @@ class Wav2Vec2DeepfakeModule(LightningModule):
 
     @beartype
     def model_step(
-        self, batch: tuple[Float[torch.Tensor, "batch time"], Int[torch.Tensor, "batch"]]
+        self, batch: Any
     ) -> tuple[Float[torch.Tensor, ""], Int[torch.Tensor, "batch"], Int[torch.Tensor, "batch"]]:
         """
         Ein zentraler Schritt für Training/Val/Test.
@@ -77,9 +77,7 @@ class Wav2Vec2DeepfakeModule(LightningModule):
         return loss, preds, y
 
     @beartype
-    def training_step(
-        self, batch: tuple[Float[torch.Tensor, "batch time"], Int[torch.Tensor, "batch"]], batch_idx: int
-    ) -> Float[torch.Tensor, ""]:
+    def training_step(self, batch: Any, batch_idx: int) -> Float[torch.Tensor, ""]:
         loss, preds, targets = self.model_step(batch)
 
         # Metriken updaten
@@ -95,9 +93,7 @@ class Wav2Vec2DeepfakeModule(LightningModule):
         return loss
 
     @beartype
-    def validation_step(
-        self, batch: tuple[Float[torch.Tensor, "batch time"], Int[torch.Tensor, "batch"]], batch_idx: int
-    ) -> None:
+    def validation_step(self, batch: Any, batch_idx: int) -> None:
         loss, preds, targets = self.model_step(batch)
 
         self.val_loss(loss)
@@ -116,9 +112,7 @@ class Wav2Vec2DeepfakeModule(LightningModule):
         self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
 
     @beartype
-    def test_step(
-        self, batch: tuple[Float[torch.Tensor, "batch time"], Int[torch.Tensor, "batch"]], batch_idx: int
-    ) -> None:
+    def test_step(self, batch: Any, batch_idx: int) -> None:
         loss, preds, targets = self.model_step(batch)
         self.test_loss(loss)
         self.test_acc(preds, targets)

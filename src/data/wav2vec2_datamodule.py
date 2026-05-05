@@ -3,31 +3,36 @@ import os
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
-from .hdf5_dataset import DeepfakeHDF5Dataset  # Import von oben
+from .audio_hdf5_dataset import DeepfakeAudioHDF5Dataset
 
 
-class VideoMAEDataModule(LightningDataModule):
+class Wav2Vec2DataModule(LightningDataModule):
     def __init__(
         self,
         data_dir: str = "data/processed",
-        batch_size: int = 8,
+        batch_size: int = 32,
         num_workers: int = 4,
         pin_memory: bool = True,
+        label_type: str = "label_audio",
     ):
         super().__init__()
-        # Parameter im Checkpoint speichern (macht Hydra-Lightning automatisch glücklich)
         self.save_hyperparameters(logger=False)
 
-        self.train_dataset: DeepfakeHDF5Dataset | None = None
-        self.val_dataset: DeepfakeHDF5Dataset | None = None
-        self.test_dataset: DeepfakeHDF5Dataset | None = None
+        self.train_dataset: DeepfakeAudioHDF5Dataset | None = None
+        self.val_dataset: DeepfakeAudioHDF5Dataset | None = None
+        self.test_dataset: DeepfakeAudioHDF5Dataset | None = None
 
     def setup(self, stage: str | None = None):
-        # Weist die Datensätze je nach Phase zu
         if self.train_dataset is None and self.val_dataset is None:
-            self.train_dataset = DeepfakeHDF5Dataset(h5_path=os.path.join(self.hparams.data_dir, "train.h5"))
-            self.val_dataset = DeepfakeHDF5Dataset(h5_path=os.path.join(self.hparams.data_dir, "val.h5"))
-            self.test_dataset = DeepfakeHDF5Dataset(h5_path=os.path.join(self.hparams.data_dir, "test.h5"))
+            self.train_dataset = DeepfakeAudioHDF5Dataset(
+                h5_path=os.path.join(self.hparams.data_dir, "train.h5"), label_type=self.hparams.label_type
+            )
+            self.val_dataset = DeepfakeAudioHDF5Dataset(
+                h5_path=os.path.join(self.hparams.data_dir, "val.h5"), label_type=self.hparams.label_type
+            )
+            self.test_dataset = DeepfakeAudioHDF5Dataset(
+                h5_path=os.path.join(self.hparams.data_dir, "test.h5"), label_type=self.hparams.label_type
+            )
 
     def train_dataloader(self):
         return DataLoader(
@@ -35,7 +40,7 @@ class VideoMAEDataModule(LightningDataModule):
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            shuffle=True,  # Training mischen
+            shuffle=True,
             persistent_workers=self.hparams.num_workers > 0,
         )
 

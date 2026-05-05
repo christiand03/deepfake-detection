@@ -10,15 +10,16 @@ from transformers import VideoMAEForVideoClassification
 class VideoMAEModule(LightningModule):
     def __init__(
         self,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler = None,
         model_name_or_path: str = "MCG-NJU/videomae-base",
         num_labels: int = 2,
-        learning_rate: float = 1e-4,
-        weight_decay: float = 0.05,
     ):
         super().__init__()
 
         # Speichert alle init-Argumente im Checkpoint
-        self.save_hyperparameters()
+        # logger=False verhindert, dass Hydra-spezifische Objekte geloggt werden
+        self.save_hyperparameters(logger=False)
 
         # Hugging Face Modell laden
         self.net = VideoMAEForVideoClassification.from_pretrained(
@@ -86,9 +87,20 @@ class VideoMAEModule(LightningModule):
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.hparams.learning_rate,
-            weight_decay=self.hparams.weight_decay,
-        )
+        # Der Optimizer wird aus der Config geladen und hier mit den Modellparametern instanziiert
+        optimizer = self.hparams.optimizer(params=self.parameters())
+
+        # Falls ein Scheduler in der Config steht, wird er hier eingebunden
+        if self.hparams.scheduler is not None:
+            scheduler = self.hparams.scheduler(optimizer=optimizer)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "monitor": "val/loss",  # Muss mit einem geloggten Wert übereinstimmen!
+                    "interval": "epoch",
+                    "frequency": 1,
+                },
+            }
+
         return {"optimizer": optimizer}
