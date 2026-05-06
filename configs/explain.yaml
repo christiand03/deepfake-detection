@@ -1,0 +1,22 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - data: deepfake_video
+  - model: videomae
+  - paths: default
+  - extras: default
+  - hydra: default
+  - optional logger: null
+  - optional trainer: default
+
+task_name: "explain"
+
+# Der Pfad zum Checkpoint MUSS übergeben werden (die drei Fragezeichen erzwingen das)
+ckpt_path: ???
+
+# (Optional) Eigene Parameter für unser Explain-Skript, die wir in Python abgreifen können
+explain:
+  frame_idx: 0                              # Welcher Frame soll geplottet werden? (0 bis z.B. 15)
+  save_path: "lrp_explanation.png"          # Wie soll das Bild heißen?
+  target_class: null                        # Wenn null, wird die VORHERGESAGTE Klasse erklärt
