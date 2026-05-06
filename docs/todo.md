@@ -34,6 +34,7 @@ Diese To-Do-Liste bietet einen konkreten Zeitplan für das Projekt "Unmasking De
 - [ ] **Robustness Skripte:** Rausch/Framedrop Tests implementieren & ausführen.
 - [ ] **Adversarial Attacks:** Foolbox einbinden, White-Box PGD nutzen, LRP Verschiebungen festhalten.
 - [ ] *(Optional)* **FastAPI+React Start:** Kleinen Demo-Prototyp online bringen, in dem der Professor live ein Video evaluieren kann.
+- [ ] Ablation: crop_scale=1.0 vs 1.4 — compare Attention Maps, test hypothesis that neck/jaw region is discriminative
 
 ## Meilenstein 6: Akademische Schreibphase (Parallel ab Woche 1!)
 - [ ] **Monat 1:** Einleitung, Problemstellung, Related Work.
