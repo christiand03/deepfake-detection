@@ -7,6 +7,10 @@ from torchmetrics.classification.accuracy import Accuracy
 from transformers import VideoMAEForVideoClassification
 from transformers.models.videomae import modeling_videomae
 
+# Guard flag: lxt monkey_patch has no unpatch API — patch is permanent once applied.
+# This prevents double-patching if explain() is called more than once.
+_VIDEOMAE_LRP_PATCHED = False
+
 
 class VideoMAEModule(LightningModule):
     def __init__(
@@ -110,8 +114,13 @@ class VideoMAEModule(LightningModule):
             modeling_videomae: patch_attention,
         }
 
-        # Monkey-Patch der VideoMAE Architektur anwenden mit patchmap
-        monkey_patch(modeling_videomae, patch_map=videomae_patch_map)
+        # Monkey-Patch der VideoMAE Architektur anwenden mit patchmap.
+        # lxt has no unpatch API, so we guard with a module-level flag to ensure
+        # the patch is applied exactly once across all explain() calls.
+        global _VIDEOMAE_LRP_PATCHED
+        if not _VIDEOMAE_LRP_PATCHED:
+            monkey_patch(modeling_videomae, patch_map=videomae_patch_map)
+            _VIDEOMAE_LRP_PATCHED = True
 
         # Gradienten-Tracking für die Input-Tensor aktivieren
         pixel_values = pixel_values.clone().detach().requires_grad_(True)
