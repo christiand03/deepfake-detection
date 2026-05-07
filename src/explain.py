@@ -1,15 +1,19 @@
+from __future__ import annotations
+
 import functools
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import hydra
 import matplotlib.pyplot as plt
 import numpy as np
 import rootutils
 import torch
-from lightning import LightningDataModule
-from omegaconf import DictConfig
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+if TYPE_CHECKING:
+    from lightning import LightningDataModule
+    from omegaconf import DictConfig
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -17,8 +21,8 @@ torch.serialization.add_safe_globals([functools.partial])
 torch.serialization.add_safe_globals([AdamW])
 torch.serialization.add_safe_globals([ReduceLROnPlateau])
 
-from src.models.VideoMAE_module import VideoMAEModule
-from src.utils import (
+from src.models.VideoMAE_module import VideoMAEModule  # noqa: E402
+from src.utils import (  # noqa: E402
     RankedLogger,
     extras,
     task_wrapper,
@@ -60,8 +64,13 @@ def explain_model(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     FRAME_IDX = cfg.explain.get("frame_idx", 0)
 
-    img = pixel_values[0, FRAME_IDX].detach().cpu().permute(1, 2, 0).numpy()
-    img = (img - img.min()) / (img.max() - img.min())
+    # Issue 6: Proper ImageNet inverse normalization so the displayed frame matches
+    # exactly what the model received. min-max rescale would shift colors/contrast.
+    imagenet_mean = torch.tensor([0.485, 0.456, 0.406])
+    imagenet_std = torch.tensor([0.229, 0.224, 0.225])
+    img_tensor = pixel_values[0, FRAME_IDX].detach().cpu()  # (C, H, W)
+    img_tensor = img_tensor * imagenet_std[:, None, None] + imagenet_mean[:, None, None]
+    img = img_tensor.permute(1, 2, 0).numpy().clip(0.0, 1.0)
 
     hm = heatmap[0, FRAME_IDX].detach().cpu().numpy()
     vmax = np.max(np.abs(hm))

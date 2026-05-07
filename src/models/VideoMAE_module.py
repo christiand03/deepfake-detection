@@ -90,6 +90,10 @@ class VideoMAEModule(LightningModule):
         Berechnet Layer-wise Relevance Propagation Heatmaps auf Basis des Input*Gradient Ansatzes.
         Achtung: Überschreibt das Modell-Verhalten im Backward-Pass. Nur im Eval-Modus nutzen!
         """
+        # Issue 4: Enforce eval mode — Dropout must be disabled for reproducible heatmaps.
+        # (lxt's dropout_forward patch sets rate=0, but LayerNorm and other layers can
+        # still behave differently in train mode depending on future architecture changes.)
+        assert not self.training, "explain() must be called in eval mode: model.eval()"
 
         from functools import partial
 
@@ -122,24 +126,27 @@ class VideoMAEModule(LightningModule):
             monkey_patch(modeling_videomae, patch_map=videomae_patch_map)
             _VIDEOMAE_LRP_PATCHED = True
 
-        # Gradienten-Tracking für die Input-Tensor aktivieren
-        pixel_values = pixel_values.clone().detach().requires_grad_(True)
+        # Issue 7: Ensure gradients are enabled even if called inside a no_grad context
+        # (e.g. a validation callback). pixel_values.grad would be None otherwise.
+        with torch.enable_grad():
+            # Gradienten-Tracking für die Input-Tensor aktivieren
+            pixel_values = pixel_values.clone().detach().requires_grad_(True)
 
-        # Forward pass
-        outputs = self.net(pixel_values=pixel_values)
-        logits = outputs.logits
+            # Forward pass
+            outputs = self.net(pixel_values=pixel_values)
+            logits = outputs.logits
 
-        # Zielklasse bestimmen
-        if target_class is None:
-            target_class = torch.argmax(logits, dim=1)
-        elif isinstance(target_class, int):
-            target_class = torch.full((logits.shape[0],), target_class, device=logits.device)
+            # Zielklasse bestimmen
+            if target_class is None:
+                target_class = torch.argmax(logits, dim=1)
+            elif isinstance(target_class, int):
+                target_class = torch.full((logits.shape[0],), target_class, device=logits.device)
 
-        # Rückwärtspass von der Zielklasse aus starten
-        target_logits = logits[torch.arange(logits.shape[0]), target_class]
+            # Rückwärtspass von der Zielklasse aus starten
+            target_logits = logits[torch.arange(logits.shape[0]), target_class]
 
-        self.net.zero_grad()
-        target_logits.backward(torch.ones_like(target_logits))
+            self.net.zero_grad()
+            target_logits.backward(torch.ones_like(target_logits))
 
         # Signed relevance: positive = evidence FOR predicted class, negative = evidence AGAINST
         relevance = pixel_values * pixel_values.grad
