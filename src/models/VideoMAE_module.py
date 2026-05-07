@@ -132,9 +132,9 @@ class VideoMAEModule(LightningModule):
         self.net.zero_grad()
         target_logits.backward(torch.ones_like(target_logits))
 
-        # Absolute Relevanz nehmen
-        relevance = torch.abs(pixel_values * pixel_values.grad)
-        heatmap, _ = relevance.max(dim=2)
+        # Signed relevance: positive = evidence FOR predicted class, negative = evidence AGAINST
+        relevance = pixel_values * pixel_values.grad
+        heatmap = relevance.sum(dim=2)
 
         # Heatmap glätten, um harte 16x16 Gitterränder abzumildern
         B, T, H, W = heatmap.shape
@@ -146,18 +146,11 @@ class VideoMAEModule(LightningModule):
         # Patch-Heatmap auf die Originalgröße hochskalieren
         heatmap = F_nn.interpolate(heatmap_patches, size=(H, W), mode="bilinear", align_corners=False)
 
-        # Normalisierung für besseren Kontrast
+        # Symmetric normalization: divide by abs-max per frame so range is [-1, 1].
+        # Zero stays at zero — required for signed seismic colormap (red=fake, blue=real).
         heatmap_flat = heatmap.view(B * T, -1)
-
-        # Minimum und Maximum pro Frame finden
-        h_min = heatmap_flat.min(dim=1, keepdim=True)[0]
-        h_max = heatmap_flat.max(dim=1, keepdim=True)[0]
-
-        # Auf 0.0 bis 1.0 skalieren
-        heatmap_norm = (heatmap_flat - h_min) / (h_max - h_min + 1e-8)
-
-        # Schwaches Rauschen entfernen (alles unter 30% der max. Relevanz wird auf 0 gesetzt)
-        heatmap_norm[heatmap_norm < 0.3] = 0.0
+        h_absmax = heatmap_flat.abs().max(dim=1, keepdim=True)[0]
+        heatmap_norm = heatmap_flat / (h_absmax + 1e-8)
 
         # Wieder in die richtige Video-Form bringen: [Batch, Time, Height, Width]
         heatmap = heatmap_norm.view(B, T, H, W)
