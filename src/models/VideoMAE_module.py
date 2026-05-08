@@ -85,7 +85,7 @@ class VideoMAEModule(LightningModule):
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
 
-    def explain(self, pixel_values: torch.Tensor, target_class: int = None):
+    def explain(self, pixel_values: torch.Tensor, target_class: int | None = None):
         """Compute AttnLRP heatmaps for a batch of video clips.
 
         Applies lxt monkey_patch once (guarded by _VIDEOMAE_LRP_PATCHED) and runs

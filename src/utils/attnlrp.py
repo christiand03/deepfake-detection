@@ -109,6 +109,10 @@ def compute_attnlrp(
         net.zero_grad()
         target_logits.backward(torch.ones_like(target_logits))
 
+        assert x.grad is not None, (
+            "x.grad is None after backward — no differentiable path from input to loss. "
+            "Ensure the model is fully differentiable and lxt monkey_patch has been applied."
+        )
         relevance = x * x.grad
 
     return relevance, resolved

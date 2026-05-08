@@ -11,6 +11,10 @@ from torchmetrics import MeanMetric
 from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import Wav2Vec2ForSequenceClassification
 
+# Guard flag: lxt monkey_patch has no unpatch API — patch is permanent once applied.
+# This prevents double-patching if explain() is called more than once.
+_WAV2VEC2_LRP_PATCHED = False
+
 
 class Wav2Vec2DeepfakeModule(LightningModule):
     @beartype
@@ -118,6 +122,60 @@ class Wav2Vec2DeepfakeModule(LightningModule):
         self.test_acc(preds, targets)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+
+    @beartype
+    def explain(
+        self,
+        input_values: Float[torch.Tensor, "batch time"],
+        target_class: int | torch.Tensor | None = None,
+    ) -> tuple[Float[torch.Tensor, "batch time"], torch.Tensor]:
+        """Compute AttnLRP relevance for a batch of raw audio waveforms.
+
+        Applies lxt monkey_patch once (guarded by _WAV2VEC2_LRP_PATCHED) and runs
+        Input×Gradient LRP via compute_attnlrp(). Returns per-sample signed relevance
+        normalized to [-1, 1]: positive = evidence FOR the explained class, negative = AGAINST.
+
+        No temporal smoothing is applied here — the caller (visualization script) is
+        responsible for pooling to word boundaries or fixed-size windows, so that both
+        Layer 1 (waveform overlay) and Layer 2 (word-level aggregation) can use the same
+        raw relevance without re-running the backward pass.
+
+        Must be called in eval mode.
+        """
+        assert not self.training, "explain() must be called in eval mode: model.eval()"
+
+        from lxt.efficient import monkey_patch
+        from lxt.efficient.patches import patch_attention
+        from transformers.models.wav2vec2 import modeling_wav2vec2
+
+        from src.utils.attnlrp import build_common_patch_map, compute_attnlrp, normalize_relevance
+
+        # Patch map: shared transformer components + Wav2Vec2-specific attention module.
+        # lxt has no unpatch API, so the module-level flag ensures we patch exactly once.
+        wav2vec2_patch_map = {
+            **build_common_patch_map(),
+            modeling_wav2vec2: patch_attention,
+        }
+
+        global _WAV2VEC2_LRP_PATCHED
+        if not _WAV2VEC2_LRP_PATCHED:
+            monkey_patch(modeling_wav2vec2, patch_map=wav2vec2_patch_map)
+            _WAV2VEC2_LRP_PATCHED = True
+
+        # relevance: (B, T_samples) — same shape as input_values.
+        # forward_fn uses the keyword argument expected by Wav2Vec2ForSequenceClassification.
+        relevance, target_class = compute_attnlrp(
+            net=self.net,
+            input_tensor=input_values,
+            forward_fn=lambda x: self.net(input_values=x).logits,
+            target_class=target_class,
+        )
+
+        # relevance is (B, T_samples): already 2D, normalize per sample.
+        # normalize_relevance expects (N, D) — no reshape needed for 1D audio.
+        relevance = normalize_relevance(relevance)
+
+        return relevance, target_class
 
     def configure_optimizers(self) -> dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.parameters())

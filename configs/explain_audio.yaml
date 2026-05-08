@@ -1,0 +1,22 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - data: deepfake_audio
+  - model: wav2vec2
+  - paths: default
+  - extras: default
+  - hydra: default
+  - optional logger: null
+  - optional trainer: default
+
+task_name: "explain_audio"
+
+# Checkpoint path is required (??? enforces this in Hydra)
+ckpt_path: ???
+
+explain:
+  save_path: "audio_lrp_explanation.png"  # Output file path
+  target_class: null                       # null = explain predicted class; int = override
+  smoothing_kernel: 160                    # avg_pool1d kernel/stride: 160 samples = 10ms at 16kHz
+  sample_rate: 16000                       # Wav2Vec2 input sample rate (Hz)
