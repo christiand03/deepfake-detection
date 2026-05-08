@@ -20,3 +20,10 @@ explain:
   target_class: null                       # null = explain predicted class; int = override
   smoothing_kernel: 160                    # avg_pool1d kernel/stride: 160 samples = 10ms at 16kHz
   sample_rate: 16000                       # Wav2Vec2 input sample rate (Hz)
+
+  # Layer 2 — word-level aggregation via WhisperX forced alignment
+  enable_layer2: true
+  layer2_save_path: "audio_lrp_l2_words.png"  # Separate figure for Layer 2
+  whisperx_model: "base"                       # WhisperX model size (tiny/base/small/medium/large)
+  whisperx_device: null                        # null = auto (cuda if available, else cpu)
+  cache_dir: "outputs/whisperx_cache"          # Word-timestamp JSON cache (keyed by waveform hash)

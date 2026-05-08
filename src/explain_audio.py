@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import hydra
@@ -34,6 +37,99 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 # Human-readable label names (0 = Real, 1 = Fake)
 _LABEL_NAMES = {0: "Real", 1: "Fake"}
+
+
+def _load_word_segments(
+    waveform_np: np.ndarray,
+    sample_rate: int,
+    whisperx_device: str,
+    model_name: str,
+    cache_dir: str,
+) -> list[dict]:
+    """Compute WhisperX word-level timestamps with disk caching.
+
+    The cache is keyed by a 16-char SHA-256 prefix of the raw waveform bytes, so
+    re-running on the same clip skips transcription entirely.
+
+    Args:
+        waveform_np: Float32 numpy array of shape (T_samples,). Passed directly to
+            WhisperX — no temp file is written.
+        sample_rate: Audio sample rate in Hz (must match the waveform).
+        whisperx_device: Device string passed to whisperx.load_model ("cuda" or "cpu").
+        model_name: WhisperX model size, e.g. "base" or "small".
+        cache_dir: Directory where JSON cache files are stored.
+
+    Returns:
+        List of dicts [{"word": str, "start": float, "end": float}, ...].
+        Returns [] if alignment produced no word segments.
+    """
+    cache_key = hashlib.sha256(waveform_np.tobytes()).hexdigest()[:16]
+    cache_path = Path(cache_dir) / f"{cache_key}.json"
+
+    if cache_path.exists():
+        log.info(f"WhisperX cache hit: {cache_path}")
+        with cache_path.open() as f:
+            return json.load(f)  # type: ignore[no-any-return]
+
+    log.info(f"Running WhisperX transcription (model={model_name}, device={whisperx_device})...")
+    import whisperx  # lazy import — optional dep, only needed for Layer 2
+
+    audio = waveform_np.astype(np.float32)
+    wx_model = whisperx.load_model(model_name, device=whisperx_device, compute_type="float32")
+    result = wx_model.transcribe(audio, batch_size=16, language="en")
+
+    if not result.get("segments"):
+        log.warning("WhisperX returned no segments — Layer 2 will be skipped.")
+        return []
+
+    align_model, metadata = whisperx.load_align_model(language_code=result["language"], device=whisperx_device)
+    # result is overwritten here with the aligned output (standard WhisperX pattern).
+    result = whisperx.align(result["segments"], align_model, metadata, audio, whisperx_device)
+
+    word_segments = [
+        seg for seg in result.get("word_segments", []) if "start" in seg and "end" in seg and "word" in seg
+    ]
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("w") as f:
+        json.dump(word_segments, f)
+    log.info(f"WhisperX word segments cached to: {cache_path}")
+
+    return word_segments
+
+
+def _aggregate_word_relevance(
+    rel_raw_np: np.ndarray,
+    word_segments: list[dict],
+    sample_rate: int,
+) -> tuple[list[str], np.ndarray]:
+    """Sum AttnLRP relevance over each word's sample boundary (signed sum).
+
+    Signed sum preserves direction: a positive value means the word contributes
+    evidence FOR the explained class (Fake), negative means evidence AGAINST.
+
+    Args:
+        rel_raw_np: 1-D float32 array of per-sample relevance, shape (T_samples,).
+        word_segments: Output of _load_word_segments — [{word, start, end}, ...].
+        sample_rate: Audio sample rate in Hz.
+
+    Returns:
+        word_labels: List of "word\n(start–end s)" strings for x-tick labels.
+        per_word_rel: 1-D float32 array of shape (N_words,) with signed relevance sums.
+    """
+    word_labels: list[str] = []
+    per_word_rel_list: list[float] = []
+
+    for seg in word_segments:
+        start_idx = int(seg["start"] * sample_rate)
+        end_idx = int(seg["end"] * sample_rate)
+        # Clamp to valid range — alignment can occasionally produce out-of-bound timestamps.
+        start_idx = max(0, min(start_idx, len(rel_raw_np)))
+        end_idx = max(start_idx, min(end_idx, len(rel_raw_np)))
+        per_word_rel_list.append(float(rel_raw_np[start_idx:end_idx].sum()))
+        word_labels.append(f"{seg['word']}\n({seg['start']:.2f}\u2013{seg['end']:.2f}s)")
+
+    return word_labels, np.array(per_word_rel_list, dtype=np.float32)
 
 
 @task_wrapper
@@ -74,7 +170,7 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     smoothing_kernel: int = cfg.explain.get("smoothing_kernel", 160)
 
     # Raw waveform for Panel 1
-    waveform = input_values[0].detach().cpu().numpy()  # (T_samples,)
+    waveform = input_values[0].detach().cpu().float().numpy()  # (T_samples,)
     n_samples = waveform.shape[0]
     duration = n_samples / sample_rate
     t_samples = np.linspace(0, duration, n_samples)
@@ -137,7 +233,76 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     save_path: str = cfg.explain.get("save_path", "audio_lrp_explanation.png")
     plt.savefig(save_path, dpi=300)
-    log.info(f"Visualization saved to: {save_path}")
+    plt.close(fig)
+    log.info(f"Layer 1 visualization saved to: {save_path}")
+
+    # --- Layer 2: Word-Level Aggregation ---
+    if not cfg.explain.get("enable_layer2", True):
+        log.info("Layer 2 disabled via config (enable_layer2=false). Skipping.")
+        return {}, {}
+
+    log.info("Running Layer 2 — word-level aggregation...")
+
+    wx_device: str = cfg.explain.get("whisperx_device", None) or ("cuda" if torch.cuda.is_available() else "cpu")
+    wx_model_name: str = cfg.explain.get("whisperx_model", "base")
+    cache_dir: str = cfg.explain.get("cache_dir", "outputs/whisperx_cache")
+
+    # WhisperX requires 16 kHz input — enforce this here so index arithmetic in
+    # _aggregate_word_relevance stays consistent with the returned timestamps.
+    assert sample_rate == 16000, (
+        f"WhisperX requires 16 kHz input, but sample_rate={sample_rate}. "
+        "Resample the audio before running explain_audio."
+    )
+
+    # waveform is already a float32 numpy array (T_samples,) from Layer 1 above.
+    word_segments = _load_word_segments(
+        waveform_np=waveform.astype(np.float32),
+        sample_rate=sample_rate,
+        whisperx_device=wx_device,
+        model_name=wx_model_name,
+        cache_dir=cache_dir,
+    )
+
+    if not word_segments:
+        log.warning("No word segments returned by WhisperX — Layer 2 skipped.")
+        return {}, {}
+
+    word_labels, per_word_rel = _aggregate_word_relevance(
+        rel_raw_np=rel_raw.numpy(),
+        word_segments=word_segments,
+        sample_rate=sample_rate,
+    )
+
+    bar_colors = ["firebrick" if v >= 0 else "steelblue" for v in per_word_rel]
+    x_positions = np.arange(len(word_labels))
+
+    fig2, ax = plt.subplots(figsize=(14, 4))
+    ax.bar(x_positions, per_word_rel, color=bar_colors, width=0.7, edgecolor="none")
+    ax.axhline(0, color="black", linewidth=0.6, alpha=0.5)
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(word_labels, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel("Relevance (signed sum)")
+    ax.set_xlabel("Word")
+    ax.set_title(
+        f"Layer 2 — Word-Level AttnLRP | True: {true_label_str} | Explained: {pred_label_str}",
+        fontsize=11,
+    )
+    ax.text(
+        0.99,
+        0.97,
+        "red = Fake evidence  |  blue = Real evidence",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8,
+        color="dimgray",
+    )
+    plt.tight_layout()
+
+    layer2_save_path: str = cfg.explain.get("layer2_save_path", "audio_lrp_l2_words.png")
+    plt.savefig(layer2_save_path, dpi=300)
+    plt.close(fig2)
+    log.info(f"Layer 2 visualization saved to: {layer2_save_path}")
 
     return {}, {}
 
