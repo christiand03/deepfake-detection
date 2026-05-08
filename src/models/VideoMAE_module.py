@@ -86,90 +86,60 @@ class VideoMAEModule(LightningModule):
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
 
     def explain(self, pixel_values: torch.Tensor, target_class: int = None):
+        """Compute AttnLRP heatmaps for a batch of video clips.
+
+        Applies lxt monkey_patch once (guarded by _VIDEOMAE_LRP_PATCHED) and runs
+        Input×Gradient LRP via compute_attnlrp(). Returns a per-frame signed heatmap
+        normalized to [-1, 1]: positive = evidence FOR the explained class, negative = AGAINST.
+        Must be called in eval mode.
         """
-        Berechnet Layer-wise Relevance Propagation Heatmaps auf Basis des Input*Gradient Ansatzes.
-        Achtung: Überschreibt das Modell-Verhalten im Backward-Pass. Nur im Eval-Modus nutzen!
-        """
-        # Issue 4: Enforce eval mode — Dropout must be disabled for reproducible heatmaps.
-        # (lxt's dropout_forward patch sets rate=0, but LayerNorm and other layers can
-        # still behave differently in train mode depending on future architecture changes.)
         assert not self.training, "explain() must be called in eval mode: model.eval()"
 
-        from functools import partial
-
-        import torch.nn as nn
         import torch.nn.functional as F_nn
+        from einops import rearrange, reduce
         from lxt.efficient import monkey_patch
-        from lxt.efficient.patches import (
-            dropout_forward,
-            layer_norm_forward,
-            non_linear_forward,
-            patch_attention,
-            patch_method,
-        )
-        from transformers.activations import GELUActivation
+        from lxt.efficient.patches import patch_attention
 
-        # Benutzerdefinierte Patch-Map für VideoMAE
+        from src.utils.attnlrp import build_common_patch_map, compute_attnlrp, normalize_relevance
+
+        # Patch map: shared transformer components + VideoMAE-specific attention module.
+        # lxt has no unpatch API, so the module-level flag ensures we patch exactly once.
         videomae_patch_map = {
-            nn.GELU: partial(patch_method, non_linear_forward, keep_original=True),
-            GELUActivation: partial(patch_method, non_linear_forward, keep_original=True),
-            nn.LayerNorm: partial(patch_method, layer_norm_forward),
-            nn.Dropout: partial(patch_method, dropout_forward),
+            **build_common_patch_map(),
             modeling_videomae: patch_attention,
         }
 
-        # Monkey-Patch der VideoMAE Architektur anwenden mit patchmap.
-        # lxt has no unpatch API, so we guard with a module-level flag to ensure
-        # the patch is applied exactly once across all explain() calls.
         global _VIDEOMAE_LRP_PATCHED
         if not _VIDEOMAE_LRP_PATCHED:
             monkey_patch(modeling_videomae, patch_map=videomae_patch_map)
             _VIDEOMAE_LRP_PATCHED = True
 
-        # Issue 7: Ensure gradients are enabled even if called inside a no_grad context
-        # (e.g. a validation callback). pixel_values.grad would be None otherwise.
-        with torch.enable_grad():
-            # Gradienten-Tracking für die Input-Tensor aktivieren
-            pixel_values = pixel_values.clone().detach().requires_grad_(True)
+        relevance, target_class = compute_attnlrp(
+            net=self.net,
+            input_tensor=pixel_values,
+            forward_fn=lambda x: self.net(pixel_values=x).logits,
+            target_class=target_class,
+        )
 
-            # Forward pass
-            outputs = self.net(pixel_values=pixel_values)
-            logits = outputs.logits
+        # Sum channel contributions: (B, T, C, H, W) → (B, T, H, W)
+        heatmap = reduce(relevance, "b t c h w -> b t h w", "sum")
 
-            # Zielklasse bestimmen
-            if target_class is None:
-                target_class = torch.argmax(logits, dim=1)
-            elif isinstance(target_class, int):
-                target_class = torch.full((logits.shape[0],), target_class, device=logits.device)
-
-            # Rückwärtspass von der Zielklasse aus starten
-            target_logits = logits[torch.arange(logits.shape[0]), target_class]
-
-            self.net.zero_grad()
-            target_logits.backward(torch.ones_like(target_logits))
-
-        # Signed relevance: positive = evidence FOR predicted class, negative = evidence AGAINST
-        relevance = pixel_values * pixel_values.grad
-        heatmap = relevance.sum(dim=2)
-
-        # Heatmap glätten, um harte 16x16 Gitterränder abzumildern
         B, T, H, W = heatmap.shape
-        heatmap = heatmap.view(B * T, 1, H, W)
 
-        # Durchschnittliche Relevanz pro 16x16 Patch berechnen
-        heatmap_patches = F_nn.avg_pool2d(heatmap, kernel_size=16, stride=16)
+        # Reshape to 4D for spatial pooling ops (avg_pool2d requires (N, C, H, W))
+        heatmap_4d = rearrange(heatmap, "b t h w -> (b t) 1 h w")
 
-        # Patch-Heatmap auf die Originalgröße hochskalieren
-        heatmap = F_nn.interpolate(heatmap_patches, size=(H, W), mode="bilinear", align_corners=False)
+        # Average relevance per 16×16 patch to smooth hard token-grid boundaries
+        heatmap_patches = F_nn.avg_pool2d(heatmap_4d, kernel_size=16, stride=16)
 
-        # Symmetric normalization: divide by abs-max per frame so range is [-1, 1].
-        # Zero stays at zero — required for signed seismic colormap (red=fake, blue=real).
-        heatmap_flat = heatmap.view(B * T, -1)
-        h_absmax = heatmap_flat.abs().max(dim=1, keepdim=True)[0]
-        heatmap_norm = heatmap_flat / (h_absmax + 1e-8)
+        # Upsample back to original spatial resolution
+        heatmap_4d = F_nn.interpolate(heatmap_patches, size=(H, W), mode="bilinear", align_corners=False)
 
-        # Wieder in die richtige Video-Form bringen: [Batch, Time, Height, Width]
-        heatmap = heatmap_norm.view(B, T, H, W)
+        # Per-frame symmetric normalization to [-1, 1].
+        # Reshape to (B*T, H*W) so normalize_relevance treats each frame independently.
+        heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> (b t) (h w)", b=B, t=T)
+        heatmap_2d = normalize_relevance(heatmap_2d)
+        heatmap = rearrange(heatmap_2d, "(b t) (h w) -> b t h w", b=B, t=T, h=H, w=W)
 
         return heatmap, target_class
 

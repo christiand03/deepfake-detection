@@ -23,6 +23,24 @@
 - **Testing:** pytest
 - **Frontend (optional):** React + TypeScript + Vite + FastAPI
 
+## Pre-Commit Hooks (must pass on every commit)
+All generated code **must pass all pre-commit hooks without errors**. The project uses:
+
+| Hook | Rule |
+|---|---|
+| `ruff --fix` | No lint errors; all `F401` re-exports use `name as name` syntax; `TYPE_CHECKING`-only imports (TC001–TC003) are inside `if TYPE_CHECKING` blocks |
+| `ruff-format` | Code is formatted exactly as `ruff format` would produce – no trailing commas issues, consistent quotes, line length ≤88 |
+| `trailing-whitespace` | No trailing whitespace on any line |
+| `end-of-file-fixer` | Every file ends with exactly one newline |
+| `check-yaml` | All YAML files are valid |
+| `check-added-large-files` | No new file exceeds 1000 KB |
+| `check-merge-conflict` | No unresolved merge-conflict markers |
+
+**Practical rules when writing Python:**
+- Re-exports in `__init__.py` always use `from x import y as y` (not bare `from x import y`).
+- Move imports used only in type annotations into `if TYPE_CHECKING:` blocks (TC001–TC003).
+- Never leave trailing whitespace; always ensure a single trailing newline.
+
 ## Code-Konventionen
 - **Sprache im Code:** Englisch (Variablen, Kommentare, Docstrings)
 - **Sprache in Docs:** Deutsch (docs/, Belegarbeit)
