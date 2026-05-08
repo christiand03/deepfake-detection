@@ -22,6 +22,8 @@ RUN sed -i 's|http://archive.ubuntu.com|http://de.archive.ubuntu.com|g' /etc/apt
     ffmpeg \
     git \
     git-lfs \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && git lfs install
 
