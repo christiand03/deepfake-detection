@@ -41,7 +41,7 @@ regex==2026.3.32
 rich==14.3.3
 rootutils>=0.0.7
 safetensors==0.7.0
-setuptools==81.0.0
+setuptools
 shellingham==1.5.4
 sympy==1.14.0
 tokenizers==0.22.2

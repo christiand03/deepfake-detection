@@ -15,26 +15,41 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Python-Umgebung aufsetzen
+      # 2. System-Abhängigkeiten installieren (benötigt von opencv-python und mediapipe)
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      # 3. Python-Umgebung aufsetzen
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      # 3. Abhängigkeiten installieren
+      # 4. Pip-Cache für schnellere Folge-Runs
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # 5. Abhängigkeiten installieren
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      # 4. Linter ausführen (ruff)
+      # 6. Linter ausführen (ruff)
       - name: Lint with ruff
         run: |
           ruff check src/ tests/
           ruff format --check src/ tests/
 
-      # 5. Tests mit pytest ausführen
+      # 7. Tests mit pytest ausführen (slow-Tests erfordern echte Videodaten/GPU und werden übersprungen)
       - name: Test with pytest
         run: |
-          pytest
+          pytest -m "not slow"

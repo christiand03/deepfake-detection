@@ -1,4 +1,4 @@
 ruff
 pytest
 pre-commit
-whisperx @ git+https://github.com/m-bain/whisperX.git@v3.1.1
+whisperx @ git+https://github.com/m-bain/whisperX.git
