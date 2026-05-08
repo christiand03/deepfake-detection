@@ -132,6 +132,65 @@ def _aggregate_word_relevance(
     return word_labels, np.array(per_word_rel_list, dtype=np.float32)
 
 
+def _compute_band_relevance(
+    waveform_np: np.ndarray,
+    rel_raw_np: np.ndarray,
+    sample_rate: int,
+) -> tuple[list[str], np.ndarray]:
+    """Aggregate AttnLRP relevance into three perceptual frequency bands.
+
+    Each band is isolated with a 5th-order zero-phase Butterworth filter (sosfiltfilt),
+    then dotted with the raw per-sample relevance signal. The result answers: *"in time
+    steps where the model sees Fake evidence, how much energy was in this frequency band?"*
+
+    Bands:
+        Low   (0–500 Hz)   — Grundfrequenz / Prosodie
+        Mid   (500–4 kHz)  — Formanten / Vokale
+        High  (4–8 kHz)    — Frikative / Vocoder-Artefakte
+
+    The three scores are normalized relative to each other (sum of abs = 1, signed), so
+    bars always reflect *relative* contribution regardless of absolute magnitude.
+
+    Args:
+        waveform_np: Float32 numpy array of shape (T_samples,).
+        rel_raw_np: Float32 numpy array of per-sample relevance, shape (T_samples,).
+        sample_rate: Audio sample rate in Hz (must be 16000).
+
+    Returns:
+        band_labels: List of 3 multiline strings for y-tick labels.
+        band_rels: Float32 array of shape (3,), values in [-1, 1] (normalized).
+    """
+    from scipy.signal import butter, sosfiltfilt  # lazy import — scipy optional for Layer 3
+
+    nyq = sample_rate / 2.0
+
+    band_defs = [
+        ("Low\n(0–500 Hz)\nProsodie / Grundton", butter(5, 500.0 / nyq, btype="low", output="sos")),
+        (
+            "Mid\n(500–4 kHz)\nFormanten / Vokale",
+            butter(5, [500.0 / nyq, 4000.0 / nyq], btype="band", output="sos"),
+        ),
+        (
+            "High\n(4–8 kHz)\nFrikative / Vocoder",
+            butter(5, 4000.0 / nyq, btype="high", output="sos"),
+        ),
+    ]
+
+    band_labels: list[str] = []
+    band_rel_list: list[float] = []
+
+    for label, sos in band_defs:
+        filtered = sosfiltfilt(sos, waveform_np).astype(np.float32)
+        band_rel_list.append(float((filtered * rel_raw_np).sum()))
+        band_labels.append(label)
+
+    band_rels = np.array(band_rel_list, dtype=np.float32)
+    # Normalize relative to each other: sum of abs = 1, sign preserved.
+    band_rels = band_rels / (np.abs(band_rels).sum() + 1e-8)
+
+    return band_labels, band_rels
+
+
 @task_wrapper
 def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     assert cfg.ckpt_path, "Please pass a checkpoint! (ckpt_path=...)"
@@ -237,72 +296,112 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info(f"Layer 1 visualization saved to: {save_path}")
 
     # --- Layer 2: Word-Level Aggregation ---
+    # Layer 2 is independent of Layer 3 — early exits are replaced with guarded else-blocks
+    # so Layer 3 always runs regardless of whether Layer 2 is enabled or produces segments.
     if not cfg.explain.get("enable_layer2", True):
         log.info("Layer 2 disabled via config (enable_layer2=false). Skipping.")
+    else:
+        log.info("Running Layer 2 — word-level aggregation...")
+
+        wx_device: str = cfg.explain.get("whisperx_device", None) or ("cuda" if torch.cuda.is_available() else "cpu")
+        wx_model_name: str = cfg.explain.get("whisperx_model", "base")
+        cache_dir: str = cfg.explain.get("cache_dir", "outputs/whisperx_cache")
+
+        # WhisperX requires 16 kHz input — enforce this here so index arithmetic in
+        # _aggregate_word_relevance stays consistent with the returned timestamps.
+        assert sample_rate == 16000, (
+            f"WhisperX requires 16 kHz input, but sample_rate={sample_rate}. "
+            "Resample the audio before running explain_audio."
+        )
+
+        # waveform is already a float32 numpy array (T_samples,) from Layer 1 above.
+        word_segments = _load_word_segments(
+            waveform_np=waveform.astype(np.float32),
+            sample_rate=sample_rate,
+            whisperx_device=wx_device,
+            model_name=wx_model_name,
+            cache_dir=cache_dir,
+        )
+
+        if not word_segments:
+            log.warning("No word segments returned by WhisperX — Layer 2 skipped.")
+        else:
+            word_labels, per_word_rel = _aggregate_word_relevance(
+                rel_raw_np=rel_raw.numpy(),
+                word_segments=word_segments,
+                sample_rate=sample_rate,
+            )
+
+            bar_colors = ["firebrick" if v >= 0 else "steelblue" for v in per_word_rel]
+            x_positions = np.arange(len(word_labels))
+
+            fig2, ax = plt.subplots(figsize=(14, 4))
+            ax.bar(x_positions, per_word_rel, color=bar_colors, width=0.7, edgecolor="none")
+            ax.axhline(0, color="black", linewidth=0.6, alpha=0.5)
+            ax.set_xticks(x_positions)
+            ax.set_xticklabels(word_labels, rotation=45, ha="right", fontsize=8)
+            ax.set_ylabel("Relevance (signed sum)")
+            ax.set_xlabel("Word")
+            ax.set_title(
+                f"Layer 2 — Word-Level AttnLRP | True: {true_label_str} | Explained: {pred_label_str}",
+                fontsize=11,
+            )
+            ax.text(
+                0.99,
+                0.97,
+                "red = Fake evidence  |  blue = Real evidence",
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=8,
+                color="dimgray",
+            )
+            plt.tight_layout()
+
+            layer2_save_path: str = cfg.explain.get("layer2_save_path", "audio_lrp_l2_words.png")
+            plt.savefig(layer2_save_path, dpi=300)
+            plt.close(fig2)
+            log.info(f"Layer 2 visualization saved to: {layer2_save_path}")
+
+    # --- Layer 3: Frequency-Band Summary ---
+    if not cfg.explain.get("enable_layer3", True):
+        log.info("Layer 3 disabled via config (enable_layer3=false). Skipping.")
         return {}, {}
 
-    log.info("Running Layer 2 — word-level aggregation...")
+    log.info("Running Layer 3 — frequency-band relevance summary...")
 
-    wx_device: str = cfg.explain.get("whisperx_device", None) or ("cuda" if torch.cuda.is_available() else "cpu")
-    wx_model_name: str = cfg.explain.get("whisperx_model", "base")
-    cache_dir: str = cfg.explain.get("cache_dir", "outputs/whisperx_cache")
-
-    # WhisperX requires 16 kHz input — enforce this here so index arithmetic in
-    # _aggregate_word_relevance stays consistent with the returned timestamps.
-    assert sample_rate == 16000, (
-        f"WhisperX requires 16 kHz input, but sample_rate={sample_rate}. "
-        "Resample the audio before running explain_audio."
-    )
-
-    # waveform is already a float32 numpy array (T_samples,) from Layer 1 above.
-    word_segments = _load_word_segments(
+    band_labels, band_rels = _compute_band_relevance(
         waveform_np=waveform.astype(np.float32),
-        sample_rate=sample_rate,
-        whisperx_device=wx_device,
-        model_name=wx_model_name,
-        cache_dir=cache_dir,
-    )
-
-    if not word_segments:
-        log.warning("No word segments returned by WhisperX — Layer 2 skipped.")
-        return {}, {}
-
-    word_labels, per_word_rel = _aggregate_word_relevance(
         rel_raw_np=rel_raw.numpy(),
-        word_segments=word_segments,
         sample_rate=sample_rate,
     )
 
-    bar_colors = ["firebrick" if v >= 0 else "steelblue" for v in per_word_rel]
-    x_positions = np.arange(len(word_labels))
+    bar_colors_l3 = ["firebrick" if v >= 0 else "steelblue" for v in band_rels]
 
-    fig2, ax = plt.subplots(figsize=(14, 4))
-    ax.bar(x_positions, per_word_rel, color=bar_colors, width=0.7, edgecolor="none")
-    ax.axhline(0, color="black", linewidth=0.6, alpha=0.5)
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(word_labels, rotation=45, ha="right", fontsize=8)
-    ax.set_ylabel("Relevance (signed sum)")
-    ax.set_xlabel("Word")
-    ax.set_title(
-        f"Layer 2 — Word-Level AttnLRP | True: {true_label_str} | Explained: {pred_label_str}",
+    fig3, ax3 = plt.subplots(figsize=(8, 4))
+    ax3.barh(band_labels, band_rels, color=bar_colors_l3, height=0.5, edgecolor="none")
+    ax3.axvline(0, color="black", linewidth=0.6, alpha=0.5)
+    ax3.set_xlabel("Relative Relevance (signed, normalized)")
+    ax3.set_title(
+        f"Layer 3 — Frequency-Band AttnLRP | True: {true_label_str} | Explained: {pred_label_str}",
         fontsize=11,
     )
-    ax.text(
+    ax3.text(
         0.99,
-        0.97,
+        0.02,
         "red = Fake evidence  |  blue = Real evidence",
-        transform=ax.transAxes,
+        transform=ax3.transAxes,
         ha="right",
-        va="top",
+        va="bottom",
         fontsize=8,
         color="dimgray",
     )
     plt.tight_layout()
 
-    layer2_save_path: str = cfg.explain.get("layer2_save_path", "audio_lrp_l2_words.png")
-    plt.savefig(layer2_save_path, dpi=300)
-    plt.close(fig2)
-    log.info(f"Layer 2 visualization saved to: {layer2_save_path}")
+    layer3_save_path: str = cfg.explain.get("layer3_save_path", "audio_lrp_l3_bands.png")
+    plt.savefig(layer3_save_path, dpi=300)
+    plt.close(fig3)
+    log.info(f"Layer 3 visualization saved to: {layer3_save_path}")
 
     return {}, {}
 

@@ -27,3 +27,7 @@ explain:
   whisperx_model: "base"                       # WhisperX model size (tiny/base/small/medium/large)
   whisperx_device: null                        # null = auto (cuda if available, else cpu)
   cache_dir: "outputs/whisperx_cache"          # Word-timestamp JSON cache (keyed by waveform hash)
+
+  # Layer 3 — frequency-band summary via band-pass filtering
+  enable_layer3: true
+  layer3_save_path: "audio_lrp_l3_bands.png"  # Separate figure for Layer 3
