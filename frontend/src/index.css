@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+@theme {
+  /* Background layers */
+  --color-bg-base: #0d0f14;
+  --color-bg-surface: #141720;
+  --color-bg-elevated: #1b1f2e;
+  --color-bg-muted: #232738;
+
+  /* Borders */
+  --color-border: #2a2f42;
+  --color-border-subtle: #1e2233;
+
+  /* Text */
+  --color-text-primary: #e8eaf0;
+  --color-text-secondary: #8b92a8;
+  --color-text-muted: #4d5470;
+
+  /* Accent: cyan */
+  --color-accent: #00e5ff;
+  --color-accent-dim: rgba(0, 229, 255, 0.12);
+  --color-accent-border: rgba(0, 229, 255, 0.3);
+
+  /* Verdict colors */
+  --color-fake: #ef4444;
+  --color-fake-dim: rgba(239, 68, 68, 0.15);
+  --color-real: #3b82f6;
+  --color-real-dim: rgba(59, 130, 246, 0.15);
+
+  /* Seismic palette (matches Python cmap="seismic") */
+  --color-seismic-pos: #b40426;
+  --color-seismic-neg: #3b4cc0;
+
+  /* Typography */
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: #0d0f14;
+  color: #e8eaf0;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #141720;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2f42;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4058;
+}
+
+/* ── Skeleton shimmer ─────────────────────────────────────────────────────── */
+
+@keyframes shimmer {
+  0% {
+    background-position: -600px 0;
+  }
+  100% {
+    background-position: 600px 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    #1b1f2e 25%,
+    #262b3d 50%,
+    #1b1f2e 75%
+  );
+  background-size: 600px 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}

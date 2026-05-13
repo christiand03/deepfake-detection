@@ -1,0 +1,46 @@
+[
+  {
+    "id": "clip_01",
+    "label": "FAKE",
+    "title": "Obama — Synthesised Speech (FaceSwap)",
+    "videoSrc": "/clips/clip_01.mp4",
+    "posterSrc": "/clips/clip_01.jpg",
+    "videoPath": "data/clips/clip_01.mp4",
+    "duration": 8.0,
+    "fps": 25.0,
+    "hasAudio": true
+  },
+  {
+    "id": "clip_02",
+    "label": "REAL",
+    "title": "Merkel — Press Conference (Authentic)",
+    "videoSrc": "/clips/clip_02.mp4",
+    "posterSrc": "/clips/clip_02.jpg",
+    "videoPath": "data/clips/clip_02.mp4",
+    "duration": 6.5,
+    "fps": 30.0,
+    "hasAudio": true
+  },
+  {
+    "id": "clip_03",
+    "label": "FAKE",
+    "title": "Biden — Neural Voice Clone (Wav2Lip)",
+    "videoSrc": "/clips/clip_03.mp4",
+    "posterSrc": "/clips/clip_03.jpg",
+    "videoPath": "data/clips/clip_03.mp4",
+    "duration": 10.2,
+    "fps": 25.0,
+    "hasAudio": true
+  },
+  {
+    "id": "clip_04",
+    "label": "REAL",
+    "title": "Macron — EU Summit (Authentic, No Audio)",
+    "videoSrc": "/clips/clip_04.mp4",
+    "posterSrc": "/clips/clip_04.jpg",
+    "videoPath": "data/clips/clip_04.mp4",
+    "duration": 5.0,
+    "fps": 24.0,
+    "hasAudio": false
+  }
+]

@@ -1,0 +1,57 @@
+# ============================================================
+# Deepfake Detection – Docker Compose
+# ============================================================
+# Development (CPU, mock models):
+#   docker compose up --build
+#
+# Production (GPU, real checkpoints):
+#   VIDEOMAE_CKPT_PATH=models/videomae.ckpt \
+#   WAV2VEC2_CKPT_PATH=models/wav2vec2.ckpt  \
+#   docker compose --profile gpu up --build
+# ============================================================
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: deepfake-detection:latest
+    container_name: deepfake-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount clip video files at runtime (read-only)
+      - ./data/clips:/workspace/data/clips:ro
+      # Mount trained model checkpoints (read-only)
+      - ./models:/workspace/models:ro
+      # Persist WhisperX transcription cache between restarts
+      - whisperx_cache:/workspace/.whisperx_cache
+    environment:
+      VIDEOMAE_CKPT_PATH: ${VIDEOMAE_CKPT_PATH:-}
+      WAV2VEC2_CKPT_PATH: ${WAV2VEC2_CKPT_PATH:-}
+      CLIPS_CONFIG_PATH: ${CLIPS_CONFIG_PATH:-/workspace/conf/clips.json}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # GPU variant — only started with: docker compose --profile gpu up
+  api-gpu:
+    extends:
+      service: api
+    profiles:
+      - gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  whisperx_cache:

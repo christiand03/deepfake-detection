@@ -1,0 +1,189 @@
+/**
+ * WordTokenChart — Layer 2 of the audio xAI stack.
+ *
+ * Recharts BarChart with one bar per word segment.
+ * Each bar is filled with the seismic colour mapped from the word's relevance
+ * score. The currently-playing word (by video time) is highlighted with an
+ * animated cyan ring rendered via a custom Bar shape.
+ */
+
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Cell,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+} from 'recharts'
+import { seismicToRgb } from '../../lib/seismicColormap'
+import type { WordSegment } from '../../types/analysis'
+
+interface WordTokenChartProps {
+  wordSegments: WordSegment[]
+  currentTime: number
+}
+
+interface BarEntry {
+  word: string
+  value: number
+  fill: string
+}
+
+function seismicFill(relevance: number): string {
+  const [r, g, b] = seismicToRgb(relevance)
+  const alpha = 0.7 + 0.3 * Math.abs(relevance)
+  return `rgba(${r},${g},${b},${alpha.toFixed(2)})`
+}
+
+// Custom bar shape that draws an animated cyan ring on the active word
+function ActiveBarShape(props: Record<string, unknown>) {
+  const {
+    x,
+    y,
+    width,
+    height,
+    fill,
+    isActive,
+  } = props as {
+    x: number
+    y: number
+    width: number
+    height: number
+    fill: string
+    isActive: boolean
+  }
+
+  // For negative values Recharts flips y/height; normalise
+  const rectY = height < 0 ? y + height : y
+  const rectH = Math.abs(height)
+
+  return (
+    <g>
+      <rect x={x} y={rectY} width={width} height={Math.max(rectH, 1)} fill={fill} rx={2} />
+      {isActive && (
+        <>
+          <rect
+            x={x - 2}
+            y={rectY - 2}
+            width={width + 4}
+            height={rectH + 4}
+            fill="none"
+            stroke="#00e5ff"
+            strokeWidth={1.5}
+            rx={3}
+            opacity={0.9}
+          />
+          {/* Glow rect */}
+          <rect
+            x={x - 4}
+            y={rectY - 4}
+            width={width + 8}
+            height={rectH + 8}
+            fill="none"
+            stroke="#00e5ff"
+            strokeWidth={0.5}
+            rx={4}
+            opacity={0.3}
+          />
+        </>
+      )}
+    </g>
+  )
+}
+
+export function WordTokenChart({ wordSegments, currentTime }: WordTokenChartProps) {
+  const activeIdx = wordSegments.findIndex(
+    w => currentTime >= w.start && currentTime <= w.end,
+  )
+
+  const data: BarEntry[] = wordSegments.map(w => ({
+    word: w.word,
+    value: w.relevance,
+    fill: seismicFill(w.relevance),
+  }))
+
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 10,
+          fontFamily: 'monospace',
+          color: '#4d5470',
+          letterSpacing: '0.12em',
+          marginBottom: 6,
+        }}
+      >
+        LAYER 2 — WORD-LEVEL RELEVANCE
+      </div>
+
+      <ResponsiveContainer width="100%" height={110}>
+        <BarChart
+          data={data}
+          margin={{ top: 6, right: 0, bottom: 0, left: -20 }}
+          barCategoryGap="18%"
+        >
+          <XAxis
+            dataKey="word"
+            tick={{ fontSize: 10, fontFamily: 'monospace', fill: '#8b92a8' }}
+            axisLine={{ stroke: '#2a2f42' }}
+            tickLine={false}
+          />
+          <YAxis
+            domain={[-1, 1]}
+            tick={{ fontSize: 9, fontFamily: 'monospace', fill: '#4d5470' }}
+            axisLine={{ stroke: '#2a2f42' }}
+            tickLine={false}
+            tickCount={3}
+          />
+          <ReferenceLine y={0} stroke="#2a2f42" strokeWidth={1} />
+          <Tooltip
+            cursor={{ fill: 'rgba(0,229,255,0.04)' }}
+            contentStyle={{
+              backgroundColor: '#1b1f2e',
+              border: '1px solid #2a2f42',
+              borderRadius: 6,
+              fontFamily: 'monospace',
+              fontSize: 11,
+              color: '#e8eaf0',
+            }}
+            formatter={(v: number) => [v.toFixed(3), 'Relevance']}
+          />
+          <Bar
+            dataKey="value"
+            shape={(props: object) => {
+              const barProps = props as { index?: number } & Record<string, unknown>
+              return (
+                <ActiveBarShape
+                  {...barProps}
+                  isActive={(barProps.index ?? -1) === activeIdx}
+                />
+              )
+            }}
+          >
+            {data.map((entry, index) => (
+              <Cell key={index} fill={entry.fill} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+
+      {activeIdx >= 0 && (
+        <div
+          style={{
+            fontSize: 10,
+            fontFamily: 'monospace',
+            marginTop: 2,
+            color: '#00e5ff',
+            letterSpacing: '0.08em',
+          }}
+        >
+          ▶ "{wordSegments[activeIdx].word}"
+          {' — relevance '}
+          {wordSegments[activeIdx].relevance.toFixed(3)}
+        </div>
+      )}
+    </div>
+  )
+}

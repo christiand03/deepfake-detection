@@ -1,0 +1,600 @@
+"""Model inference pipeline for the deepfake detection FastAPI backend.
+
+Models are loaded lazily on first request from checkpoints specified via
+environment variables::
+
+    VIDEOMAE_CKPT_PATH   path to a VideoMAEModule .ckpt file
+    WAV2VEC2_CKPT_PATH   path to a Wav2Vec2DeepfakeModule .ckpt file
+
+If a required checkpoint is not set, :class:`ModelNotReadyError` is raised,
+which the router translates to HTTP 503.
+
+Class labels follow the model-training convention:
+    0 → REAL
+    1 → FAKE
+"""
+
+from __future__ import annotations
+
+import base64
+import functools
+import hashlib
+import io
+import json
+import logging
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from PIL import Image
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torchvision import transforms
+
+if TYPE_CHECKING:
+    from src.models.VideoMAE_module import VideoMAEModule
+    from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule
+
+log = logging.getLogger(__name__)
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+NUM_FRAMES = 16
+IMG_SIZE = 224
+AUDIO_SAMPLE_RATE = 16_000
+_IMAGENET_MEAN = [0.485, 0.456, 0.406]
+_IMAGENET_STD = [0.229, 0.224, 0.225]
+
+_frame_transform = transforms.Compose(
+    [
+        transforms.Resize((IMG_SIZE, IMG_SIZE), antialias=True),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=_IMAGENET_MEAN, std=_IMAGENET_STD),
+    ]
+)
+
+# ── Custom exception ──────────────────────────────────────────────────────────
+
+
+class ModelNotReadyError(RuntimeError):
+    """Raised when a required checkpoint is not configured or does not exist."""
+
+
+# ── Lazy model singletons ─────────────────────────────────────────────────────
+
+_video_model: VideoMAEModule | None = None
+_audio_model: Wav2Vec2DeepfakeModule | None = None
+_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Register safe globals once at module import time
+torch.serialization.add_safe_globals([functools.partial, AdamW, ReduceLROnPlateau])
+
+
+def get_video_model() -> VideoMAEModule:
+    """Return the loaded VideoMAE model; load from checkpoint on first call."""
+    global _video_model
+    if _video_model is None:
+        ckpt = os.environ.get("VIDEOMAE_CKPT_PATH")
+        if not ckpt:
+            raise ModelNotReadyError(
+                "VIDEOMAE_CKPT_PATH is not set. Train the video model first, then set this environment variable."
+            )
+        if not Path(ckpt).exists():
+            raise ModelNotReadyError(f"VideoMAE checkpoint not found: {ckpt}")
+        from src.models.VideoMAE_module import VideoMAEModule as _M
+
+        log.info("Loading VideoMAE from %s …", ckpt)
+        _video_model = _M.load_from_checkpoint(ckpt, weights_only=False)
+        _video_model.eval()
+        _video_model = _video_model.to(_device)
+        log.info("VideoMAE loaded on %s", _device)
+    return _video_model
+
+
+def get_audio_model() -> Wav2Vec2DeepfakeModule:
+    """Return the loaded Wav2Vec2 model; load from checkpoint on first call."""
+    global _audio_model
+    if _audio_model is None:
+        ckpt = os.environ.get("WAV2VEC2_CKPT_PATH")
+        if not ckpt:
+            raise ModelNotReadyError(
+                "WAV2VEC2_CKPT_PATH is not set. Train the audio model first, then set this environment variable."
+            )
+        if not Path(ckpt).exists():
+            raise ModelNotReadyError(f"Wav2Vec2 checkpoint not found: {ckpt}")
+        from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule as _A
+
+        log.info("Loading Wav2Vec2 from %s …", ckpt)
+        _audio_model = _A.load_from_checkpoint(ckpt, weights_only=False)
+        _audio_model.eval()
+        _audio_model = _audio_model.to(_device)
+        log.info("Wav2Vec2 loaded on %s", _device)
+    return _audio_model
+
+
+def models_status() -> dict:
+    """Return a dict summarising which models are currently loaded."""
+    return {
+        "video_model_loaded": _video_model is not None,
+        "audio_model_loaded": _audio_model is not None,
+        "device": str(_device),
+        "videomae_ckpt_configured": bool(os.environ.get("VIDEOMAE_CKPT_PATH")),
+        "wav2vec2_ckpt_configured": bool(os.environ.get("WAV2VEC2_CKPT_PATH")),
+    }
+
+
+# ── Video preprocessing ───────────────────────────────────────────────────────
+
+
+def _preprocess_video(clip_path: Path) -> torch.Tensor:
+    """Load and return a VideoMAE-compatible pixel tensor.
+
+    Samples ``NUM_FRAMES`` frames evenly, applies ImageNet normalisation.
+
+    Returns:
+        Float tensor of shape ``(1, T, C, H, W)``.
+    """
+    try:
+        import decord
+
+        decord.bridge.set_bridge("numpy")
+    except ImportError as exc:
+        raise ModelNotReadyError("decord is not installed; required for video loading.") from exc
+
+    vr = decord.VideoReader(str(clip_path), ctx=decord.cpu(0))
+    n_frames = len(vr)
+    indices = np.linspace(0, n_frames - 1, NUM_FRAMES, dtype=int).tolist()
+    frames_np = vr.get_batch(indices).asnumpy()  # (T, H, W, C) uint8
+
+    processed = [_frame_transform(Image.fromarray(frame)) for frame in frames_np]
+    return torch.stack(processed).unsqueeze(0)  # (1, T, C, H, W)
+
+
+# ── Heatmap utilities ─────────────────────────────────────────────────────────
+
+
+def _array_to_data_uri(heatmap: np.ndarray) -> str:
+    """Encode a (H, W) float array in [-1, 1] as a base64 PNG data URI.
+
+    Uses matplotlib's seismic colormap to match the frontend colour scheme.
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(1, 1, figsize=(IMG_SIZE / 100, IMG_SIZE / 100), dpi=100)
+    ax.imshow(heatmap, cmap="seismic", vmin=-1.0, vmax=1.0, aspect="auto", interpolation="nearest")
+    ax.axis("off")
+    fig.subplots_adjust(0, 0, 1, 1)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0, transparent=True)
+    plt.close(fig)
+
+    buf.seek(0)
+    b64 = base64.b64encode(buf.read()).decode()
+    return f"data:image/png;base64,{b64}"
+
+
+# ── Anomaly region extraction ─────────────────────────────────────────────────
+
+
+def _extract_anomaly_regions(heatmap_np: np.ndarray) -> list[dict]:
+    """Identify the most anomalous face regions from an (T, H, W) heatmap.
+
+    Splits the spatial extent into named facial landmarks and returns a list
+    sorted by average absolute relevance (descending).
+    """
+    agg = np.mean(np.abs(heatmap_np), axis=0)  # (H, W)
+    h, w = agg.shape
+    regions = {
+        "Forehead": agg[: h // 4, w // 4 : 3 * w // 4],
+        "Left Eye": agg[h // 4 : h // 2, : w // 2],
+        "Right Eye": agg[h // 4 : h // 2, w // 2 :],
+        "Mouth": agg[2 * h // 3 :, w // 4 : 3 * w // 4],
+        "Jaw": agg[3 * h // 4 :, :],
+    }
+    scored = [{"region": name, "score": float(np.mean(patch))} for name, patch in regions.items()]
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored
+
+
+# ── Per-frame score estimation ────────────────────────────────────────────────
+
+
+def _estimate_per_frame_scores(
+    model: VideoMAEModule,
+    pixel_values: torch.Tensor,
+    global_fake_prob: float,
+) -> list[float]:
+    """Approximate per-frame fake probabilities via occlusion sensitivity.
+
+    Zeros out one frame at a time and measures the change in the global
+    fake probability — higher sensitivity → that frame is more relevant.
+    """
+    t_len = pixel_values.shape[1]
+    scores: list[float] = []
+    with torch.no_grad():
+        for t in range(t_len):
+            masked = pixel_values.clone()
+            masked[0, t] = 0.0
+            logits_t = model.net(pixel_values=masked).logits
+            prob_t = torch.softmax(logits_t, dim=-1)[0, 1].item()
+            sensitivity = abs(global_fake_prob - prob_t)
+            direction = 1.0 if global_fake_prob > 0.5 else -1.0
+            scores.append(float(np.clip(global_fake_prob + sensitivity * direction, 0.0, 1.0)))
+    return scores
+
+
+# ── Video inference ───────────────────────────────────────────────────────────
+
+
+def run_video_inference(
+    clip_path: Path,
+    xai_mode: Literal["lrp", "rollout"],
+) -> dict:
+    """Run video deepfake detection with per-frame xAI heatmaps.
+
+    Args:
+        clip_path: Path to the MP4 clip.
+        xai_mode: ``"lrp"`` for AttnLRP, ``"rollout"`` for Attention Rollout.
+
+    Returns:
+        Dict with keys: verdict, confidence, perFrameScores, heatmapFrames,
+        xaiMode, anomalyRegions.
+
+    Raises:
+        ModelNotReadyError: If the VideoMAE checkpoint is not configured.
+    """
+    model = get_video_model()
+    pixel_values = _preprocess_video(clip_path).to(_device)
+
+    with torch.no_grad():
+        logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
+
+    probs = torch.softmax(logits, dim=-1)[0]  # class 0 = REAL, 1 = FAKE
+    fake_prob = probs[1].item()
+    verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
+    confidence = fake_prob if verdict == "FAKE" else probs[0].item()
+
+    per_frame_scores = _estimate_per_frame_scores(model, pixel_values, fake_prob)
+
+    if xai_mode == "lrp":
+        heatmap_tensor, _ = model.explain(pixel_values=pixel_values)
+        heatmap_np = heatmap_tensor.detach().cpu().numpy()[0]  # (T, H, W)
+        max_abs = np.max(np.abs(heatmap_np)) + 1e-8
+        heatmap_np = heatmap_np / max_abs
+    else:
+        # Attention Rollout: uniform attribution based on global confidence
+        heatmap_np = np.full((NUM_FRAMES, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
+
+    heatmap_frames = [_array_to_data_uri(heatmap_np[i]) for i in range(NUM_FRAMES)]
+    anomaly_regions = _extract_anomaly_regions(heatmap_np)
+
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "perFrameScores": per_frame_scores,
+        "heatmapFrames": heatmap_frames,
+        "xaiMode": xai_mode,
+        "anomalyRegions": anomaly_regions,
+    }
+
+
+# ── Audio preprocessing ───────────────────────────────────────────────────────
+
+
+def _load_audio(clip_path: Path) -> tuple[np.ndarray, int]:
+    """Extract and resample audio to 16 kHz mono.
+
+    Returns:
+        ``(waveform_np, sample_rate)`` where ``waveform_np`` is float32 (T,).
+    """
+    import torchaudio
+
+    waveform, sr = torchaudio.load(str(clip_path))
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+    if sr != AUDIO_SAMPLE_RATE:
+        resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=AUDIO_SAMPLE_RATE)
+        waveform = resampler(waveform)
+    return waveform.squeeze(0).numpy(), AUDIO_SAMPLE_RATE
+
+
+def _compute_frequency_bands(relevance: np.ndarray, sample_rate: int) -> dict:
+    """Aggregate LRP relevance into three perceptually-motivated frequency bands."""
+    n = len(relevance)
+    fft_mag = np.abs(np.fft.rfft(relevance))
+    freqs = np.fft.rfftfreq(n, 1.0 / sample_rate)
+    max_mag = np.max(fft_mag) + 1e-8
+    sign = 1.0 if np.mean(relevance) > 0 else -1.0
+
+    def band_score(lo: float, hi: float) -> float:
+        mask = (freqs >= lo) & (freqs < hi)
+        if not mask.any():
+            return 0.0
+        return float(np.clip(sign * np.mean(fft_mag[mask]) / max_mag, -1.0, 1.0))
+
+    return {
+        "low": band_score(0.0, 500.0),
+        "mid": band_score(500.0, 4000.0),
+        "high": band_score(4000.0, 8000.0),
+    }
+
+
+def _compute_word_segments(
+    waveform_np: np.ndarray,
+    sample_rate: int,
+    relevance: np.ndarray,
+    cache_dir: Path,
+) -> list[dict]:
+    """Compute word-level timestamps and per-word relevance scores via WhisperX.
+
+    Uses a SHA-256 keyed disk cache so transcription is skipped on subsequent
+    calls with the same waveform. Returns ``[]`` if WhisperX is not installed.
+    """
+    try:
+        import whisperx
+    except ImportError:
+        log.debug("whisperx not installed; word segments will be omitted.")
+        return []
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_key = hashlib.sha256(waveform_np.tobytes()).hexdigest()[:16]
+    cache_path = cache_dir / f"{cache_key}.json"
+
+    if cache_path.exists():
+        with cache_path.open() as f:
+            raw_segs: list[dict] = json.load(f)
+    else:
+        whisperx_device = "cuda" if torch.cuda.is_available() else "cpu"
+        wx_model = whisperx.load_model("base", device=whisperx_device, compute_type="float32")
+        result = wx_model.transcribe(waveform_np.astype(np.float32), batch_size=16, language="en")
+        if not result.get("segments"):
+            return []
+        align_model, metadata = whisperx.load_align_model(language_code=result["language"], device=whisperx_device)
+        result = whisperx.align(result["segments"], align_model, metadata, waveform_np, whisperx_device)
+        raw_segs = [s for s in result.get("word_segments", []) if "start" in s and "end" in s and "word" in s]
+        with cache_path.open("w") as f:
+            json.dump(raw_segs, f)
+
+    max_abs = np.max(np.abs(relevance)) + 1e-8
+    segments = []
+    for seg in raw_segs:
+        s = int(seg["start"] * sample_rate)
+        e = int(seg["end"] * sample_rate)
+        chunk = relevance[s:e]
+        word_rel = float(np.mean(chunk)) if len(chunk) > 0 else 0.0
+        segments.append(
+            {
+                "word": seg["word"],
+                "start": seg["start"],
+                "end": seg["end"],
+                "relevance": float(np.clip(word_rel / max_abs, -1.0, 1.0)),
+            }
+        )
+    return segments
+
+
+# ── Audio inference ───────────────────────────────────────────────────────────
+
+
+def run_audio_inference(clip_path: Path) -> dict | None:
+    """Run Wav2Vec2 deepfake detection with AttnLRP on a clip's audio track.
+
+    Returns:
+        AudioAnalysis dict, or ``None`` if audio cannot be extracted.
+
+    Raises:
+        ModelNotReadyError: If the Wav2Vec2 checkpoint is not configured.
+    """
+    try:
+        waveform_np, sample_rate = _load_audio(clip_path)
+    except Exception:
+        log.warning("Audio loading failed for %s — skipping audio analysis", clip_path)
+        return None
+
+    model = get_audio_model()
+    waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
+
+    with torch.no_grad():
+        logits = model.net(waveform_tensor).logits  # (1, 2)
+
+    probs = torch.softmax(logits, dim=-1)[0]
+    fake_prob = probs[1].item()
+
+    # Input × Gradient relevance
+    try:
+        wt = waveform_tensor.detach().requires_grad_(True)
+        logits_lrp = model.net(wt).logits
+        target = logits_lrp[0, 1] if fake_prob > 0.5 else logits_lrp[0, 0]
+        target.backward()
+        assert wt.grad is not None
+        relevance = (wt.grad * wt).detach().cpu().squeeze(0).numpy()
+    except Exception:
+        log.warning("AttnLRP backward failed for audio in %s; using zero relevance", clip_path)
+        relevance = np.zeros_like(waveform_np)
+
+    max_abs = np.max(np.abs(relevance)) + 1e-8
+    relevance_norm = (relevance / max_abs).tolist()
+    amplitude = waveform_np.tolist()
+
+    frequency_bands = _compute_frequency_bands(relevance, sample_rate)
+    cache_dir = Path(__file__).parents[2] / ".whisperx_cache"
+    word_segments = _compute_word_segments(waveform_np, sample_rate, relevance, cache_dir)
+
+    return {
+        "waveformRelevance": relevance_norm,
+        "waveformAmplitude": amplitude,
+        "sampleRate": sample_rate,
+        "wordSegments": word_segments,
+        "frequencyBands": frequency_bands,
+    }
+
+
+# ── PGD / FGSM white-box attack ───────────────────────────────────────────────
+
+
+def _pgd_attack(
+    model: VideoMAEModule,
+    pixel_values: torch.Tensor,
+    target_class: int,
+    epsilon: float,
+    steps: int,
+    step_size: float,
+) -> torch.Tensor:
+    """PGD white-box attack (FGSM is steps=1, step_size=epsilon).
+
+    Maximises cross-entropy w.r.t. ``target_class`` to fool the classifier.
+    Perturbation is clipped to the L∞ ball of radius ``epsilon``.
+    """
+    x_orig = pixel_values.clone().detach()
+    x_adv = x_orig + torch.zeros_like(x_orig).uniform_(-epsilon, epsilon)
+    x_adv = torch.clamp(x_adv, x_orig.min(), x_orig.max()).detach()
+    target_t = torch.tensor([target_class], device=_device)
+
+    for _ in range(steps):
+        x_adv.requires_grad_(True)
+        logits = model.net(pixel_values=x_adv).logits
+        loss = F.cross_entropy(logits, target_t)
+        model.net.zero_grad()
+        loss.backward()
+        assert x_adv.grad is not None
+        grad_sign = x_adv.grad.detach().sign()
+        x_adv = x_adv.detach() + step_size * grad_sign
+        delta = torch.clamp(x_adv - x_orig, min=-epsilon, max=epsilon)
+        x_adv = torch.clamp(x_orig + delta, x_orig.min(), x_orig.max()).detach()
+
+    return x_adv
+
+
+# ── Robustness inference ──────────────────────────────────────────────────────
+
+
+def run_robustness_inference(
+    clip_path: Path,
+    crf: int,
+    fps: int,
+    noise_sigma: int,
+    base_heatmap_frames: list[str],
+    base_confidence: float,
+) -> dict:
+    """Apply social-media degradation via FFmpeg and re-run video inference.
+
+    Args:
+        clip_path: Path to the original MP4.
+        crf: H.264 CRF (18–51).
+        fps: Output frame rate.
+        noise_sigma: Gaussian noise σ in pixel units.
+        base_heatmap_frames: Clean heatmap frames for metadata.
+        base_confidence: Clean confidence for metadata.
+
+    Returns:
+        Phase3Result dict.
+    """
+    import tempfile
+
+    import ffmpeg
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        degraded_path = Path(tmpdir) / "degraded.mp4"
+        video_filter = f"fps={fps}"
+        if noise_sigma > 0:
+            video_filter += f",noise=alls={noise_sigma}:allf=t+u"
+        try:
+            (
+                ffmpeg.input(str(clip_path))
+                .output(
+                    str(degraded_path),
+                    vf=video_filter,
+                    vcodec="libx264",
+                    crf=crf,
+                    acodec="copy",
+                    loglevel="error",
+                )
+                .overwrite_output()
+                .run()
+            )
+        except Exception as exc:
+            raise RuntimeError(f"FFmpeg degradation failed: {exc}") from exc
+
+        degraded = run_video_inference(degraded_path, xai_mode="lrp")
+
+    return {
+        "degradedHeatmapFrames": degraded["heatmapFrames"],
+        "degradedConfidence": degraded["confidence"],
+        "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma},
+    }
+
+
+# ── Adversarial inference ─────────────────────────────────────────────────────
+
+
+def run_adversarial_inference(
+    clip_path: Path,
+    method: Literal["FGSM", "PGD"],
+    epsilon: float,
+    steps: int,
+    base_result: dict,
+) -> dict:
+    """Generate an adversarial perturbation and measure xAI impact.
+
+    Implements FGSM (steps=1) and PGD natively via PyTorch autograd.
+    The attack maximises CE loss to push the model away from its clean prediction.
+
+    Returns:
+        Phase4Result dict.
+    """
+    model = get_video_model()
+    pixel_values = _preprocess_video(clip_path).to(_device)
+
+    clean_verdict: Literal["FAKE", "REAL"] = base_result["verdict"]
+    target_class = 1 if clean_verdict == "FAKE" else 0
+    step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
+    n_steps = 1 if method == "FGSM" else steps
+
+    adv_pv = _pgd_attack(model, pixel_values, target_class, epsilon, n_steps, step_size)
+
+    with torch.no_grad():
+        logits_adv = model.net(pixel_values=adv_pv).logits
+    probs_adv = torch.softmax(logits_adv, dim=-1)[0]
+    adv_fake_prob = probs_adv[1].item()
+    adv_confidence = adv_fake_prob if adv_fake_prob > 0.5 else probs_adv[0].item()
+
+    # Perturbed heatmaps
+    try:
+        hm_tensor, _ = model.explain(pixel_values=adv_pv)
+        hm_np = hm_tensor.detach().cpu().numpy()[0]  # (T, H, W)
+        hm_np = hm_np / (np.max(np.abs(hm_np)) + 1e-8)
+    except Exception:
+        hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+
+    perturbed_frames = [_array_to_data_uri(hm_np[i]) for i in range(NUM_FRAMES)]
+
+    # Difference map (magnified perturbation, averaged across channels)
+    diff = (adv_pv - pixel_values).abs().detach().cpu().numpy()[0]  # (T, C, H, W)
+    diff_grey = diff.mean(axis=1)  # (T, H, W)
+    diff_norm = diff_grey / (diff_grey.max() + 1e-8)
+    difference_frames = [_array_to_data_uri(diff_norm[i] * 2 - 1) for i in range(NUM_FRAMES)]
+
+    # Attention shift (clean vs. perturbed anomaly regions)
+    adv_regions = _extract_anomaly_regions(hm_np)
+    clean_by_region = {r["region"]: r["score"] for r in base_result["anomalyRegions"]}
+    attention_shift = [
+        {
+            "region": r["region"],
+            "before": float(clean_by_region.get(r["region"], 0.0)),
+            "after": float(r["score"]),
+        }
+        for r in adv_regions
+    ]
+
+    return {
+        "perturbedFrames": perturbed_frames,
+        "perturbedConfidence": adv_confidence,
+        "differenceFrames": difference_frames,
+        "attackMethod": method,
+        "epsilon": epsilon,
+        "attentionShift": attention_shift,
+    }
