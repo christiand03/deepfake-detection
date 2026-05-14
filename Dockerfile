@@ -39,6 +39,7 @@ RUN sed -i 's|http://archive.ubuntu.com|http://de.archive.ubuntu.com|g' /etc/apt
         git \
         git-lfs \
         libgl1 \
+        libgles2 \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && git lfs install
