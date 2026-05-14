@@ -148,7 +148,7 @@ export function WordTokenChart({ wordSegments, currentTime }: WordTokenChartProp
               fontSize: 11,
               color: '#e8eaf0',
             }}
-            formatter={(v: number) => [v.toFixed(3), 'Relevance']}
+            formatter={(v) => [typeof v === 'number' ? v.toFixed(3) : '0.000', 'Relevance']}
           />
           <Bar
             dataKey="value"

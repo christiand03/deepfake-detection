@@ -437,7 +437,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
               marginTop: 4,
               padding: '9px 0',
               borderRadius: 6,
-              border: 'none',
+              border: `1px solid ${!hasResult || isRunning ? '#2a2f42' : 'rgba(0,229,255,0.3)'}`,
               backgroundColor:
                 !hasResult || isRunning ? '#1b1f2e' : 'rgba(0,229,255,0.12)',
               color: !hasResult || isRunning ? '#4d5470' : '#00e5ff',
@@ -446,7 +446,6 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
               fontWeight: 700,
               letterSpacing: '0.1em',
               cursor: !hasResult || isRunning ? 'not-allowed' : 'pointer',
-              border: `1px solid ${!hasResult || isRunning ? '#2a2f42' : 'rgba(0,229,255,0.3)'}`,
               transition: 'all 0.15s ease',
             }}
           >
