@@ -4,15 +4,16 @@ import { Header } from './components/layout/Header'
 import { MainLayout } from './components/layout/MainLayout'
 import { VideoPanel } from './components/video/VideoPanel'
 import { VerdictPanel } from './components/verdict/VerdictPanel'
+import { AudioLayers } from './components/audio/AudioLayers'
 import { BottomTabs } from './components/layout/BottomTabs'
 import { ErrorToastProvider } from './context/ErrorToastContext'
-import type { AnalysisResult, ClipMeta, XaiMode } from './types/analysis'
+import type { AnalysisResult, ClipMeta } from './types/analysis'
 
 function App() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [currentClip, setCurrentClip] = useState<ClipMeta | null>(null)
-  const [xaiMode, setXaiMode] = useState<XaiMode>('lrp')
+  const [activeTab, setActiveTab] = useState<'robustness' | 'adversarial' | null>(null)
   const [isScanning, setIsScanning] = useState(false)
 
   return (
@@ -25,21 +26,18 @@ function App() {
             onResult={setResult}
             onClipChange={setCurrentClip}
             onScanningChange={setIsScanning}
-            xaiMode={xaiMode}
-            onXaiModeChange={setXaiMode}
           />
         }
         right={
-          <VerdictPanel
-            result={result}
-            clip={currentClip}
-            isScanning={isScanning}
-            xaiMode={xaiMode}
-            onXaiModeChange={setXaiMode}
-          />
+          <>
+            <VerdictPanel result={result} clip={currentClip} isScanning={isScanning} />
+            {activeTab === null && (
+              <AudioLayers result={result} clip={currentClip} videoRef={videoRef} />
+            )}
+          </>
         }
         bottom={
-          <BottomTabs result={result} clip={currentClip} videoRef={videoRef} />
+          <BottomTabs result={result} activeTab={activeTab} onTabChange={setActiveTab} />
         }
       />
     </ErrorToastProvider>

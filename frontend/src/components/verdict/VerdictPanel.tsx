@@ -9,16 +9,12 @@
 
 import { motion, AnimatePresence } from 'framer-motion'
 import { VerdictGauge } from './VerdictGauge'
-import { AnomalyRegionBars } from './AnomalyRegionBars'
-import { XaiModeToggle } from './XaiModeToggle'
-import type { AnalysisResult, ClipMeta, XaiMode } from '../../types/analysis'
+import type { AnalysisResult, ClipMeta } from '../../types/analysis'
 
 interface VerdictPanelProps {
   result: AnalysisResult | null
   clip: ClipMeta | null
   isScanning: boolean
-  xaiMode: XaiMode
-  onXaiModeChange: (mode: XaiMode) => void
 }
 
 // ── Skeleton shimmer block ───────────────────────────────────────────────────
@@ -63,15 +59,7 @@ function Section({
 
 // ── Main component ───────────────────────────────────────────────────────────
 
-export function VerdictPanel({
-  result,
-  clip: _clip,
-  isScanning,
-  xaiMode,
-  onXaiModeChange,
-}: VerdictPanelProps) {
-  const idle = !isScanning && !result
-
+export function VerdictPanel({ result, clip: _clip, isScanning }: VerdictPanelProps) {
   return (
     <div className="flex flex-col gap-4">
       {/* ── VERDICT GAUGE ──────────────────────────────────────────────── */}
@@ -152,100 +140,7 @@ export function VerdictPanel({
         </AnimatePresence>
       </Section>
 
-      {/* ── XAI MODE TOGGLE ────────────────────────────────────────────── */}
-      <Section title="XAI METHOD">
-        <XaiModeToggle
-          value={xaiMode}
-          onChange={onXaiModeChange}
-          disabled={isScanning}
-        />
-      </Section>
-
-      {/* ── ANOMALY REGION BARS ────────────────────────────────────────── */}
-      <Section title="TOP ANOMALY REGIONS">
-        <AnimatePresence mode="wait">
-          {isScanning ? (
-            <motion.div
-              key="scanning-bars"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
-            >
-              {[72, 88, 60, 80].map((w, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <SkeletonBlock height={9} style={{ width: 72, borderRadius: 4 }} />
-                  <SkeletonBlock
-                    height={6}
-                    style={{ flex: 1, borderRadius: 3, animationDelay: `${i * 0.1}s` }}
-                  />
-                  <SkeletonBlock height={9} style={{ width: 32, borderRadius: 4 }} />
-                </div>
-              ))}
-            </motion.div>
-          ) : result && result.anomalyRegions.length > 0 ? (
-            <motion.div
-              key="result-bars"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.25 }}
-            >
-              <AnomalyRegionBars
-                regions={result.anomalyRegions}
-                verdict={result.verdict}
-              />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="idle-bars"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
-            >
-              {['Mouth', 'Left Eye', 'Jaw', 'Forehead'].map(label => (
-                <div
-                  key={label}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10 }}
-                >
-                  <span
-                    style={{
-                      width: 72,
-                      textAlign: 'right',
-                      fontSize: 11,
-                      fontFamily: 'monospace',
-                      color: '#2a2f42',
-                      flexShrink: 0,
-                    }}
-                  >
-                    {label}
-                  </span>
-                  <div
-                    style={{
-                      flex: 1,
-                      height: 6,
-                      borderRadius: 3,
-                      backgroundColor: '#1b1f2e',
-                    }}
-                  />
-                  <span
-                    style={{
-                      width: 36,
-                      fontSize: 11,
-                      fontFamily: 'monospace',
-                      color: '#2a2f42',
-                      textAlign: 'right',
-                    }}
-                  >
-                    0.00
-                  </span>
-                </div>
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </Section>
+      {/* TOP ANOMALY REGIONS removed — not supported by current inference pipeline */}
 
       {/* ── RESULT METADATA ────────────────────────────────────────────── */}
       {result && (
@@ -257,18 +152,6 @@ export function VerdictPanel({
           style={{ backgroundColor: '#141720', border: '1px solid #2a2f42' }}
         >
           <div className="flex justify-between items-center">
-            <span
-              style={{ fontSize: 10, fontFamily: 'monospace', color: '#4d5470', letterSpacing: '0.1em' }}
-            >
-              XAI MODE
-            </span>
-            <span
-              style={{ fontSize: 10, fontFamily: 'monospace', color: '#00e5ff' }}
-            >
-              {result.xaiMode === 'lrp' ? 'AttnLRP' : 'Attention Rollout'}
-            </span>
-          </div>
-          <div className="flex justify-between items-center mt-1.5">
             <span
               style={{ fontSize: 10, fontFamily: 'monospace', color: '#4d5470', letterSpacing: '0.1em' }}
             >

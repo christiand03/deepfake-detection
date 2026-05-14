@@ -1,11 +1,7 @@
-import type { XaiMode } from '../../types/analysis'
-
 interface AnalysisControlsProps {
   onAnalyze: () => void
   isScanning: boolean
   isDone: boolean
-  xaiMode: XaiMode
-  onXaiModeChange: (mode: XaiMode) => void
   heatmapOpacity: number
   onOpacityChange: (v: number) => void
 }
@@ -14,16 +10,9 @@ export function AnalysisControls({
   onAnalyze,
   isScanning,
   isDone,
-  xaiMode,
-  onXaiModeChange,
   heatmapOpacity,
   onOpacityChange,
 }: AnalysisControlsProps) {
-  const modes: { value: XaiMode; label: string }[] = [
-    { value: 'rollout', label: 'Attention Rollout' },
-    { value: 'lrp', label: 'AttnLRP' },
-  ]
-
   return (
     <div className="flex flex-wrap items-center gap-3">
       {/* Analyze button */}
@@ -58,36 +47,7 @@ export function AnalysisControls({
         {isScanning ? '⏳ ANALYZING…' : isDone ? '↺ RE-ANALYZE' : '▶ ANALYZE'}
       </button>
 
-      {/* xAI mode toggle */}
-      <div
-        className="flex rounded overflow-hidden"
-        style={{ border: '1px solid #2a2f42' }}
-      >
-        {modes.map(m => {
-          const active = m.value === xaiMode
-          return (
-            <button
-              key={m.value}
-              onClick={() => onXaiModeChange(m.value)}
-              disabled={isScanning}
-              style={{
-                paddingInline: 12,
-                paddingBlock: 7,
-                fontSize: 11,
-                fontFamily: 'monospace',
-                cursor: isScanning ? 'not-allowed' : 'pointer',
-                border: 'none',
-                transition: 'all 0.15s',
-                backgroundColor: active ? 'rgba(0,229,255,0.1)' : 'transparent',
-                color: active ? '#00e5ff' : '#4d5470',
-                fontWeight: active ? 600 : 400,
-              }}
-            >
-              {m.label}
-            </button>
-          )
-        })}
-      </div>
+      {/* xAI method fixed to AttnLRP — no toggle needed */}
 
       {/* Opacity slider — only shown when heatmap is visible */}
       {isDone && (

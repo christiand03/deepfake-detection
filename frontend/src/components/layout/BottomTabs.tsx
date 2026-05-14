@@ -7,38 +7,32 @@
  *   ADVERSARIAL LAB — FGSM / PGD attack visualisation (project Phase 4)
  */
 
-import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { AudioLayers } from '../audio/AudioLayers'
 import { RobustnessPanel } from '../phases/RobustnessPanel'
 import { AdversarialPanel } from '../phases/AdversarialPanel'
-import type { AnalysisResult, ClipMeta } from '../../types/analysis'
+import type { AnalysisResult } from '../../types/analysis'
 
-type Tab = 'audio' | 'robustness' | 'adversarial'
+type LabTab = 'robustness' | 'adversarial'
 
 interface TabDef {
-  id: Tab
+  id: LabTab
   label: string
   icon: string
-  badge?: string
+  badge: string
 }
 
 const TABS: TabDef[] = [
-  { id: 'audio', label: 'Audio xAI', icon: '🎙' },
   { id: 'robustness', label: 'Robustness Lab', icon: '📡', badge: 'Phase 3' },
   { id: 'adversarial', label: 'Adversarial Lab', icon: '⚡', badge: 'Phase 4' },
 ]
 
 interface BottomTabsProps {
   result: AnalysisResult | null
-  clip: ClipMeta | null
-  videoRef: React.RefObject<HTMLVideoElement | null>
+  activeTab: LabTab | null
+  onTabChange: (tab: LabTab | null) => void
 }
 
-export function BottomTabs({ result, clip, videoRef }: BottomTabsProps) {
-  const [activeTab, setActiveTab] = useState<Tab>('audio')
-
-  const hasAudio = result?.audio != null
+export function BottomTabs({ result, activeTab, onTabChange }: BottomTabsProps) {
 
   return (
     <div>
@@ -55,11 +49,10 @@ export function BottomTabs({ result, clip, videoRef }: BottomTabsProps) {
       >
         {TABS.map(tab => {
           const isActive = activeTab === tab.id
-          const isDisabledAudio = tab.id === 'audio' && !hasAudio
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => onTabChange(activeTab === tab.id ? null : tab.id)}
               style={{
                 position: 'relative',
                 display: 'flex',
@@ -69,12 +62,12 @@ export function BottomTabs({ result, clip, videoRef }: BottomTabsProps) {
                 border: 'none',
                 borderBottom: `2px solid ${isActive ? '#00e5ff' : 'transparent'}`,
                 backgroundColor: 'transparent',
-                color: isActive ? '#e8eaf0' : isDisabledAudio ? '#2a2f42' : '#4d5470',
+                color: isActive ? '#e8eaf0' : '#4d5470',
                 fontFamily: 'monospace',
                 fontSize: 11,
                 fontWeight: isActive ? 600 : 400,
                 letterSpacing: '0.06em',
-                cursor: isDisabledAudio ? 'default' : 'pointer',
+                cursor: 'pointer',
                 transition: 'color 0.15s ease, border-color 0.15s ease',
                 whiteSpace: 'nowrap',
               }}
@@ -98,18 +91,6 @@ export function BottomTabs({ result, clip, videoRef }: BottomTabsProps) {
                   {tab.badge}
                 </span>
               )}
-              {tab.id === 'audio' && !hasAudio && (
-                <span
-                  style={{
-                    fontSize: 8,
-                    fontFamily: 'monospace',
-                    color: '#2a2f42',
-                    marginLeft: 2,
-                  }}
-                >
-                  (no audio)
-                </span>
-              )}
             </button>
           )
         })}
@@ -127,25 +108,24 @@ export function BottomTabs({ result, clip, videoRef }: BottomTabsProps) {
             letterSpacing: '0.1em',
           }}
         >
-          Wav2Vec 2.0 · AttnLRP · ISTVT
+          Robustness & Adversarial Labs
         </div>
       </div>
 
-      {/* Tab content */}
+      {/* Tab content — only rendered when a lab is active */}
       <AnimatePresence mode="wait">
-        <motion.div
-          key={activeTab}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.25, ease: 'easeOut' }}
-        >
-          {activeTab === 'audio' && (
-            <AudioLayers result={result} clip={clip} videoRef={videoRef} />
-          )}
-          {activeTab === 'robustness' && <RobustnessPanel result={result} />}
-          {activeTab === 'adversarial' && <AdversarialPanel result={result} />}
-        </motion.div>
+        {activeTab !== null && (
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+          >
+            {activeTab === 'robustness' && <RobustnessPanel result={result} />}
+            {activeTab === 'adversarial' && <AdversarialPanel result={result} />}
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   )

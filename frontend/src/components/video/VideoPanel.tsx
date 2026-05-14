@@ -15,15 +15,13 @@ import { useAnalysis } from '../../hooks/useAnalysis'
 import { useVideoSync } from '../../hooks/useVideoSync'
 import { fetchClips } from '../../api/client'
 import { useErrorToast } from '../../context/ErrorToastContext'
-import type { AnalysisResult, ClipMeta, XaiMode } from '../../types/analysis'
+import type { AnalysisResult, ClipMeta } from '../../types/analysis'
 
 interface VideoPanelProps {
   videoRef: React.RefObject<HTMLVideoElement | null>
   onResult?: (result: AnalysisResult | null) => void
   onClipChange?: (clip: ClipMeta) => void
   onScanningChange?: (scanning: boolean) => void
-  xaiMode: XaiMode
-  onXaiModeChange: (mode: XaiMode) => void
 }
 
 export function VideoPanel({
@@ -31,9 +29,8 @@ export function VideoPanel({
   onResult,
   onClipChange,
   onScanningChange,
-  xaiMode,
-  onXaiModeChange,
 }: VideoPanelProps) {
+  const xaiMode = 'lrp'
   const [clips, setClips] = useState<ClipMeta[]>([])
   const [selectedId, setSelectedId] = useState<string>('')
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.55)
@@ -120,8 +117,6 @@ export function VideoPanel({
         onAnalyze={handleAnalyze}
         isScanning={isScanning}
         isDone={isDone}
-        xaiMode={xaiMode}
-        onXaiModeChange={onXaiModeChange}
         heatmapOpacity={heatmapOpacity}
         onOpacityChange={setHeatmapOpacity}
       />
