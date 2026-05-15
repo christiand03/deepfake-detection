@@ -12,6 +12,8 @@ Voraussetzung: Python-Umgebung aktiviert, Abhängigkeiten aus `requirements.txt`
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
+Zusätzlich muss von folgender Website: https://www.gyan.dev/ffmpeg/builds/ -> ffmpeg-release-full-shared.7z
+heruntergeladen werden, entpackt werden und der darin enthaltene bin/ Ordner zu PATH hinzugefügt werden.
 
 ---
 
@@ -55,8 +57,8 @@ per Hydra-Override übergeben.
 ```
 deepfake-detection/
 └── checkpoints/
-    ├── videomae_colleague.ckpt   ← VideoMAE-Checkpoint
-    └── wav2vec2.ckpt             ← Wav2Vec2-Checkpoint (falls vorhanden)
+    ├── videomae.ckpt   ← VideoMAE-Checkpoint
+    └── wav2vec2.ckpt             ← Wav2Vec2-Checkpoint
 ```
 
 Der Ordner `checkpoints/` muss ggf. manuell angelegt werden:
