@@ -149,17 +149,31 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
             </div>
 
             {/* L2 — Word Tokens */}
-            {audio.wordSegments.length > 0 && (
-              <div>
-                <LayerLabel>L2 — WORD TOKENS</LayerLabel>
+            <div>
+              <LayerLabel>L2 — WORD TOKENS</LayerLabel>
+              {audio.wordSegments.length > 0 ? (
                 <LayerCard maxHeight={160}>
                   <WordTokenChart
                     wordSegments={audio.wordSegments}
                     currentTime={currentTime}
                   />
                 </LayerCard>
-              </div>
-            )}
+              ) : (
+                <LayerCard>
+                  <div
+                    style={{
+                      fontSize: 10,
+                      fontFamily: 'monospace',
+                      color: '#4d5470',
+                      letterSpacing: '0.08em',
+                      padding: '6px 0',
+                    }}
+                  >
+                    Word-level alignment unavailable
+                  </div>
+                </LayerCard>
+              )}
+            </div>
 
             {/* L3 — Frequency Bands */}
             <div>

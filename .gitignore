@@ -71,6 +71,7 @@ desktop.ini
 *.log
 .cache/
 /data
+.whisperx_cache/
 
 # ============================================================
 # Ausnahmen (Exceptions)

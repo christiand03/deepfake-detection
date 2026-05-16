@@ -564,20 +564,41 @@ def run_video_inference_h5(
 
 
 def _load_audio(clip_path: Path) -> tuple[np.ndarray, int]:
-    """Extract and resample audio to 16 kHz mono.
+    """Extract and resample audio to 16 kHz mono via ffmpeg subprocess.
+
+    Uses the system ffmpeg binary directly so that torchaudio's internal
+    ffmpeg extension version (4/5/6) does not need to match the installed
+    system ffmpeg (which may be 7+).
 
     Returns:
         ``(waveform_np, sample_rate)`` where ``waveform_np`` is float32 (T,).
     """
-    import torchaudio
+    import io
+    import subprocess
+    import wave
 
-    waveform, sr = torchaudio.load(str(clip_path))
-    if waveform.shape[0] > 1:
-        waveform = waveform.mean(dim=0, keepdim=True)
-    if sr != AUDIO_SAMPLE_RATE:
-        resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=AUDIO_SAMPLE_RATE)
-        waveform = resampler(waveform)
-    return waveform.squeeze(0).numpy(), AUDIO_SAMPLE_RATE
+    cmd = [
+        "ffmpeg",
+        "-i",
+        str(clip_path),
+        "-vn",  # drop video stream
+        "-acodec",
+        "pcm_s16le",  # signed 16-bit PCM
+        "-ar",
+        str(AUDIO_SAMPLE_RATE),  # resample to target rate
+        "-ac",
+        "1",  # mono
+        "-f",
+        "wav",  # WAV container
+        "pipe:1",  # write to stdout
+        "-loglevel",
+        "quiet",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, check=True)  # raises CalledProcessError on failure
+    with wave.open(io.BytesIO(proc.stdout)) as wav_file:
+        raw = wav_file.readframes(wav_file.getnframes())
+    waveform_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    return waveform_np, AUDIO_SAMPLE_RATE
 
 
 def _compute_frequency_bands(relevance: np.ndarray, sample_rate: int) -> dict:
