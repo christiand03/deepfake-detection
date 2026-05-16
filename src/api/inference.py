@@ -228,7 +228,7 @@ def _preprocess_video(clip_path: Path) -> torch.Tensor:
     try:
         import decord
 
-        decord.bridge.set_bridge("numpy")
+        decord.bridge.set_bridge("native")
     except ImportError as exc:
         raise ModelNotReadyError("decord is not installed; required for video loading.") from exc
 
@@ -327,6 +327,96 @@ def _estimate_per_frame_scores(
     return scores
 
 
+# ── Full-video frame loaders ──────────────────────────────────────────────────
+
+_MAX_FULL_FRAMES = 300  # Hard cap to prevent OOM on very long clips
+
+
+def _load_all_frames(clip_path: Path) -> torch.Tensor:
+    """Load every frame from *clip_path*, resize to 224 × 224, normalise.
+
+    Returns:
+        Float tensor of shape ``(N, C, H, W)`` where N ≤ ``_MAX_FULL_FRAMES``.
+    """
+    try:
+        import decord
+
+        decord.bridge.set_bridge("native")
+    except ImportError as exc:
+        raise ModelNotReadyError("decord is not installed; required for video loading.") from exc
+
+    vr = decord.VideoReader(str(clip_path), ctx=decord.cpu(0))
+    n_frames = min(len(vr), _MAX_FULL_FRAMES)
+    frames_np = vr.get_batch(list(range(n_frames))).asnumpy()  # (N, H, W, C) uint8
+    processed = [_frame_transform(Image.fromarray(f)) for f in frames_np]
+    return torch.stack(processed)  # (N, C, H, W)
+
+
+def _load_all_frames_cropped(
+    clip_path: Path,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+) -> torch.Tensor:
+    """Load every frame, crop to the face bbox, resize to 224 × 224, normalise.
+
+    Applies the same crop + resize as the HDF5 preprocessing pipeline so that
+    the heatmaps produced from the full video match the training distribution.
+
+    Returns:
+        Float tensor of shape ``(N, C, H, W)`` where N ≤ ``_MAX_FULL_FRAMES``.
+    """
+    try:
+        import decord
+
+        decord.bridge.set_bridge("native")
+    except ImportError as exc:
+        raise ModelNotReadyError("decord is not installed; required for video loading.") from exc
+
+    vr = decord.VideoReader(str(clip_path), ctx=decord.cpu(0))
+    n_frames = min(len(vr), _MAX_FULL_FRAMES)
+    frames_np = vr.get_batch(list(range(n_frames))).asnumpy()  # (N, H, W, C) uint8
+    # PIL.crop takes (left, upper, right, lower) — same convention as bbox coords
+    processed = [_frame_transform(Image.fromarray(f).crop((x1, y1, x2, y2))) for f in frames_np]
+    return torch.stack(processed)  # (N, C, H, W)
+
+
+def _compute_heatmaps_chunked(
+    model: VideoMAEModule,
+    all_frames: torch.Tensor,
+) -> np.ndarray:
+    """Return a per-frame LRP heatmap for every frame in *all_frames*.
+
+    Processes the sequence in non-overlapping 16-frame windows.  The last
+    window is right-padded with its final frame when ``N % NUM_FRAMES != 0``.
+    Each window requires one forward + backward pass through the model.
+
+    Args:
+        model:      :class:`VideoMAEModule` in eval mode.
+        all_frames: Float tensor of shape ``(N, C, H, W)``.
+
+    Returns:
+        Float32 numpy array of shape ``(N, IMG_SIZE, IMG_SIZE)``.
+    """
+    n = all_frames.shape[0]
+    heatmap_np = np.zeros((n, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    n_chunks = -(-n // NUM_FRAMES)  # ceiling division
+    for chunk_idx, chunk_start in enumerate(range(0, n, NUM_FRAMES)):
+        chunk_end = min(chunk_start + NUM_FRAMES, n)
+        chunk = all_frames[chunk_start:chunk_end]  # (k, C, H, W)
+        if chunk.shape[0] < NUM_FRAMES:
+            # Pad the last (partial) chunk by repeating the final frame
+            pad = chunk[-1:].expand(NUM_FRAMES - chunk.shape[0], -1, -1, -1)
+            chunk = torch.cat([chunk, pad], dim=0)
+        pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
+        heatmap_tensor, _ = model.explain(pixel_values=pv)
+        hm = heatmap_tensor.detach().cpu().numpy()[0]  # (16, H, W)
+        heatmap_np[chunk_start:chunk_end] = hm[: chunk_end - chunk_start]
+        log.debug("Heatmap chunk %d/%d processed.", chunk_idx + 1, n_chunks)
+    return heatmap_np
+
+
 # ── Video inference ───────────────────────────────────────────────────────────
 
 
@@ -348,8 +438,14 @@ def run_video_inference(
         ModelNotReadyError: If the VideoMAE checkpoint is not configured.
     """
     model = get_video_model()
-    pixel_values = _preprocess_video(clip_path).to(_device)
 
+    # Load all frames once for both inference and heatmap generation
+    all_frames = _load_all_frames(clip_path)  # (N, C, H, W)
+    n_frames = all_frames.shape[0]
+
+    # Verdict/confidence: single pass on 16 evenly-sampled frames (fast)
+    indices = np.linspace(0, n_frames - 1, NUM_FRAMES, dtype=int).tolist()
+    pixel_values = all_frames[indices].unsqueeze(0).to(_device)  # (1, 16, C, H, W)
     with torch.no_grad():
         logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
 
@@ -358,18 +454,16 @@ def run_video_inference(
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     confidence = fake_prob if verdict == "FAKE" else probs[0].item()
 
-    per_frame_scores = _estimate_per_frame_scores(model, pixel_values, fake_prob)
-
+    # Heatmap: one explain() pass per 16-frame chunk — covers the full video
     if xai_mode == "lrp":
-        heatmap_tensor, _ = model.explain(pixel_values=pixel_values)
-        heatmap_np = heatmap_tensor.detach().cpu().numpy()[0]  # (T, H, W)
+        heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
         max_abs = np.max(np.abs(heatmap_np)) + 1e-8
         heatmap_np = heatmap_np / max_abs
     else:
-        # Attention Rollout: uniform attribution based on global confidence
-        heatmap_np = np.full((NUM_FRAMES, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
+        heatmap_np = np.full((n_frames, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
 
-    heatmap_frames = [_array_to_data_uri(heatmap_np[i]) for i in range(NUM_FRAMES)]
+    per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
+    heatmap_frames = [_array_to_data_uri(heatmap_np[i]) for i in range(n_frames)]
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
 
     return {
@@ -409,8 +503,9 @@ def run_video_inference_h5(
         ModelNotReadyError: If the VideoMAE checkpoint is not configured.
     """
     model = get_video_model()
-    pixel_values = _load_from_hdf5(h5_metadata.h5_path, h5_metadata.h5_index).to(_device)
 
+    # Verdict/confidence: use the 16-frame HDF5 chunk (exact training format, fast)
+    pixel_values = _load_from_hdf5(h5_metadata.h5_path, h5_metadata.h5_index).to(_device)
     with torch.no_grad():
         logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
 
@@ -419,23 +514,28 @@ def run_video_inference_h5(
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     confidence = fake_prob if verdict == "FAKE" else probs[0].item()
 
-    if xai_mode == "lrp":
-        heatmap_tensor, _ = model.explain(pixel_values=pixel_values)
-        heatmap_np = heatmap_tensor.detach().cpu().numpy()[0]  # (T, H, W)
-        max_abs = np.max(np.abs(heatmap_np)) + 1e-8
-        heatmap_np = heatmap_np / max_abs
-    else:
-        heatmap_np = np.full((NUM_FRAMES, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
-
-    # Per-frame scores: mean absolute LRP relevance (no extra forward passes)
-    per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(NUM_FRAMES)]
-
-    # Upproject each 224×224 frame heatmap to the original full-frame resolution
     cx1, cy1 = h5_metadata.crop_x1, h5_metadata.crop_y1
     cx2, cy2 = h5_metadata.crop_x2, h5_metadata.crop_y2
     ow, oh = h5_metadata.orig_w, h5_metadata.orig_h
+
+    # Heatmap: load every frame from the source video with the same face-crop
+    # applied, then process in 16-frame windows to cover the full duration.
+    all_frames = _load_all_frames_cropped(h5_metadata.video_path, cx1, cy1, cx2, cy2)
+    n_frames = all_frames.shape[0]
+
+    if xai_mode == "lrp":
+        heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
+        max_abs = np.max(np.abs(heatmap_np)) + 1e-8
+        heatmap_np = heatmap_np / max_abs
+    else:
+        heatmap_np = np.full((n_frames, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
+
+    # Per-frame scores: mean absolute LRP relevance
+    per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
+
+    # Upproject each 224×224 heatmap to the original full-frame resolution
     heatmap_frames: list[str] = []
-    for i in range(NUM_FRAMES):
+    for i in range(n_frames):
         full_frame = _upproject_heatmap(heatmap_np[i], cx1, cy1, cx2, cy2, ow, oh)
         alpha_mask = np.abs(full_frame) > 1e-6
         heatmap_frames.append(_array_to_data_uri(full_frame, alpha_mask=alpha_mask))
