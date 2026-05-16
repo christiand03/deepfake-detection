@@ -15,6 +15,8 @@ ALLOWED_ORIGINS      Comma-separated extra CORS origins
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -47,18 +49,26 @@ _DEFAULT_ORIGINS = [
 ]
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Pre-load models on startup if checkpoints are configured."""
+async def _preload_models() -> None:
+    """Load models sequentially in a background thread; does not block the event loop."""
     for loader, name in ((get_video_model, "VideoMAE"), (get_audio_model, "Wav2Vec2")):
         try:
-            loader()
+            await asyncio.to_thread(loader)
             log.info("%s model pre-loaded successfully.", name)
         except ModelNotReadyError as exc:
             log.info("Skipping %s pre-load: %s", name, exc)
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to pre-load %s: %s", name, exc)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start the server immediately; models load in a background task."""
+    task = asyncio.create_task(_preload_models())
     yield
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
     log.info("API server shutting down.")
 
 
@@ -93,7 +103,7 @@ def create_app() -> FastAPI:
 
     # Serve demo clip video/poster files at /clips/
     clips_dir_env = os.environ.get("CLIPS_DIR")
-    clips_dir = Path(clips_dir_env) if clips_dir_env else _PROJECT_ROOT / "data" / "clips"
+    clips_dir = Path(clips_dir_env) if clips_dir_env else _PROJECT_ROOT / "data" / "normalized"
     if clips_dir.exists():
         application.mount("/clips", StaticFiles(directory=str(clips_dir)), name="clips")
         log.info("Serving clip files from %s", clips_dir)

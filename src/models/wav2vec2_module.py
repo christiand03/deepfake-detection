@@ -11,9 +11,7 @@ from torchmetrics import MeanMetric
 from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import Wav2Vec2ForSequenceClassification
 
-# Guard flag: lxt monkey_patch has no unpatch API — patch is permanent once applied.
-# This prevents double-patching if explain() is called more than once.
-_WAV2VEC2_LRP_PATCHED = False
+# No module-level lxt guard needed — explain() uses plain Input×Gradient.
 
 
 class Wav2Vec2DeepfakeModule(LightningModule):
@@ -144,23 +142,7 @@ class Wav2Vec2DeepfakeModule(LightningModule):
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
 
-        from lxt.efficient import monkey_patch
-        from lxt.efficient.patches import patch_attention
-        from transformers.models.wav2vec2 import modeling_wav2vec2
-
-        from src.utils.attnlrp import build_common_patch_map, compute_attnlrp, normalize_relevance
-
-        # Patch map: shared transformer components + Wav2Vec2-specific attention module.
-        # lxt has no unpatch API, so the module-level flag ensures we patch exactly once.
-        wav2vec2_patch_map = {
-            **build_common_patch_map(),
-            modeling_wav2vec2: patch_attention,
-        }
-
-        global _WAV2VEC2_LRP_PATCHED
-        if not _WAV2VEC2_LRP_PATCHED:
-            monkey_patch(modeling_wav2vec2, patch_map=wav2vec2_patch_map)
-            _WAV2VEC2_LRP_PATCHED = True
+        from src.utils.attnlrp import compute_attnlrp, normalize_relevance
 
         # relevance: (B, T_samples) — same shape as input_values.
         # forward_fn uses the keyword argument expected by Wav2Vec2ForSequenceClassification.

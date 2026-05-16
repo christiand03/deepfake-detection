@@ -19,13 +19,20 @@ function delay(ms: number) {
 // ── Public API functions ─────────────────────────────────────────────────────
 
 export async function fetchClips(): Promise<ClipMeta[]> {
-  if (USE_MOCK) {
-    await delay(200)
-    return DEMO_CLIPS
+  // Always try the real backend first so the UI reflects the current
+  // conf/clips.json without rebuilding.  When the backend is unreachable and
+  // USE_MOCK is enabled (local dev without the server), fall back to DEMO_CLIPS.
+  try {
+    const res = await fetch('/api/clips')
+    if (!res.ok) throw new Error(`GET /api/clips \u2192 ${res.status}`)
+    return res.json() as Promise<ClipMeta[]>
+  } catch (err) {
+    if (USE_MOCK) {
+      console.warn('[fetchClips] Backend unreachable, falling back to DEMO_CLIPS:', err)
+      return DEMO_CLIPS
+    }
+    throw err
   }
-  const res = await fetch('/api/clips')
-  if (!res.ok) throw new Error(`GET /api/clips → ${res.status}`)
-  return res.json() as Promise<ClipMeta[]>
 }
 
 export async function analyzeClip(

@@ -56,11 +56,15 @@ export function VideoPanel({
 
   // Load clip list on mount
   useEffect(() => {
-    fetchClips().then(list => {
-      setClips(list)
-      if (list.length > 0) setSelectedId(list[0].id)
-    })
-  }, [])
+    fetchClips()
+      .then(list => {
+        setClips(list)
+        if (list.length > 0) setSelectedId(list[0].id)
+      })
+      .catch((err: unknown) => {
+        showError(`Failed to load clips: ${err instanceof Error ? err.message : String(err)}`)
+      })
+  }, [showError])
 
   // Notify parent when scanning state changes
   useEffect(() => {

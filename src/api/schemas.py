@@ -75,6 +75,17 @@ class Phase4ResultSchema(BaseModel):
     attentionShift: list[AttentionShiftSchema]
 
 
+class CropBoxSchema(BaseModel):
+    """Face crop bounding box in the original (normalised) video frame."""
+
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    origW: int
+    origH: int
+
+
 class AnalysisResultSchema(BaseModel):
     clipId: str
     verdict: Literal["FAKE", "REAL"]
@@ -86,6 +97,7 @@ class AnalysisResultSchema(BaseModel):
     audio: AudioAnalysisSchema | None = None
     phase3: Phase3ResultSchema | None = None
     phase4: Phase4ResultSchema | None = None
+    cropBox: CropBoxSchema | None = None
 
 
 # ── Request bodies ────────────────────────────────────────────────────────────

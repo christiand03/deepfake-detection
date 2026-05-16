@@ -29,14 +29,39 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import torch
 import torch.nn.functional as F
+import transformers.pytorch_utils as _tpu
 from PIL import Image
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision import transforms
 
 if TYPE_CHECKING:
+    from src.api.clip_registry import ClipH5Metadata as ClipH5Metadata
     from src.models.VideoMAE_module import VideoMAEModule
     from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule
+
+# ── Compatibility shim for transformers 5.x ───────────────────────────────────
+# lxt (LRP for Transformers) imports find_pruneable_heads_and_indices from
+# transformers.pytorch_utils, which was removed in transformers 5.0.
+# Restore it here before lxt is first imported (lazily, inside explain()).
+if not hasattr(_tpu, "find_pruneable_heads_and_indices"):
+
+    def _find_pruneable_heads_and_indices(
+        heads: list[int],
+        n_heads: int,
+        head_size: int,
+        already_pruned_heads: set[int],
+    ) -> tuple[set[int], torch.LongTensor]:
+        mask = torch.ones(n_heads, head_size)
+        heads_set = set(heads) - already_pruned_heads
+        for orig_head in heads_set:
+            adj = orig_head - sum(1 if h < orig_head else 0 for h in already_pruned_heads)
+            mask[adj] = 0
+        mask = mask.view(-1).contiguous().eq(1)
+        index: torch.LongTensor = torch.arange(len(mask))[mask].long()
+        return heads_set, index
+
+    _tpu.find_pruneable_heads_and_indices = _find_pruneable_heads_and_indices
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +151,69 @@ def models_status() -> dict:
     }
 
 
+# ── HDF5 loading ─────────────────────────────────────────────────────────────
+
+
+def _load_from_hdf5(h5_path: Path, h5_index: int) -> torch.Tensor:
+    """Load and normalise a preprocessed video chunk from an HDF5 file.
+
+    Reads the uint8 ``(T, C, H, W)`` array at ``h5_index``, converts to
+    float32 ``[0, 1]``, and applies ImageNet mean/std normalisation.
+
+    Returns:
+        Float tensor of shape ``(1, T, C, H, W)``, ready for VideoMAE inference.
+    """
+    import h5py
+
+    with h5py.File(h5_path, "r") as f:
+        frames_np: np.ndarray = f["video"][h5_index]  # (T, C, H, W) uint8
+    frames = frames_np.astype(np.float32) / 255.0
+    mean = np.array(_IMAGENET_MEAN, dtype=np.float32)[:, None, None]  # (3, 1, 1)
+    std = np.array(_IMAGENET_STD, dtype=np.float32)[:, None, None]
+    frames = (frames - mean) / std  # broadcast over T: (T, C, H, W)
+    return torch.from_numpy(frames).unsqueeze(0)  # (1, T, C, H, W)
+
+
+# ── Heatmap uprojection ───────────────────────────────────────────────────────
+
+
+def _upproject_heatmap(
+    heatmap_224: np.ndarray,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    orig_w: int,
+    orig_h: int,
+) -> np.ndarray:
+    """Upproject a 224\u00d7224 frame heatmap back to the original full-frame resolution.
+
+    The 224\u00d7224 heatmap is resized to ``(y2-y1) \u00d7 (x2-x1)`` using bilinear
+    interpolation and pasted into a zero-valued canvas of size
+    ``(orig_h, orig_w)``.  Pixels outside the face crop are exactly zero and
+    will be rendered fully transparent by :func:`_array_to_data_uri`.
+
+    Args:
+        heatmap_224: ``(224, 224)`` float array in ``[-1, 1]``.
+        x1, y1, x2, y2: Crop rectangle in the normalised-video pixel space.
+        orig_w, orig_h:  Dimensions of the normalised video frame.
+
+    Returns:
+        Float array of shape ``(orig_h, orig_w)`` in ``[-1, 1]``.
+    """
+    import cv2
+
+    crop_w = max(x2 - x1, 1)
+    crop_h = max(y2 - y1, 1)
+    scaled = cv2.resize(heatmap_224.astype(np.float32), (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
+    canvas = np.zeros((orig_h, orig_w), dtype=np.float32)
+    # Clamp in case bbox slightly exceeds frame dimensions
+    x2c = min(x1 + crop_w, orig_w)
+    y2c = min(y1 + crop_h, orig_h)
+    canvas[y1:y2c, x1:x2c] = scaled[: y2c - y1, : x2c - x1]
+    return canvas
+
+
 # ── Video preprocessing ───────────────────────────────────────────────────────
 
 
@@ -156,22 +244,34 @@ def _preprocess_video(clip_path: Path) -> torch.Tensor:
 # ── Heatmap utilities ─────────────────────────────────────────────────────────
 
 
-def _array_to_data_uri(heatmap: np.ndarray) -> str:
-    """Encode a (H, W) float array in [-1, 1] as a base64 PNG data URI.
+def _array_to_data_uri(heatmap: np.ndarray, alpha_mask: np.ndarray | None = None) -> str:
+    """Encode a (H, W) float array in [-1, 1] as a base64 RGBA PNG data URI.
 
-    Uses matplotlib's seismic colormap to match the frontend colour scheme.
+    Uses the seismic colormap to match the frontend colour scheme.  When
+    ``alpha_mask`` is provided, pixels where the mask is ``False`` are fully
+    transparent (alpha = 0); otherwise all pixels are set to 85 % opacity.
+
+    Args:
+        heatmap:    2-D float array in ``[-1, 1]``.
+        alpha_mask: Boolean array of the same shape as ``heatmap``.  ``True``
+                    marks visible pixels; ``False`` marks transparent ones.
     """
+    import matplotlib.colors as mcolors
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(1, 1, figsize=(IMG_SIZE / 100, IMG_SIZE / 100), dpi=100)
-    ax.imshow(heatmap, cmap="seismic", vmin=-1.0, vmax=1.0, aspect="auto", interpolation="nearest")
-    ax.axis("off")
-    fig.subplots_adjust(0, 0, 1, 1)
+    norm = mcolors.Normalize(vmin=-1.0, vmax=1.0)
+    cmap = plt.get_cmap("seismic")
+    rgba_float = cmap(norm(heatmap))  # (H, W, 4) float [0, 1]
+
+    if alpha_mask is not None:
+        rgba_float[..., 3] = np.where(alpha_mask, 0.85, 0.0)
+    # else: keep the default alpha from the colormap (fully opaque)
+
+    rgba_uint8 = (rgba_float * 255).astype(np.uint8)
+    img = Image.fromarray(rgba_uint8, mode="RGBA")
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0, transparent=True)
-    plt.close(fig)
-
+    img.save(buf, format="PNG")
     buf.seek(0)
     b64 = base64.b64encode(buf.read()).decode()
     return f"data:image/png;base64,{b64}"
@@ -279,6 +379,84 @@ def run_video_inference(
         "heatmapFrames": heatmap_frames,
         "xaiMode": xai_mode,
         "anomalyRegions": anomaly_regions,
+    }
+
+
+def run_video_inference_h5(
+    h5_metadata: ClipH5Metadata,
+    xai_mode: Literal["lrp", "rollout"],
+) -> dict:
+    """Run video deepfake detection from preprocessed HDF5 data.
+
+    Loads the face-cropped tensor directly from HDF5 (exact same format as
+    training), runs the forward pass and AttnLRP, then upprojects the
+    224\u00d7224 per-frame heatmaps back to the original full-frame resolution
+    using the bbox stored at preprocessing time.
+
+    Per-frame scores are derived from the mean absolute LRP relevance per
+    frame, replacing the slow 16-pass occlusion-sensitivity method.
+
+    Args:
+        h5_metadata: :class:`~src.api.clip_registry.ClipH5Metadata` from
+                     :func:`~src.api.clip_registry.get_clip_h5_metadata`.
+        xai_mode:    ``"lrp"`` for AttnLRP, ``"rollout"`` for Attention Rollout.
+
+    Returns:
+        Dict with keys: verdict, confidence, perFrameScores, heatmapFrames,
+        xaiMode, anomalyRegions, cropBox.
+
+    Raises:
+        ModelNotReadyError: If the VideoMAE checkpoint is not configured.
+    """
+    model = get_video_model()
+    pixel_values = _load_from_hdf5(h5_metadata.h5_path, h5_metadata.h5_index).to(_device)
+
+    with torch.no_grad():
+        logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
+
+    probs = torch.softmax(logits, dim=-1)[0]  # class 0 = REAL, 1 = FAKE
+    fake_prob = probs[1].item()
+    verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
+    confidence = fake_prob if verdict == "FAKE" else probs[0].item()
+
+    if xai_mode == "lrp":
+        heatmap_tensor, _ = model.explain(pixel_values=pixel_values)
+        heatmap_np = heatmap_tensor.detach().cpu().numpy()[0]  # (T, H, W)
+        max_abs = np.max(np.abs(heatmap_np)) + 1e-8
+        heatmap_np = heatmap_np / max_abs
+    else:
+        heatmap_np = np.full((NUM_FRAMES, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
+
+    # Per-frame scores: mean absolute LRP relevance (no extra forward passes)
+    per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(NUM_FRAMES)]
+
+    # Upproject each 224×224 frame heatmap to the original full-frame resolution
+    cx1, cy1 = h5_metadata.crop_x1, h5_metadata.crop_y1
+    cx2, cy2 = h5_metadata.crop_x2, h5_metadata.crop_y2
+    ow, oh = h5_metadata.orig_w, h5_metadata.orig_h
+    heatmap_frames: list[str] = []
+    for i in range(NUM_FRAMES):
+        full_frame = _upproject_heatmap(heatmap_np[i], cx1, cy1, cx2, cy2, ow, oh)
+        alpha_mask = np.abs(full_frame) > 1e-6
+        heatmap_frames.append(_array_to_data_uri(full_frame, alpha_mask=alpha_mask))
+
+    anomaly_regions = _extract_anomaly_regions(heatmap_np)
+
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "perFrameScores": per_frame_scores,
+        "heatmapFrames": heatmap_frames,
+        "xaiMode": xai_mode,
+        "anomalyRegions": anomaly_regions,
+        "cropBox": {
+            "x1": cx1,
+            "y1": cy1,
+            "x2": cx2,
+            "y2": cy2,
+            "origW": ow,
+            "origH": oh,
+        },
     }
 
 

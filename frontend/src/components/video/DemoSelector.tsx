@@ -45,7 +45,7 @@ export function DemoSelector({ clips, selectedId, onSelect, disabled }: DemoSele
                 style={{ backgroundColor: '#1b1f2e' }}
               >
                 <img
-                  src={clip.posterSrc}
+                  src={clip.posterSrc || undefined}
                   alt=""
                   className="w-full h-full object-cover"
                   style={{ opacity: 0.7 }}

@@ -70,6 +70,12 @@ _CSV_FIELDNAMES: list[str] = [
     "split",
     "h5_path",
     "h5_index",
+    "crop_x1",
+    "crop_y1",
+    "crop_x2",
+    "crop_y2",
+    "orig_w",
+    "orig_h",
 ]
 
 
@@ -88,6 +94,13 @@ class ChunkMetadata:
         label_video: Video-stream label (0 = Real, 1 = Fake).
         label_audio: Audio-stream label (0 = Real, 1 = Fake).
         split:       Dataset split (``"train"``, ``"val"``, or ``"test"``).
+        crop_x1:     Left edge of the temporally-smoothed, scale-expanded face crop
+                     in the normalised-video pixel space.
+        crop_y1:     Top edge of the face crop.
+        crop_x2:     Right edge of the face crop.
+        crop_y2:     Bottom edge of the face crop.
+        orig_w:      Width of the normalised video frame in pixels.
+        orig_h:      Height of the normalised video frame in pixels.
     """
 
     chunk_id: str
@@ -97,6 +110,12 @@ class ChunkMetadata:
     label_video: int
     label_audio: int
     split: str
+    crop_x1: int
+    crop_y1: int
+    crop_x2: int
+    crop_y2: int
+    orig_w: int
+    orig_h: int
 
 
 # ── Writer ────────────────────────────────────────────────────────────────────
@@ -273,6 +292,12 @@ class H5Writer:
                 "split": metadata.split,
                 "h5_path": self._h5_path.as_posix(),
                 "h5_index": idx,
+                "crop_x1": metadata.crop_x1,
+                "crop_y1": metadata.crop_y1,
+                "crop_x2": metadata.crop_x2,
+                "crop_y2": metadata.crop_y2,
+                "orig_w": metadata.orig_w,
+                "orig_h": metadata.orig_h,
             }
         )
         self._csv_file.flush()

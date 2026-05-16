@@ -185,6 +185,58 @@ python src/explain_audio.py experiment=train_audio \
 
 ---
 
+## 8. Backend-API und Frontend-Devserver starten
+
+Für die interaktive Demo müssen **beide** Prozesse gleichzeitig laufen –
+jeweils in einem eigenen Terminal.
+
+### 8.1 FastAPI-Backend
+
+Aus dem **Projektstamm** (`deepfake-detection/`) mit aktivierter Python-Umgebung:
+
+```bash
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Das Backend läuft auch **ohne** Modell-Checkpoints (diese werden dann nur
+übersprungen). Der `/api/clips`-Endpunkt und die Video-Auslieferung unter
+`/clips/` funktionieren sofort.
+
+Umgebungsvariablen für Modell-Inferenz (PowerShell):
+
+```powershell
+# Wav2Vec2-Checkpoint (Epoch 2, Step 261 — aktuell verfügbar)
+$env:WAV2VEC2_CKPT_PATH = "checkpoints/epoch=2-step=261.ckpt"
+
+# VideoMAE-Checkpoint (sobald vorhanden)
+$env:VIDEOMAE_CKPT_PATH = "checkpoints/epoch=2-step=837.ckpt"
+
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 8.2 React-Frontend (Vite-Devserver)
+
+In einem **zweiten** Terminal, aus dem `frontend/`-Ordner:
+
+```bash
+npm run dev
+```
+
+Die App ist dann unter **http://localhost:5173** erreichbar.
+Der Vite-Devserver leitet `/api/*` und `/clips/*` automatisch an das
+Backend auf Port 8000 weiter.
+
+**Mock-Modus deaktivieren** (Real-Backend verwenden, inkl. Audio-xAI):
+
+Die Datei `frontend/.env.local` (bereits angelegt, nicht in Git) enthält:
+```env
+VITE_USE_MOCK=false
+```
+Damit ruft `analyzeClip()` das echte Backend auf. Ist `VITE_USE_MOCK` nicht gesetzt
+oder `true`, werden synthetische Demo-Daten ohne Backend-Aufruf zurückgegeben.
+
+---
+
 ## Weiterführende Recherche
 
 - Hydra Overrides: https://hydra.cc/docs/advanced/override_grammar/basics/

@@ -62,7 +62,7 @@ export const VideoAnalysisPlayer = forwardRef<HTMLVideoElement, VideoAnalysisPla
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.6 }}
-              style={{ position: 'absolute', inset: 0 }}
+              style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
             >
               <HeatmapCanvas
                 heatmapFrames={heatmapFrames}

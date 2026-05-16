@@ -197,7 +197,7 @@ class FaceExtractor:
 
     # ── Public ────────────────────────────────────────────────────────────────
 
-    def __call__(self, frames: np.ndarray) -> np.ndarray | None:
+    def __call__(self, frames: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int, int, int]] | None:
         """Crop and resize faces from a chunk of video frames.
 
         Runs MediaPipe FaceMesh on every frame.  If any frame yields no
@@ -213,8 +213,13 @@ class FaceExtractor:
                     ``N >= 1`` is enforced; wrong shapes raise ``ValueError``.
 
         Returns:
-            ``(N, 3, target_size, target_size)`` uint8 RGB array (channels-first,
-            PyTorch-ready), or ``None`` if any frame had no detectable face.
+            ``(cropped_frames, bbox)`` where ``cropped_frames`` is an
+            ``(N, 3, target_size, target_size)`` uint8 RGB array
+            (channels-first, PyTorch-ready) and ``bbox`` is
+            ``(x1, y1, x2, y2, orig_w, orig_h)`` — the temporally-smoothed,
+            scaled crop rectangle in the normalised-video pixel space together
+            with the original frame dimensions.  Returns ``None`` if any frame
+            had no detectable face.
 
         Raises:
             ValueError: If ``frames`` has wrong number of dimensions or dtype.
@@ -260,7 +265,7 @@ class FaceExtractor:
             # (H, W, C) → (C, H, W)
             out_frames.append(resized.transpose(2, 0, 1))
 
-        return np.stack(out_frames, axis=0)  # (N, 3, target_size, target_size)
+        return np.stack(out_frames, axis=0), (x1_s, y1_s, x2_s, y2_s, img_w, img_h)
 
     def close(self) -> None:
         """Release MediaPipe FaceLandmarker resources."""

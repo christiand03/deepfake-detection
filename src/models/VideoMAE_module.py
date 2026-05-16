@@ -5,11 +5,6 @@ from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.classification.accuracy import Accuracy
 from transformers import VideoMAEForVideoClassification
-from transformers.models.videomae import modeling_videomae
-
-# Guard flag: lxt monkey_patch has no unpatch API — patch is permanent once applied.
-# This prevents double-patching if explain() is called more than once.
-_VIDEOMAE_LRP_PATCHED = False
 
 
 class VideoMAEModule(LightningModule):
@@ -97,22 +92,8 @@ class VideoMAEModule(LightningModule):
 
         import torch.nn.functional as F_nn
         from einops import rearrange, reduce
-        from lxt.efficient import monkey_patch
-        from lxt.efficient.patches import patch_attention
 
-        from src.utils.attnlrp import build_common_patch_map, compute_attnlrp, normalize_relevance
-
-        # Patch map: shared transformer components + VideoMAE-specific attention module.
-        # lxt has no unpatch API, so the module-level flag ensures we patch exactly once.
-        videomae_patch_map = {
-            **build_common_patch_map(),
-            modeling_videomae: patch_attention,
-        }
-
-        global _VIDEOMAE_LRP_PATCHED
-        if not _VIDEOMAE_LRP_PATCHED:
-            monkey_patch(modeling_videomae, patch_map=videomae_patch_map)
-            _VIDEOMAE_LRP_PATCHED = True
+        from src.utils.attnlrp import compute_attnlrp, normalize_relevance
 
         relevance, target_class = compute_attnlrp(
             net=self.net,

@@ -34,6 +34,12 @@ def _make_metadata(
     label_audio: int = 0,
     chunk_id: str = "chunk_0",
     split: str = "train",
+    crop_x1: int = 10,
+    crop_y1: int = 8,
+    crop_x2: int = 50,
+    crop_y2: int = 55,
+    orig_w: int = 64,
+    orig_h: int = 64,
 ) -> ChunkMetadata:
     return ChunkMetadata(
         chunk_id=chunk_id,
@@ -43,6 +49,12 @@ def _make_metadata(
         label_video=label_video,
         label_audio=label_audio,
         split=split,
+        crop_x1=crop_x1,
+        crop_y1=crop_y1,
+        crop_x2=crop_x2,
+        crop_y2=crop_y2,
+        orig_w=orig_w,
+        orig_h=orig_h,
     )
 
 
@@ -105,6 +117,12 @@ class TestH5Writer:
         assert int(row["label_audio"]) == 0
         assert row["split"] == "train"
         assert int(row["h5_index"]) == 0
+        assert int(row["crop_x1"]) == 10
+        assert int(row["crop_y1"]) == 8
+        assert int(row["crop_x2"]) == 50
+        assert int(row["crop_y2"]) == 55
+        assert int(row["orig_w"]) == 64
+        assert int(row["orig_h"]) == 64
 
     def test_multiple_chunks_append(self, tmp_path: Path) -> None:
         h5_path = tmp_path / "train.h5"

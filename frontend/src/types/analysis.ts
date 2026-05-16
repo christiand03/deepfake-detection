@@ -63,6 +63,16 @@ export interface Phase4Result {
   attentionShift: AttentionShift[]
 }
 
+export interface CropBox {
+  /** Pixel coordinates of the face crop inside the original frame */
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  origW: number
+  origH: number
+}
+
 export interface AnalysisResult {
   clipId: string
   verdict: 'FAKE' | 'REAL'
@@ -79,6 +89,7 @@ export interface AnalysisResult {
   /** Top spatial anomaly regions with their LRP contribution scores */
   anomalyRegions: { region: string; score: number }[]
   audio: AudioAnalysis | null
+  cropBox: CropBox | null
   phase3: Phase3Result | null
   phase4: Phase4Result | null
 }

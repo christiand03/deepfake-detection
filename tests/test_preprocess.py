@@ -319,8 +319,9 @@ class TestProcessVideo:
         fake_audio = np.zeros(n_chunks * audio_samples_per_chunk, dtype=np.float32)
         fake_frames = [np.zeros((num_frames, 64, 64, 3), dtype=np.uint8)] * n_chunks
         fake_cropped = np.zeros((num_frames, 3, 224, 224), dtype=np.uint8)
+        fake_bbox = (0, 0, 224, 224, 224, 224)
 
-        mock_extractor = MagicMock(return_value=fake_cropped)
+        mock_extractor = MagicMock(return_value=(fake_cropped, fake_bbox))
         mock_writer = MagicMock()
 
         with (
@@ -351,8 +352,9 @@ class TestProcessVideo:
         fake_audio = np.zeros(audio_samples_per_chunk, dtype=np.float32)
         fake_frames = [np.zeros((num_frames, 64, 64, 3), dtype=np.uint8)]
         fake_cropped = np.zeros((num_frames, 3, 224, 224), dtype=np.uint8)
+        fake_bbox = (0, 0, 224, 224, 224, 224)
 
-        mock_extractor = MagicMock(return_value=fake_cropped)
+        mock_extractor = MagicMock(return_value=(fake_cropped, fake_bbox))
         mock_writer = MagicMock()
 
         with (

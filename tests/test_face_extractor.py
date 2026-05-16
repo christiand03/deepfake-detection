@@ -127,14 +127,16 @@ class TestFaceExtractor:
         extractor._detect_bbox = MagicMock(return_value=_fake_bbox(0, 0, _W, _H))
         result = extractor(_DUMMY_FRAMES)
         assert result is not None
-        assert result.shape == (_NUM_FRAMES, 3, 224, 224)
+        frames, _bbox = result
+        assert frames.shape == (_NUM_FRAMES, 3, 224, 224)
 
     def test_output_dtype_uint8(self) -> None:
         extractor = self._extractor_with_mock_facemesh()
         extractor._detect_bbox = MagicMock(return_value=_fake_bbox(0, 0, _W, _H))
         result = extractor(_DUMMY_FRAMES)
         assert result is not None
-        assert result.dtype == np.uint8
+        frames, _bbox = result
+        assert frames.dtype == np.uint8
 
     def test_wrong_input_ndim_raises(self) -> None:
         extractor = self._extractor_with_mock_facemesh()
@@ -167,8 +169,23 @@ class TestFaceExtractor:
         extractor._detect_bbox = MagicMock(return_value=_fake_bbox(0, 0, _W, _H))
         result = extractor(_DUMMY_FRAMES)
         assert result is not None
+        frames, _bbox = result
         # axis 1 is channels (3), not H or W
-        assert result.shape[1] == 3
+        assert frames.shape[1] == 3
+
+    def test_bbox_tuple_shape_and_types(self) -> None:
+        """Second return value must be a 6-tuple of ints: (x1, y1, x2, y2, orig_w, orig_h)."""
+        extractor = self._extractor_with_mock_facemesh()
+        extractor._detect_bbox = MagicMock(return_value=_fake_bbox(0, 0, _W, _H))
+        result = extractor(_DUMMY_FRAMES)
+        assert result is not None
+        _frames, bbox = result
+        assert len(bbox) == 6  # noqa: PLR2004
+        assert all(isinstance(v, int) for v in bbox)
+        x1, y1, x2, y2, orig_w, orig_h = bbox
+        assert x1 >= 0 and y1 >= 0
+        assert x2 <= orig_w and y2 <= orig_h
+        assert orig_w == _W and orig_h == _H
 
 
 # ── iter_video_chunks ─────────────────────────────────────────────────────────

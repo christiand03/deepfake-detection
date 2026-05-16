@@ -270,11 +270,13 @@ def _process_video(
             if chunk_idx >= n_audio_chunks:
                 break  # video has more frames than audio — alignment boundary
 
-            cropped = extractor(frames)
-            if cropped is None:
+            result = extractor(frames)
+            if result is None:
                 n_skipped_noface += 1
                 log.debug("No face in chunk %d of %s — skipping", chunk_idx, video_id)
                 continue
+
+            cropped, (cx1, cy1, cx2, cy2, ow, oh) = result
 
             audio_start = chunk_idx * audio_samples_per_chunk
             audio_chunk = audio[audio_start : audio_start + audio_samples_per_chunk].astype(np.float32)
@@ -288,6 +290,12 @@ def _process_video(
                 label_video=int(row.label_video),  # type: ignore[attr-defined]
                 label_audio=int(row.label_audio),  # type: ignore[attr-defined]
                 split=split,
+                crop_x1=cx1,
+                crop_y1=cy1,
+                crop_x2=cx2,
+                crop_y2=cy2,
+                orig_w=ow,
+                orig_h=oh,
             )
             writers[split].write_chunk(cropped, audio_chunk, metadata)
             n_written += 1
