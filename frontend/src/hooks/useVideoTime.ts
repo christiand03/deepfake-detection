@@ -14,15 +14,32 @@ export function useVideoTime(
   const [currentTime, setCurrentTime] = useState(0)
 
   useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
+    let cleanupFn: (() => void) | null = null
 
-    function onTimeUpdate() {
-      setCurrentTime(video!.currentTime)
+    function attach(): boolean {
+      const video = videoRef.current
+      if (!video) return false
+      function onTimeUpdate() {
+        setCurrentTime(video!.currentTime)
+      }
+      video.addEventListener('timeupdate', onTimeUpdate)
+      cleanupFn = () => video.removeEventListener('timeupdate', onTimeUpdate)
+      return true
     }
 
-    video.addEventListener('timeupdate', onTimeUpdate)
-    return () => video.removeEventListener('timeupdate', onTimeUpdate)
+    if (attach()) {
+      return () => cleanupFn?.()
+    }
+
+    // Video element not yet in DOM — poll until it appears
+    const id = setInterval(() => {
+      if (attach()) clearInterval(id)
+    }, 50)
+
+    return () => {
+      clearInterval(id)
+      cleanupFn?.()
+    }
   }, [videoRef])
 
   return currentTime

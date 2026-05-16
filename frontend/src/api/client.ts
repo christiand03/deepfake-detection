@@ -1,14 +1,14 @@
 /**
- * API client — switches between live FastAPI backend and mock data
- * based on the VITE_USE_MOCK environment variable.
+ * API client — always calls the live FastAPI backend for analysis.
  *
- * Set VITE_USE_MOCK=false in .env.local to use the live backend.
+ * fetchClips falls back to DEMO_CLIPS when VITE_USE_MOCK=true (offline dev).
+ * analyzeClip always uses the real backend — no mock path.
  */
 
 import type { AnalysisResult, ClipMeta, Phase3Result, Phase4Result, XaiMode } from '../types/analysis'
-import { DEMO_CLIPS, makeMockPhase3Result, makeMockPhase4Result, makeMockResult } from '../lib/mockData'
+import { DEMO_CLIPS, makeMockPhase3Result, makeMockPhase4Result } from '../lib/mockData'
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false'
+const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 
 // ── Simulate network latency in mock mode ────────────────────────────────────
 
@@ -39,13 +39,6 @@ export async function analyzeClip(
   clipId: string,
   xaiMode: XaiMode,
 ): Promise<AnalysisResult> {
-  if (USE_MOCK) {
-    // Simulate model inference time
-    await delay(1800 + Math.random() * 600)
-    const clip = DEMO_CLIPS.find(c => c.id === clipId)
-    if (!clip) throw new Error(`Unknown clip id: ${clipId}`)
-    return makeMockResult(clip)
-  }
   const res = await fetch(`/api/analyze/${clipId}?xai_mode=${xaiMode}`, {
     method: 'POST',
   })

@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 
 export type BackendStatus = 'mock' | 'online' | 'offline' | 'pending'
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false'
+const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 const POLL_MS = 15_000
 
 async function checkHealth(): Promise<boolean> {

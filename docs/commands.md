@@ -46,6 +46,24 @@ Der Lauf ist resumierbar: bereits verarbeitete Videos werden dank
 
 ---
 
+### clips.json erstellen
+
+# All clips (all splits)
+python scripts/build_clips_json.py
+
+# Test split only
+python scripts/build_clips_json.py --split test
+
+# First N clips (quick frontend smoke-test)
+python scripts/build_clips_json.py --limit 5
+
+# Custom paths
+python scripts/build_clips_json.py \
+    --normalized-dir data/normalized \
+    --output conf/clips.json
+
+---
+
 ## 3. Checkpoint eines vortrainierten Modells einbinden
 
 Eine bereitgestellte Checkpoint-File (`.ckpt`) wird **nicht**
