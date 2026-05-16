@@ -19,9 +19,6 @@ interface VideoAnalysisPlayerProps {
   heatmapOpacity?: number
 }
 
-const VIDEO_W = 640
-const VIDEO_H = 360
-
 export const VideoAnalysisPlayer = forwardRef<HTMLVideoElement, VideoAnalysisPlayerProps>(
   function VideoAnalysisPlayer(
     { clip, heatmapFrames, frameIndex, isScanning, heatmapOpacity = 0.55 },
@@ -49,7 +46,7 @@ export const VideoAnalysisPlayer = forwardRef<HTMLVideoElement, VideoAnalysisPla
             width: '100%',
             height: '100%',
             display: 'block',
-            objectFit: 'cover',
+            objectFit: 'contain',
           }}
         />
 
@@ -68,8 +65,6 @@ export const VideoAnalysisPlayer = forwardRef<HTMLVideoElement, VideoAnalysisPla
                 heatmapFrames={heatmapFrames}
                 frameIndex={frameIndex}
                 opacity={heatmapOpacity}
-                width={VIDEO_W}
-                height={VIDEO_H}
               />
             </motion.div>
           )}

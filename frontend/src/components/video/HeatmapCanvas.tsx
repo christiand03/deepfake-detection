@@ -1,10 +1,13 @@
 /**
- * HeatmapCanvas — draws the per-frame AttnLRP overlay onto a <canvas>
- * that is positioned absolutely over the <video> element.
+ * HeatmapCanvas — overlays the per-frame AttnLRP heatmap onto the video.
  *
- * Each frame's heatmap is a base64/SVG data URI. On each timeupdate the
- * current frame is loaded into an Image and composited at 50% opacity using
- * the "multiply" (or normal) blend mode so the video underneath is visible.
+ * Uses an <img> with objectFit: contain so its scaling and position match the
+ * <video> element exactly — no manual coordinate calculation required. The
+ * heatmap PNG is RGBA with transparent pixels outside the face crop, so only
+ * the face region is coloured.
+ *
+ * Frames are preloaded into an Image cache when a new analysis arrives so
+ * that scrubbing through the timeline does not cause flicker.
  */
 
 import { useEffect, useRef } from 'react'
@@ -13,70 +16,44 @@ interface HeatmapCanvasProps {
   heatmapFrames: string[]
   frameIndex: number
   opacity: number
-  /** Matches the natural size of the video element */
-  width: number
-  height: number
 }
 
-export function HeatmapCanvas({
-  heatmapFrames,
-  frameIndex,
-  opacity,
-  width,
-  height,
-}: HeatmapCanvasProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const imgCache = useRef<Map<number, HTMLImageElement>>(new Map())
+export function HeatmapCanvas({ heatmapFrames, frameIndex, opacity }: HeatmapCanvasProps) {
+  const imgRef = useRef<HTMLImageElement>(null)
+  const preloadCache = useRef<Map<number, HTMLImageElement>>(new Map())
 
+  // Preload all frames when a new analysis result arrives.
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    const src = heatmapFrames[frameIndex]
-    if (!src) {
-      ctx.clearRect(0, 0, width, height)
-      return
-    }
-
-    // Use cached image if available
-    const cached = imgCache.current.get(frameIndex)
-    if (cached) {
-      ctx.clearRect(0, 0, width, height)
-      ctx.globalAlpha = opacity
-      ctx.drawImage(cached, 0, 0, width, height)
-      return
-    }
-
-    const img = new Image()
-    img.onload = () => {
-      imgCache.current.set(frameIndex, img)
-      ctx.clearRect(0, 0, width, height)
-      ctx.globalAlpha = opacity
-      ctx.drawImage(img, 0, 0, width, height)
-    }
-    img.src = src
-  }, [frameIndex, heatmapFrames, opacity, width, height])
-
-  // Clear cache when frames change (new analysis)
-  useEffect(() => {
-    imgCache.current.clear()
+    preloadCache.current.clear()
+    heatmapFrames.forEach((src, i) => {
+      const preImg = new Image()
+      preImg.src = src
+      preloadCache.current.set(i, preImg)
+    })
   }, [heatmapFrames])
 
+  // Switch frames imperatively to avoid React re-render flicker.
+  useEffect(() => {
+    const el = imgRef.current
+    if (!el) return
+    const src = heatmapFrames[frameIndex]
+    if (src) el.src = src
+  }, [frameIndex, heatmapFrames])
+
   return (
-    <canvas
-      ref={canvasRef}
-      width={width}
-      height={height}
+    <img
+      ref={imgRef}
+      src={heatmapFrames[0] ?? undefined}
+      alt=""
       style={{
         position: 'absolute',
         inset: 0,
         width: '100%',
         height: '100%',
-        pointerEvents: 'none',
-        borderRadius: 8,
+        objectFit: 'contain',
+        opacity,
         mixBlendMode: 'screen',
+        pointerEvents: 'none',
       }}
     />
   )
