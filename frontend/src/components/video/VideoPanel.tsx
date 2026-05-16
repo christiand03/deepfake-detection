@@ -35,7 +35,7 @@ export function VideoPanel({
   const [selectedId, setSelectedId] = useState<string>('')
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.55)
 
-  const { state, analyze } = useAnalysis()
+  const { state, analyze, reset } = useAnalysis()
   const { showError } = useErrorToast()
   const isScanning = state.status === 'scanning'
   const isDone = state.status === 'done'
@@ -83,6 +83,7 @@ export function VideoPanel({
 
   function handleSelect(id: string) {
     setSelectedId(id)
+    reset()
   }
 
   function handleAnalyze() {
