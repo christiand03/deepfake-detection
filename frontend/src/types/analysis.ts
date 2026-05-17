@@ -29,6 +29,9 @@ export interface FrequencyBands {
 }
 
 export interface AudioAnalysis {
+  verdict: 'FAKE' | 'REAL'
+  /** Confidence in the audio verdict, 0–1 */
+  confidence: number
   /** Per-sample AttnLRP relevance, normalised to [-1, 1]. Length = T_samples. */
   waveformRelevance: number[]
   /** Per-sample raw waveform amplitude for display. Length = T_samples. */

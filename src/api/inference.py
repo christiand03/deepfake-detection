@@ -723,7 +723,12 @@ def run_audio_inference(clip_path: Path) -> dict | None:
     cache_dir = Path(__file__).parents[2] / ".whisperx_cache"
     word_segments = _compute_word_segments(waveform_np, sample_rate, relevance, cache_dir)
 
+    audio_verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
+    audio_confidence = fake_prob if audio_verdict == "FAKE" else probs[0].item()
+
     return {
+        "verdict": audio_verdict,
+        "confidence": audio_confidence,
         "waveformRelevance": relevance_norm,
         "waveformAmplitude": amplitude,
         "sampleRate": sample_rate,
