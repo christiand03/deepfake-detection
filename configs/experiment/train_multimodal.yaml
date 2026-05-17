@@ -1,0 +1,9 @@
+# @package _global_
+
+defaults:
+  - override /data: deepfake_multimodal
+  - override /model: multimodal
+  - override /logger: wandb
+  - override /trainer: gpu
+
+tags: ["multimodal", "cross-attention", "fusion", "videomae", "wav2vec2"]

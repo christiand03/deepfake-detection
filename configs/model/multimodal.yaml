@@ -1,0 +1,27 @@
+_target_: src.models.multimodal_module.MultimodalDeepfakeModule
+
+video_model_name: "MCG-NJU/videomae-base"
+audio_model_name: "facebook/wav2vec2-base"
+
+# Cross-Attention Fusion Parameter
+fusion_dim: 512     # Gemeinsame Dimension der Cross-Attention-Blöcke
+num_heads: 8        # Muss fusion_dim teilen (512 / 8 = 64 pro Head)
+dropout: 0.1
+num_classes: 2
+
+# Phase 1: Backbones einfrieren → nur Fusion-Head trainieren
+# Phase 2: auf False setzen und mit niedrigerer LR end-to-end fine-tunen
+freeze_backbones: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-4          # Für Phase 2 (unfreeze) auf 1e-5 reduzieren
+  weight_decay: 0.05
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  _partial_: true
+  mode: min
+  factor: 0.5
+  patience: 3
