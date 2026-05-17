@@ -1,0 +1,5 @@
+_target_: src.data.videomae_datamodule.VideoMAEDataModule
+data_dir: ${paths.data_dir}/processed
+batch_size: 10  # VideoMAE ist hungrig nach VRAM, starte klein!
+num_workers: 2
+pin_memory: True

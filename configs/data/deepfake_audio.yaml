@@ -1,0 +1,10 @@
+_target_: src.data.wav2vec2_datamodule.Wav2Vec2DataModule
+
+# Pfad zu deinen HDF5-Dateien
+data_dir: ${paths.data_dir}/processed
+
+# Hyperparameter für den DataLoader
+batch_size: 32
+num_workers: 8
+pin_memory: True
+label_type: "label_audio"
