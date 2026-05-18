@@ -40,6 +40,11 @@ from lightning import LightningModule
 from torchmetrics import MeanMetric, MaxMetric
 from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import VideoMAEModel, Wav2Vec2Model
+from functools import partial
+
+
+_MULTIMODAL_VIDEO_LRP_PATCHED: bool = False
+_MULTIMODAL_AUDIO_LRP_PATCHED: bool = False
 
 
 # Cross-Attention Fusion block
@@ -371,3 +376,58 @@ class MultimodalDeepfakeModule(LightningModule):
                 },
             }
         return {"optimizer": optimizer}
+
+    def explain(
+        self,
+        pixel_values: torch.Tensor,
+        input_values: torch.Tensor,
+        target_class: int | torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute joint AttnLRP heatmaps for both modalities.
+
+        Uses compute_attnlrp_multimodal for a single shared backward pass so that
+        cross-modal attention gradients are preserved.  Post-processing is identical
+        to the unimodal explain() methods so results are directly comparable.
+
+        Args:
+            pixel_values:  ``(B, 16, 3, 224, 224)`` float32 video tensor.
+            input_values:  ``(B, T_samples)`` float32 audio waveform tensor.
+            target_class:  Class to explain (None / int / Tensor[B]).
+
+        Returns:
+            video_heatmap:   ``(B, T, H, W)`` signed relevance in [-1, 1].
+            audio_relevance: ``(B, T_samples)`` signed relevance in [-1, 1].
+            resolved_target: ``(B,)`` long tensor of explained class indices.
+        """
+        assert not self.training, "explain() must be called in eval mode: model.eval()"
+
+        import torch.nn.functional as F_nn
+        from einops import rearrange, reduce
+
+        from src.utils.attnlrp import compute_attnlrp_multimodal, normalize_relevance
+
+        # Single backward pass through the full fusion graph.
+        # forward_fn receives (pv, iv) in the same order as input_tensors.
+        (video_rel, audio_rel), resolved = compute_attnlrp_multimodal(
+            net=self,
+            input_tensors=(pixel_values, input_values),
+            forward_fn=lambda pv, iv: self.forward(pv, iv),
+            target_class=target_class,
+        )
+        # video_rel: (B, T, C, H, W)
+        # audio_rel: (B, T_samples)
+
+        # Post-process video (identical to VideoMAEModule.explain)
+        heatmap = reduce(video_rel, "b t c h w -> b t h w", "sum")
+        B, T, H, W = heatmap.shape
+        heatmap_4d = rearrange(heatmap, "b t h w -> (b t) 1 h w")
+        heatmap_patches = F_nn.avg_pool2d(heatmap_4d, kernel_size=16, stride=16)
+        heatmap_4d = F_nn.interpolate(heatmap_patches, size=(H, W), mode="bilinear", align_corners=False)
+        heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> (b t) (h w)", b=B, t=T)
+        heatmap_2d = normalize_relevance(heatmap_2d)
+        video_heatmap = rearrange(heatmap_2d, "(b t) (h w) -> b t h w", b=B, t=T, h=H, w=W)
+
+        # Post-process audio (identical to Wav2Vec2DeepfakeModule.explain)
+        audio_relevance = normalize_relevance(audio_rel)
+
+        return video_heatmap, audio_relevance, resolved

@@ -146,3 +146,70 @@ def normalize_relevance(
     """
     absmax = relevance.abs().max(dim=1, keepdim=True).values
     return relevance / (absmax + 1e-8)
+
+def compute_attnlrp_multimodal(
+    net: nn.Module,
+    input_tensors: tuple[torch.Tensor, ...],
+    forward_fn: Callable[..., torch.Tensor],
+    target_class: int | torch.Tensor | None = None,
+) -> tuple[tuple[torch.Tensor, ...], torch.Tensor]:
+    """Run a joint AttnLRP pass over multiple input tensors in one backward call.
+
+    Extends compute_attnlrp to the multimodal case where gradients must flow
+    through a shared forward graph from several inputs simultaneously.  Running
+    separate backward passes would break cross-modal attention: each pass would
+    see the other modality as a constant, zeroing out its cross-attention gradient
+    contribution.
+
+    Must be called after the relevant lxt monkey_patch has been applied to *all*
+    sub-models that process the supplied inputs.
+
+    Args:
+        net:            The model. Used only for zero_grad() before the backward
+                        pass to ensure no stale gradients interfere.
+        input_tensors:  Tuple of raw input tensors in any shape.  Each tensor is
+                        cloned and detached internally — the caller's tensors are
+                        never modified.
+        forward_fn:     Callable(*xs) -> logits of shape (batch, num_classes),
+                        where xs are the cloned/grad-enabled counterparts of
+                        input_tensors in the same order.
+        target_class:   Class index to explain.
+                        - None: argmax(logits) per sample.
+                        - int: same class for the entire batch.
+                        - Tensor of shape (batch,): per-sample targets.
+
+    Returns:
+        relevances:      Tuple of Input×Gradient tensors, one per input tensor,
+                         each with the same shape as the corresponding input.
+        resolved_target: Target class tensor of shape (batch,), dtype long.
+    """
+    with torch.enable_grad():
+        xs = tuple(t.clone().detach().requires_grad_(True) for t in input_tensors)
+        logits = forward_fn(*xs)
+
+        if target_class is None:
+            resolved = torch.argmax(logits, dim=1)
+        elif isinstance(target_class, int):
+            resolved = torch.full(
+                (logits.shape[0],),
+                target_class,
+                device=logits.device,
+                dtype=torch.long,
+            )
+        else:
+            resolved = target_class
+
+        target_logits = logits[torch.arange(logits.shape[0], device=logits.device), resolved]
+        net.zero_grad()
+        target_logits.backward(torch.ones_like(target_logits))
+
+        relevances = []
+        for i, x in enumerate(xs):
+            assert x.grad is not None, (
+                f"xs[{i}].grad is None after backward — no differentiable path from "
+                f"input_tensors[{i}] to logits. Ensure lxt monkey_patch has been applied "
+                "to all backbone sub-models."
+            )
+            relevances.append(x * x.grad)
+
+    return tuple(relevances), resolved
