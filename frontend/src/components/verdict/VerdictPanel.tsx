@@ -90,11 +90,57 @@ export function VerdictPanel({ result, clip: _clip, isScanning }: VerdictPanelPr
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
             >
-              <VerdictGauge
-                confidence={result.confidence}
-                verdict={result.verdict}
-                isScanning={false}
-              />
+              {result.audio ? (
+                /* ── Side-by-side: visual + audio ── */
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        textAlign: 'center',
+                        fontSize: 9,
+                        fontFamily: 'monospace',
+                        letterSpacing: '0.18em',
+                        color: '#4d5470',
+                        marginBottom: 4,
+                      }}
+                    >
+                      VISUAL
+                    </div>
+                    <VerdictGauge
+                      confidence={result.confidence}
+                      verdict={result.verdict}
+                      isScanning={false}
+                    />
+                  </div>
+                  <div style={{ width: 1, backgroundColor: '#1e2233', alignSelf: 'stretch' }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        textAlign: 'center',
+                        fontSize: 9,
+                        fontFamily: 'monospace',
+                        letterSpacing: '0.18em',
+                        color: '#4d5470',
+                        marginBottom: 4,
+                      }}
+                    >
+                      AUDIO
+                    </div>
+                    <VerdictGauge
+                      confidence={result.audio.confidence}
+                      verdict={result.audio.verdict}
+                      isScanning={false}
+                    />
+                  </div>
+                </div>
+              ) : (
+                /* ── Single gauge (no audio) ── */
+                <VerdictGauge
+                  confidence={result.confidence}
+                  verdict={result.verdict}
+                  isScanning={false}
+                />
+              )}
             </motion.div>
           ) : (
             <motion.div

@@ -36,6 +36,8 @@ class FrequencyBandsSchema(BaseModel):
 
 
 class AudioAnalysisSchema(BaseModel):
+    verdict: Literal["FAKE", "REAL"]
+    confidence: float
     waveformRelevance: list[float]
     waveformAmplitude: list[float]
     sampleRate: int

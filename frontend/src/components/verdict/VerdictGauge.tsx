@@ -39,7 +39,7 @@ export function VerdictGauge({ confidence, verdict, isScanning }: VerdictGaugePr
         width="200"
         height="110"
         viewBox="0 0 200 110"
-        style={{ overflow: 'visible' }}
+        style={{ width: '100%', height: 'auto', overflow: 'visible' }}
       >
         {/* Tick marks */}
         {[0, 0.25, 0.5, 0.75, 1].map(pct => {
