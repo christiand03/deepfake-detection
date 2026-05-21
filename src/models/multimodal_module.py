@@ -37,27 +37,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from lightning import LightningModule
-from torchmetrics import MeanMetric, MaxMetric
+from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import VideoMAEModel, Wav2Vec2Model
-from functools import partial
-
-
-_MULTIMODAL_VIDEO_LRP_PATCHED: bool = False
-_MULTIMODAL_AUDIO_LRP_PATCHED: bool = False
-
 
 # Cross-Attention Fusion block
 
 
 class CrossAttentionFusion(nn.Module):
-    """Bidirectional cross-attention fusion of video and audio token sequences.
+    """Parallel bidirectional cross-attention fusion of video and audio token sequences.
 
-    Runs two residual cross-attention blocks (with pre-norm) and a two-layer
-    MLP classifier head:
+    Runs two independent residual cross-attention blocks with pre-norm.  Both
+    blocks receive the same *original* (pre-attention) projections as Keys/Values
+    so neither direction contaminates the other — a requirement for clean xAI
+    interpretation of the cross-modal attention weights:
 
-        v' = LayerNorm(v + CrossAttn(Q=v, K=a, V=a))   # video attends to audio
-        a' = LayerNorm(a + CrossAttn(Q=a, K=v, V=v))   # audio attends to video
+        v_n, a_n = LayerNorm(v), LayerNorm(a)          # pre-norm inputs
+        v' = v + CrossAttn(Q=v_n, K=a_n, V=a_n)       # video attends to audio
+        a' = a + CrossAttn(Q=a_n, K=v_n, V=v_n)       # audio attends to ORIGINAL video
         logits = MLP(cat(mean(v'), mean(a')))
 
     Args:
@@ -90,23 +87,27 @@ class CrossAttentionFusion(nn.Module):
         self.video_proj = nn.Linear(video_dim, fusion_dim)
         self.audio_proj = nn.Linear(audio_dim, fusion_dim)
 
-        #Block 1: Video queries Audio 
+        # Pre-norm LayerNorms — applied to the projected inputs BEFORE each attention
+        # block.  Pre-norm is more training-stable than post-norm and is the standard
+        # used by VideoMAE, Wav2Vec2, and every modern Transformer.
+        self.v_norm = nn.LayerNorm(fusion_dim)
+        self.a_norm = nn.LayerNorm(fusion_dim)
+
+        # Block 1: Video queries Audio
         self.v_to_a_attn = nn.MultiheadAttention(
             embed_dim=fusion_dim,
             num_heads=num_heads,
             dropout=dropout,
             batch_first=True,
         )
-        self.v_to_a_norm = nn.LayerNorm(fusion_dim)
 
-        #Block 2: Audio queries Video
+        # Block 2: Audio queries Video
         self.a_to_v_attn = nn.MultiheadAttention(
             embed_dim=fusion_dim,
             num_heads=num_heads,
             dropout=dropout,
             batch_first=True,
         )
-        self.a_to_v_norm = nn.LayerNorm(fusion_dim)
 
         # MLP classifier
         self.classifier = nn.Sequential(
@@ -131,23 +132,31 @@ class CrossAttentionFusion(nn.Module):
             ``(B, num_classes)`` logit tensor.
         """
         # Project to shared space.
-        v = self.video_proj(video_hidden)   # (B, T_v, fusion_dim)
-        a = self.audio_proj(audio_hidden)   # (B, T_a, fusion_dim)
+        v = self.video_proj(video_hidden)  # (B, T_v, fusion_dim)
+        a = self.audio_proj(audio_hidden)  # (B, T_a, fusion_dim)
 
-        # Block 1: video attends to audio (pre-norm residual).
-        v_cross, _ = self.v_to_a_attn(query=v, key=a, value=a)
-        v = self.v_to_a_norm(v + v_cross)  # (B, T_v, fusion_dim)
+        # Pre-norm: normalize ONCE before both attention blocks so that each
+        # direction attends to the original, unmodified representation of the
+        # other modality.  This is required for clean xAI interpretation:
+        # v_n and a_n are shared as K/V in both blocks — neither direction
+        # contaminates the other (parallel, not sequential).
+        v_n = self.v_norm(v)  # (B, T_v, fusion_dim)
+        a_n = self.a_norm(a)  # (B, T_a, fusion_dim)
 
-        # Block 2: audio attends to video (pre-norm residual).
-        a_cross, _ = self.a_to_v_attn(query=a, key=v, value=v)
-        a = self.a_to_v_norm(a + a_cross)  # (B, T_a, fusion_dim)
+        # Block 1: video attends to audio.
+        v_cross, _ = self.v_to_a_attn(query=v_n, key=a_n, value=a_n)
+        v = v + v_cross  # (B, T_v, fusion_dim)
+
+        # Block 2: audio attends to ORIGINAL video (v_n, not the updated v).
+        a_cross, _ = self.a_to_v_attn(query=a_n, key=v_n, value=v_n)
+        a = a + a_cross  # (B, T_a, fusion_dim)
 
         # Mean-pool over the sequence dimension, then fuse.
-        v_pool = v.mean(dim=1)             # (B, fusion_dim)
-        a_pool = a.mean(dim=1)             # (B, fusion_dim)
+        v_pool = v.mean(dim=1)  # (B, fusion_dim)
+        a_pool = a.mean(dim=1)  # (B, fusion_dim)
 
         fused = torch.cat([v_pool, a_pool], dim=1)  # (B, fusion_dim * 2)
-        return self.classifier(fused)               # (B, num_classes)
+        return self.classifier(fused)  # (B, num_classes)
 
 
 # LightningModule
@@ -198,7 +207,7 @@ class MultimodalDeepfakeModule(LightningModule):
         super().__init__()
         self.save_hyperparameters(logger=False)
 
-        # Backbones 
+        # Backbones
         # Use the base models (no classification head) to get hidden-state sequences.
         self.video_backbone = VideoMAEModel.from_pretrained(video_model_name)
         self.audio_backbone = Wav2Vec2Model.from_pretrained(audio_model_name)
@@ -224,14 +233,14 @@ class MultimodalDeepfakeModule(LightningModule):
 
         # Metrics
         self.train_acc = BinaryAccuracy()
-        self.val_acc   = BinaryAccuracy()
-        self.test_acc  = BinaryAccuracy()
-        self.val_f1    = BinaryF1Score()
-        self.test_f1   = BinaryF1Score()
-        self.val_auc   = BinaryAUROC()
+        self.val_acc = BinaryAccuracy()
+        self.test_acc = BinaryAccuracy()
+        self.val_f1 = BinaryF1Score()
+        self.test_f1 = BinaryF1Score()
+        self.val_auc = BinaryAUROC()
         self.train_loss = MeanMetric()
-        self.val_loss   = MeanMetric()
-        self.test_loss  = MeanMetric()
+        self.val_loss = MeanMetric()
+        self.test_loss = MeanMetric()
         self.val_acc_best = MaxMetric()
 
     # Helpers
@@ -254,7 +263,7 @@ class MultimodalDeepfakeModule(LightningModule):
         # Re-freeze the CNN front-end: it never needs gradients.
         self.audio_backbone.feature_extractor._freeze_parameters()
 
-    # Forward 
+    # Forward
 
     def _extract_features(
         self,
@@ -273,10 +282,10 @@ class MultimodalDeepfakeModule(LightningModule):
         """
         video_out = self.video_backbone(pixel_values=pixel_values)
         # last_hidden_state includes the CLS token at position 0.
-        video_hidden = video_out.last_hidden_state   # (B, T_v, D_v)
+        video_hidden = video_out.last_hidden_state  # (B, T_v, D_v)
 
         audio_out = self.audio_backbone(input_values=input_values)
-        audio_hidden = audio_out.last_hidden_state   # (B, T_a, D_a)
+        audio_hidden = audio_out.last_hidden_state  # (B, T_a, D_a)
 
         return video_hidden, audio_hidden
 
@@ -301,7 +310,7 @@ class MultimodalDeepfakeModule(LightningModule):
 
     def _model_step(
         self, batch: dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Shared logic for train / val / test.
 
         Args:
@@ -309,7 +318,8 @@ class MultimodalDeepfakeModule(LightningModule):
                    ``"labels"`` (as produced by ``MultimodalHDF5Dataset``).
 
         Returns:
-            ``(loss, preds, labels)`` — all scalar / (B,) tensors.
+            ``(loss, preds, labels, logits)`` — logits are returned so callers
+            can compute probabilities without a second forward pass.
         """
         pixel_values = batch["pixel_values"]
         input_values = batch["input_values"]
@@ -318,25 +328,22 @@ class MultimodalDeepfakeModule(LightningModule):
         logits = self.forward(pixel_values, input_values)
         loss = F.cross_entropy(logits, labels)
         preds = torch.argmax(logits, dim=1)
-        return loss, preds, labels
+        return loss, preds, labels, logits
 
     # Lightning hooks
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        loss, preds, labels = self._model_step(batch)
+        loss, preds, labels, _ = self._model_step(batch)
         self.train_loss(loss)
         self.train_acc(preds, labels)
         self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("train/acc",  self.train_acc,  on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
-        loss, preds, labels = self._model_step(batch)
+        loss, preds, labels, logits = self._model_step(batch)
 
-        # For AUC we need class-1 probabilities.
-        pixel_values = batch["pixel_values"]
-        input_values = batch["input_values"]
-        logits = self.forward(pixel_values, input_values)
+        # Reuse logits from _model_step — no second forward pass needed.
         probs = F.softmax(logits, dim=1)[:, 1]
 
         self.val_loss(loss)
@@ -344,9 +351,9 @@ class MultimodalDeepfakeModule(LightningModule):
         self.val_f1(preds, labels)
         self.val_auc(probs, labels)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/acc",  self.val_acc,  on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/f1",   self.val_f1,   on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/auc",  self.val_auc,  on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_validation_epoch_end(self) -> None:
         acc = self.val_acc.compute()
@@ -354,13 +361,13 @@ class MultimodalDeepfakeModule(LightningModule):
         self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
-        loss, preds, labels = self._model_step(batch)
+        loss, preds, labels, _ = self._model_step(batch)
         self.test_loss(loss)
         self.test_acc(preds, labels)
         self.test_f1(preds, labels)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/acc",  self.test_acc,  on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/f1",   self.test_f1,   on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
 
     def configure_optimizers(self) -> dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.parameters())
