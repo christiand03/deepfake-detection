@@ -1,19 +1,19 @@
 import functools
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import hydra
 import lightning as L
 import rootutils
 import torch
-
-torch.set_float32_matmul_precision("medium")
-
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
-from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
+if TYPE_CHECKING:
+    from lightning.pytorch.loggers import Logger
+
+torch.set_float32_matmul_precision("medium")
 torch.serialization.add_safe_globals([functools.partial])
 torch.serialization.add_safe_globals([AdamW])
 torch.serialization.add_safe_globals([ReduceLROnPlateau])
@@ -36,7 +36,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # more info: https://github.com/ashleve/rootutils
 # ------------------------------------------------------------------------------------ #
 
-from src.utils import (
+from src.utils import (  # noqa: E402
     RankedLogger,
     extras,
     get_metric_value,

@@ -696,6 +696,8 @@ def run_audio_inference(clip_path: Path) -> dict | None:
 
     model = get_audio_model()
     waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
+    # Apply same per-sample z-score normalization as DeepfakeAudioHDF5Dataset
+    waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / torch.sqrt(waveform_tensor.var() + 1e-7)
 
     with torch.no_grad():
         logits = model.net(waveform_tensor).logits  # (1, 2)
@@ -709,7 +711,8 @@ def run_audio_inference(clip_path: Path) -> dict | None:
         logits_lrp = model.net(wt).logits
         target = logits_lrp[0, 1] if fake_prob > 0.5 else logits_lrp[0, 0]
         target.backward()
-        assert wt.grad is not None
+        if wt.grad is None:
+            raise RuntimeError("wt.grad is None — no differentiable path through Wav2Vec2 for LRP.")
         relevance = (wt.grad * wt).detach().cpu().squeeze(0).numpy()
     except Exception:
         log.warning("AttnLRP backward failed for audio in %s; using zero relevance", clip_path)
@@ -764,7 +767,8 @@ def _pgd_attack(
         loss = F.cross_entropy(logits, target_t)
         model.net.zero_grad()
         loss.backward()
-        assert x_adv.grad is not None
+        if x_adv.grad is None:
+            raise RuntimeError("x_adv.grad is None after backward — PGD requires a differentiable forward pass.")
         grad_sign = x_adv.grad.detach().sign()
         x_adv = x_adv.detach() + step_size * grad_sign
         delta = torch.clamp(x_adv - x_orig, min=-epsilon, max=epsilon)

@@ -109,10 +109,11 @@ def compute_attnlrp(
         net.zero_grad()
         target_logits.backward(torch.ones_like(target_logits))
 
-        assert x.grad is not None, (
-            "x.grad is None after backward — no differentiable path from input to loss. "
-            "Ensure the model is fully differentiable and lxt monkey_patch has been applied."
-        )
+        if x.grad is None:
+            raise RuntimeError(
+                "x.grad is None after backward — no differentiable path from input to loss. "
+                "Ensure the model is fully differentiable and lxt monkey_patch has been applied."
+            )
         relevance = x * x.grad
 
     return relevance, resolved
@@ -211,11 +212,12 @@ def compute_attnlrp_multimodal(
 
         relevances = []
         for i, x in enumerate(xs):
-            assert x.grad is not None, (
-                f"xs[{i}].grad is None after backward — no differentiable path from "
-                f"input_tensors[{i}] to logits. Ensure lxt monkey_patch has been applied "
-                "to all backbone sub-models."
-            )
+            if x.grad is None:
+                raise RuntimeError(
+                    f"xs[{i}].grad is None after backward — no differentiable path from "
+                    f"input_tensors[{i}] to logits. Ensure lxt monkey_patch has been applied "
+                    "to all backbone sub-models."
+                )
             relevances.append(x * x.grad)
 
     return tuple(relevances), resolved

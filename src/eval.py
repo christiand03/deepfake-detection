@@ -1,10 +1,12 @@
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import hydra
 import rootutils
-from lightning import LightningDataModule, LightningModule, Trainer
-from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
+
+if TYPE_CHECKING:
+    from lightning import LightningDataModule, LightningModule, Trainer
+    from lightning.pytorch.loggers import Logger
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # ------------------------------------------------------------------------------------ #
@@ -24,7 +26,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # more info: https://github.com/ashleve/rootutils
 # ------------------------------------------------------------------------------------ #
 
-from src.utils import (
+from src.utils import (  # noqa: E402
     RankedLogger,
     extras,
     instantiate_loggers,
@@ -45,7 +47,8 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     :param cfg: DictConfig configuration composed by Hydra.
     :return: Tuple[dict, dict] with metrics and dict with all instantiated objects.
     """
-    assert cfg.ckpt_path
+    if not cfg.ckpt_path:
+        raise ValueError("cfg.ckpt_path is required for evaluation. Pass ckpt_path=<path/to/checkpoint.ckpt>")
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)

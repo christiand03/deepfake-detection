@@ -20,51 +20,57 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
-import pytest
+
 from src.models.multimodal_module import CrossAttentionFusion, MultimodalDeepfakeModule
 
 # ── Konstanten (müssen zur Preprocessing-Config passen) ───────────────────────
-BATCH_SIZE   = 2
-NUM_FRAMES   = 16
-IMG_SIZE     = 224
-AUDIO_LEN    = 10_240
-VIDEO_DIM    = 768   # VideoMAE-base hidden size
-AUDIO_DIM    = 768   # Wav2Vec2-base hidden size
-FUSION_DIM   = 512
-NUM_HEADS    = 8
-NUM_CLASSES  = 2
+BATCH_SIZE = 2
+NUM_FRAMES = 16
+IMG_SIZE = 224
+AUDIO_LEN = 10_240
+VIDEO_DIM = 768  # VideoMAE-base hidden size
+AUDIO_DIM = 768  # Wav2Vec2-base hidden size
+FUSION_DIM = 512
+NUM_HEADS = 8
+NUM_CLASSES = 2
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 print(f"  Device: {DEVICE}")
-print(f"{'='*60}\n")
+print(f"{'=' * 60}\n")
 
 
 # ── Hilfsfunktionen ────────────────────────────────────────────────────────────
 
+
 def make_video_hidden(batch=BATCH_SIZE, t_v=1569, d=VIDEO_DIM):
-    """Dummy VideoMAE hidden states (B, T_v, D_v). 
+    """Dummy VideoMAE hidden states (B, T_v, D_v).
     T_v = 1568 Patch-Tokens + 1 CLS-Token für VideoMAE-base mit 16 Frames."""
     return torch.randn(batch, t_v, d, device=DEVICE)
+
 
 def make_audio_hidden(batch=BATCH_SIZE, t_a=32, d=AUDIO_DIM):
     """Dummy Wav2Vec2 hidden states (B, T_a, D_a).
     T_a ≈ 32 für 10240 Audio-Samples (CNN stride ~320)."""
     return torch.randn(batch, t_a, d, device=DEVICE)
 
+
 def make_pixel_values(batch=BATCH_SIZE):
     """Dummy Video-Input für den vollen Forward-Pass (B, T, C, H, W)."""
     return torch.randn(batch, NUM_FRAMES, 3, IMG_SIZE, IMG_SIZE, device=DEVICE)
 
+
 def make_input_values(batch=BATCH_SIZE):
     """Dummy Audio-Input für den vollen Forward-Pass (B, samples)."""
     return torch.randn(batch, AUDIO_LEN, device=DEVICE)
+
 
 def make_labels(batch=BATCH_SIZE):
     return torch.randint(0, NUM_CLASSES, (batch,), device=DEVICE)
 
 
 # ── Test 1: CrossAttentionFusion Shapes ───────────────────────────────────────
+
 
 def test_fusion_output_shape():
     print("Test 1: CrossAttentionFusion — Output-Shape")
@@ -81,13 +87,12 @@ def test_fusion_output_shape():
 
     logits = fusion(video_h, audio_h)
 
-    assert logits.shape == (BATCH_SIZE, NUM_CLASSES), (
-        f"Erwartet ({BATCH_SIZE}, {NUM_CLASSES}), bekommen {logits.shape}"
-    )
+    assert logits.shape == (BATCH_SIZE, NUM_CLASSES), f"Erwartet ({BATCH_SIZE}, {NUM_CLASSES}), bekommen {logits.shape}"
     print(f"  ✓ Logits-Shape korrekt: {logits.shape}")
 
 
 # ── Test 2: Keine NaN / Inf im Output ─────────────────────────────────────────
+
 
 def test_no_nan_inf():
     print("\nTest 2: CrossAttentionFusion — Keine NaN/Inf")
@@ -108,6 +113,7 @@ def test_no_nan_inf():
 
 # ── Test 3: Backpropagation durch Fusion-Head ─────────────────────────────────
 
+
 def test_fusion_backprop():
     print("\nTest 3: CrossAttentionFusion — Backpropagation")
     fusion = CrossAttentionFusion(
@@ -120,10 +126,10 @@ def test_fusion_backprop():
 
     video_h = make_video_hidden()
     audio_h = make_audio_hidden()
-    labels  = make_labels()
+    labels = make_labels()
 
     logits = fusion(video_h, audio_h)
-    loss   = torch.nn.functional.cross_entropy(logits, labels)
+    loss = torch.nn.functional.cross_entropy(logits, labels)
     loss.backward()
 
     # Prüfe, ob mindestens ein Parameter wirklich Gradienten hat
@@ -138,6 +144,7 @@ def test_fusion_backprop():
 
 
 # ── Test 4: Freeze-Backbones funktioniert ─────────────────────────────────────
+
 
 def test_freeze_backbones():
     print("\nTest 4: MultimodalDeepfakeModule — freeze_backbones=True")
@@ -161,12 +168,17 @@ def test_freeze_backbones():
 
 # ── Test 5: Voller Forward-Pass mit echten Backbones ──────────────────────────
 
+
 def test_full_forward_pass():
     print("\nTest 5: MultimodalDeepfakeModule — Voller Forward-Pass")
-    model = MultimodalDeepfakeModule(
-        freeze_backbones=True,
-        optimizer=lambda params: torch.optim.AdamW(params, lr=1e-4),
-    ).to(DEVICE).eval()
+    model = (
+        MultimodalDeepfakeModule(
+            freeze_backbones=True,
+            optimizer=lambda params: torch.optim.AdamW(params, lr=1e-4),
+        )
+        .to(DEVICE)
+        .eval()
+    )
 
     pixel_values = make_pixel_values()
     input_values = make_input_values()
@@ -174,9 +186,7 @@ def test_full_forward_pass():
     with torch.no_grad():
         logits = model(pixel_values, input_values)
 
-    assert logits.shape == (BATCH_SIZE, NUM_CLASSES), (
-        f"Erwartet ({BATCH_SIZE}, {NUM_CLASSES}), bekommen {logits.shape}"
-    )
+    assert logits.shape == (BATCH_SIZE, NUM_CLASSES), f"Erwartet ({BATCH_SIZE}, {NUM_CLASSES}), bekommen {logits.shape}"
     probs = torch.softmax(logits, dim=1)
     assert (probs.sum(dim=1) - 1.0).abs().max() < 1e-5, "Softmax-Summe != 1"
 
@@ -185,6 +195,7 @@ def test_full_forward_pass():
 
 
 # ── Test 6: Unfreeze funktioniert ─────────────────────────────────────────────
+
 
 def test_unfreeze_backbones():
     print("\nTest 6: MultimodalDeepfakeModule — unfreeze_backbones()")
@@ -222,8 +233,8 @@ if __name__ == "__main__":
             print(f"  ✗ FEHLER: {e}")
             failed += 1
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Ergebnis: {passed}/{len(tests)} Tests bestanden", end="")
     print("  ✓" if failed == 0 else f"  — {failed} fehlgeschlagen")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
     sys.exit(0 if failed == 0 else 1)

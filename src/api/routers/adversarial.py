@@ -37,7 +37,7 @@ def _run(req: AdversarialRequest) -> Phase4ResultSchema:
 @router.post("", response_model=Phase4ResultSchema)
 async def adversarial_attack(req: AdversarialRequest) -> Phase4ResultSchema:
     """Launch a white-box adversarial attack and return perturbed-frame analysis."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(_executor, _run, req)
     except ModelNotReadyError as exc:

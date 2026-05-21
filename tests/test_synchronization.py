@@ -11,33 +11,36 @@ Ausführen:
 
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 import torch.nn.functional as F
-from src.models.multimodal_module import CrossAttentionFusion, MultimodalDeepfakeModule
+
+from src.models.multimodal_module import CrossAttentionFusion
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ── Preprocessing-Konstanten (müssen zur preprocess.yaml passen) ──────────────
-NUM_FRAMES              = 16
-TARGET_FPS              = 25
+NUM_FRAMES = 16
+TARGET_FPS = 25
 AUDIO_SAMPLES_PER_CHUNK = 10_240
-SAMPLE_RATE             = 16_000
+SAMPLE_RATE = 16_000
 
 # ── Modell-Konstanten ─────────────────────────────────────────────────────────
-VIDEO_DIM  = 768
-AUDIO_DIM  = 768
+VIDEO_DIM = 768
+AUDIO_DIM = 768
 FUSION_DIM = 512
-NUM_HEADS  = 8
-BATCH      = 2
+NUM_HEADS = 8
+BATCH = 2
 
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 print(f"  Device: {DEVICE}")
-print(f"{'='*60}\n")
+print(f"{'=' * 60}\n")
 
 
 # ── Test 1: Daten-Ebene — Zeitspannen-Alignment ───────────────────────────────
+
 
 def test_chunk_duration_alignment():
     """Video-Chunk-Dauer == Audio-Chunk-Dauer (Preprocessing-Garantie).
@@ -62,6 +65,7 @@ def test_chunk_duration_alignment():
 
 # ── Test 2: Modell-Ebene — Sensitivität gegenüber Audio-Änderungen ────────────
 
+
 def test_audio_sensitivity():
     """Output muss sich ändern, wenn Audio ausgetauscht wird (bei gleichem Video).
 
@@ -71,14 +75,20 @@ def test_audio_sensitivity():
     """
     print("\nTest 2: Modell-Ebene — Sensitivität gegenüber Audio")
 
-    fusion = CrossAttentionFusion(
-        video_dim=VIDEO_DIM, audio_dim=AUDIO_DIM,
-        fusion_dim=FUSION_DIM, num_heads=NUM_HEADS,
-    ).to(DEVICE).eval()
+    fusion = (
+        CrossAttentionFusion(
+            video_dim=VIDEO_DIM,
+            audio_dim=AUDIO_DIM,
+            fusion_dim=FUSION_DIM,
+            num_heads=NUM_HEADS,
+        )
+        .to(DEVICE)
+        .eval()
+    )
 
-    video_h  = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
-    audio_a  = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)
-    audio_b  = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)  # komplett anderes Audio
+    video_h = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
+    audio_a = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)
+    audio_b = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)  # komplett anderes Audio
 
     with torch.no_grad():
         logits_a = fusion(video_h, audio_a)
@@ -94,18 +104,25 @@ def test_audio_sensitivity():
 
 # ── Test 3: Modell-Ebene — Sensitivität gegenüber Video-Änderungen ────────────
 
+
 def test_video_sensitivity():
     """Analog zu Test 2 für Video — stellt sicher dass auch Video-Branch aktiv ist."""
     print("\nTest 3: Modell-Ebene — Sensitivität gegenüber Video")
 
-    fusion = CrossAttentionFusion(
-        video_dim=VIDEO_DIM, audio_dim=AUDIO_DIM,
-        fusion_dim=FUSION_DIM, num_heads=NUM_HEADS,
-    ).to(DEVICE).eval()
+    fusion = (
+        CrossAttentionFusion(
+            video_dim=VIDEO_DIM,
+            audio_dim=AUDIO_DIM,
+            fusion_dim=FUSION_DIM,
+            num_heads=NUM_HEADS,
+        )
+        .to(DEVICE)
+        .eval()
+    )
 
-    audio_h  = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)
-    video_a  = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
-    video_b  = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
+    audio_h = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)
+    video_a = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
+    video_b = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
 
     with torch.no_grad():
         logits_a = fusion(video_a, audio_h)
@@ -120,6 +137,7 @@ def test_video_sensitivity():
 
 
 # ── Test 4: Attention-Ebene — Weights nicht uniform ──────────────────────────
+
 
 def test_attention_weights_not_uniform():
     """Attention-Weights dürfen nicht gleichmäßig über alle Tokens verteilt sein.
@@ -144,24 +162,37 @@ def test_attention_weights_not_uniform():
             v = self.video_proj(video_hidden)
             a = self.audio_proj(audio_hidden)
 
-            v_cross, v2a_w = self.v_to_a_attn(query=v, key=a, value=a,
-                                               need_weights=True, average_attn_weights=True)
-            self.last_v2a_weights = v2a_w.detach()   # (B, T_v, T_a)
-            v = self.v_to_a_norm(v + v_cross)
+            # Pre-norm matching CrossAttentionFusion.forward()
+            v_n = self.v_norm(v)
+            a_n = self.a_norm(a)
 
-            a_cross, a2v_w = self.a_to_v_attn(query=a, key=v, value=v,
-                                               need_weights=True, average_attn_weights=True)
-            self.last_a2v_weights = a2v_w.detach()   # (B, T_a, T_v)
-            a = self.a_to_v_norm(a + a_cross)
+            v_cross, v2a_w = self.v_to_a_attn(
+                query=v_n, key=a_n, value=a_n, need_weights=True, average_attn_weights=True
+            )
+            self.last_v2a_weights = v2a_w.detach()  # (B, T_v, T_a)
+            v = v + v_cross  # residual without post-norm (pre-norm design)
+
+            # Audio attends to original video (v_n, not updated v) — matches parent
+            a_cross, a2v_w = self.a_to_v_attn(
+                query=a_n, key=v_n, value=v_n, need_weights=True, average_attn_weights=True
+            )
+            self.last_a2v_weights = a2v_w.detach()  # (B, T_a, T_v)
+            a = a + a_cross
 
             v_pool = v.mean(dim=1)
             a_pool = a.mean(dim=1)
             return self.classifier(torch.cat([v_pool, a_pool], dim=1))
 
-    fusion = FusionWithWeights(
-        video_dim=VIDEO_DIM, audio_dim=AUDIO_DIM,
-        fusion_dim=FUSION_DIM, num_heads=NUM_HEADS,
-    ).to(DEVICE).eval()
+    fusion = (
+        FusionWithWeights(
+            video_dim=VIDEO_DIM,
+            audio_dim=AUDIO_DIM,
+            fusion_dim=FUSION_DIM,
+            num_heads=NUM_HEADS,
+        )
+        .to(DEVICE)
+        .eval()
+    )
 
     video_h = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
     audio_h = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)
@@ -198,6 +229,7 @@ def test_attention_weights_not_uniform():
 
 # ── Test 5: Asynchronitäts-Nachweis (bekannte Limitation dokumentieren) ───────
 
+
 def test_document_token_level_behavior():
     """Dokumentiert das bewusste Design: Token-Level-Attention ist global (nicht temporal).
 
@@ -214,10 +246,10 @@ def test_document_token_level_behavior():
     """
     print("\nTest 5: Token-Level-Attention — Verhalten dokumentieren")
 
-    t_v = 1569   # VideoMAE-base Tokens (inkl. CLS)
-    t_a = 32     # Wav2Vec2-base Tokens für 10240 Samples
+    t_v = 1569  # VideoMAE-base Tokens (inkl. CLS)
+    t_a = 32  # Wav2Vec2-base Tokens für 10240 Samples
 
-    video_duration_s = NUM_FRAMES / TARGET_FPS           # 0.64s
+    video_duration_s = NUM_FRAMES / TARGET_FPS  # 0.64s
     audio_duration_s = AUDIO_SAMPLES_PER_CHUNK / SAMPLE_RATE  # 0.64s
 
     # Zeitauflösung pro Token
@@ -227,9 +259,9 @@ def test_document_token_level_behavior():
 
     print(f"  Video-Tokens:          {t_v} (inkl. CLS, über {video_duration_s:.2f}s)")
     print(f"  Audio-Tokens:          {t_a} (je ~{audio_token_duration_ms:.1f}ms)")
-    print(f"  Attention-Typ:         global (jeder Token → jeden Token)")
+    print("  Attention-Typ:         global (jeder Token → jeden Token)")
     print(f"  Chunk-Alignment:       ✓ (beide Fenster = {video_duration_s:.2f}s)")
-    print(f"  Token-Alignment:       — (global, kein Forcing)")
+    print("  Token-Alignment:       — (global, kein Forcing)")
     print()
     print("  → Ausreichend für Deepfake-Erkennung auf Chunk-Ebene.")
     print("  → Für frame-genaue Lippensync: temporale Attention erwägen.")
@@ -256,8 +288,8 @@ if __name__ == "__main__":
             print(f"  ✗ FEHLER: {e}")
             failed += 1
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Ergebnis: {passed}/{len(tests)} Tests bestanden", end="")
     print("  ✓" if failed == 0 else f"  — {failed} fehlgeschlagen")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
     sys.exit(0 if failed == 0 else 1)

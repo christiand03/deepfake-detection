@@ -35,7 +35,7 @@ def _run(req: RobustnessRequest) -> Phase3ResultSchema:
 @router.post("", response_model=Phase3ResultSchema)
 async def robustness_test(req: RobustnessRequest) -> Phase3ResultSchema:
     """Apply social-media degradation to a clip and return updated xAI results."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(_executor, _run, req)
     except ModelNotReadyError as exc:
