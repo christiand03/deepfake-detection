@@ -23,7 +23,7 @@ class Wav2Vec2DataModule(LightningDataModule):
         self.test_dataset: DeepfakeAudioHDF5Dataset | None = None
 
     def setup(self, stage: str | None = None):
-        if self.train_dataset is None and self.val_dataset is None:
+        if self.train_dataset is None:
             self.train_dataset = DeepfakeAudioHDF5Dataset(
                 h5_path=os.path.join(self.hparams.data_dir, "train.h5"), label_type=self.hparams.label_type
             )

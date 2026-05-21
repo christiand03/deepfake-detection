@@ -55,6 +55,13 @@ def assign_splits(
     n_test = max(1, int(n_total * test_ratio))
     n_val = max(1, int(n_total * val_ratio))
 
+    if n_test + n_val >= n_total:
+        raise ValueError(
+            f"Not enough identities for a non-empty training split: "
+            f"n_total={n_total}, n_test={n_test}, n_val={n_val}. "
+            "Reduce val_ratio/test_ratio or supply more identities."
+        )
+
     test_ids = set(shuffled[:n_test])
     val_ids = set(shuffled[n_test : n_test + n_val])
 

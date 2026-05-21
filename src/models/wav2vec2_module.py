@@ -7,7 +7,7 @@ from beartype import beartype
 # Spezifische Imports für jaxtyping und einops
 from jaxtyping import Float, Int
 from lightning.pytorch import LightningModule
-from torchmetrics import MeanMetric
+from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import Wav2Vec2ForSequenceClassification
 
@@ -41,8 +41,12 @@ class Wav2Vec2DeepfakeModule(LightningModule):
 
         self.train_f1 = BinaryF1Score()
         self.val_f1 = BinaryF1Score()
+        self.test_f1 = BinaryF1Score()
 
         self.val_auc = BinaryAUROC()
+        self.test_auc = BinaryAUROC()
+
+        self.val_acc_best = MaxMetric()
 
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
@@ -60,27 +64,29 @@ class Wav2Vec2DeepfakeModule(LightningModule):
     @beartype
     def model_step(
         self, batch: Any
-    ) -> tuple[Float[torch.Tensor, ""], Int[torch.Tensor, "batch"], Int[torch.Tensor, "batch"]]:
-        """
-        Ein zentraler Schritt für Training/Val/Test.
-        Gibt (Loss, Predictions, Targets) zurück.
-        """
-        x, y = batch
+    ) -> tuple[
+        Float[torch.Tensor, ""],
+        Int[torch.Tensor, "batch"],
+        Int[torch.Tensor, "batch"],
+        Float[torch.Tensor, "batch 2"],
+    ]:
+        """Central step shared by training, validation, and test.
 
-        # Forward Pass
+        Returns:
+            Tuple of (loss, predictions, targets, logits).
+        """
+        x = batch["input_values"]
+        y = batch["labels"]
+
         logits = self.forward(x)
-
-        # Loss
         loss = F.cross_entropy(logits, y)
-
-        # Prediction
         preds = torch.argmax(logits, dim=1)
 
-        return loss, preds, y
+        return loss, preds, y, logits
 
     @beartype
     def training_step(self, batch: Any, batch_idx: int) -> Float[torch.Tensor, ""]:
-        loss, preds, targets = self.model_step(batch)
+        loss, preds, targets, _ = self.model_step(batch)
 
         # Metriken updaten
         self.train_loss(loss)
@@ -96,30 +102,43 @@ class Wav2Vec2DeepfakeModule(LightningModule):
 
     @beartype
     def validation_step(self, batch: Any, batch_idx: int) -> None:
-        loss, preds, targets = self.model_step(batch)
+        loss, preds, targets, logits = self.model_step(batch)
+
+        probs = F.softmax(logits, dim=1)
+        positive_probs = probs[:, 1]
 
         self.val_loss(loss)
         self.val_acc(preds, targets)
         self.val_f1(preds, targets)
-
-        logits = self.forward(batch[0])
-        probs = F.softmax(logits, dim=1)
-        positive_probs = probs[:, 1]
-
         self.val_auc(positive_probs, targets)
-        # W&B Logging
+
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
 
     @beartype
+    def on_validation_epoch_end(self) -> None:
+        acc = self.val_acc.compute()
+        self.val_acc_best(acc)
+        self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
+
+    @beartype
     def test_step(self, batch: Any, batch_idx: int) -> None:
-        loss, preds, targets = self.model_step(batch)
+        loss, preds, targets, logits = self.model_step(batch)
+
+        probs = F.softmax(logits, dim=1)
+        positive_probs = probs[:, 1]
+
         self.test_loss(loss)
         self.test_acc(preds, targets)
+        self.test_f1(preds, targets)
+        self.test_auc(positive_probs, targets)
+
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/auc", self.test_auc, on_step=False, on_epoch=True, prog_bar=True)
 
     @beartype
     def explain(

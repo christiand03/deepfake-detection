@@ -58,7 +58,7 @@ _LABEL_NAMES = {0: "Real", 1: "Fake"}
 
 # ImageNet normalization constants for inverse transform — consistent with explain.py
 _IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
-_IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225])
+_IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
 
 
 # Audio helper functions (identical to explain_audio.py)
@@ -70,11 +70,12 @@ def _load_word_segments(
     whisperx_device: str,
     model_name: str,
     cache_dir: str,
+    language: str = "en",
 ) -> list[dict]:
     """Compute WhisperX word-level timestamps with disk caching.
 
-    The cache is keyed by a 16-char SHA-256 prefix of the raw waveform bytes, so
-    re-running on the same clip skips transcription entirely.
+    The cache is keyed by a 16-char SHA-256 prefix of the raw waveform bytes and
+    the language code, so re-running on the same clip and language skips transcription.
 
     Args:
         waveform_np:     Float32 numpy array of shape (T_samples,).
@@ -82,12 +83,14 @@ def _load_word_segments(
         whisperx_device: Device string passed to whisperx.load_model.
         model_name:      WhisperX model size, e.g. "base" or "small".
         cache_dir:       Directory where JSON cache files are stored.
+        language:        BCP-47 language code passed to WhisperX (e.g. "en", "de").
 
     Returns:
         List of dicts [{"word": str, "start": float, "end": float}, ...].
         Returns [] if alignment produced no word segments.
     """
-    cache_key = hashlib.sha256(waveform_np.tobytes()).hexdigest()[:16]
+    # Include language in the cache key so changing the language forces re-transcription.
+    cache_key = hashlib.sha256(waveform_np.tobytes() + language.encode()).hexdigest()[:16]
     cache_path = Path(cache_dir) / f"{cache_key}.json"
 
     if cache_path.exists():
@@ -100,21 +103,17 @@ def _load_word_segments(
 
     audio = waveform_np.astype(np.float32)
     wx_model = whisperx.load_model(model_name, device=whisperx_device, compute_type="float32")
-    result = wx_model.transcribe(audio, batch_size=16, language="en")
+    result = wx_model.transcribe(audio, batch_size=16, language=language)
 
     if not result.get("segments"):
         log.warning("WhisperX returned no segments — Layer 2 will be skipped.")
         return []
 
-    align_model, metadata = whisperx.load_align_model(
-        language_code=result["language"], device=whisperx_device
-    )
+    align_model, metadata = whisperx.load_align_model(language_code=result["language"], device=whisperx_device)
     result = whisperx.align(result["segments"], align_model, metadata, audio, whisperx_device)
 
     word_segments = [
-        seg
-        for seg in result.get("word_segments", [])
-        if "start" in seg and "end" in seg and "word" in seg
+        seg for seg in result.get("word_segments", []) if "start" in seg and "end" in seg and "word" in seg
     ]
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,7 +145,7 @@ def _aggregate_word_relevance(
 
     for seg in word_segments:
         start_idx = max(0, min(int(seg["start"] * sample_rate), len(rel_raw_np)))
-        end_idx   = max(start_idx, min(int(seg["end"]   * sample_rate), len(rel_raw_np)))
+        end_idx = max(start_idx, min(int(seg["end"] * sample_rate), len(rel_raw_np)))
         per_word_rel_list.append(float(rel_raw_np[start_idx:end_idx].sum()))
         word_labels.append(f"{seg['word']}\n({seg['start']:.2f}\u2013{seg['end']:.2f}s)")
 
@@ -224,7 +223,8 @@ def _inverse_normalize_frame(frame_tensor: torch.Tensor) -> np.ndarray:
 
 @task_wrapper
 def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
-    assert cfg.ckpt_path, "Please pass a checkpoint! (ckpt_path=...)"
+    if not cfg.ckpt_path:
+        raise ValueError("Please pass a checkpoint! (ckpt_path=...)")
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
@@ -241,9 +241,9 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     log.info("Fetching one test batch...")
     batch = next(iter(test_dataloader))
     # MultimodalHDF5Dataset returns a dict with pixel_values, input_values, labels.
-    pixel_values = batch["pixel_values"][0:1].to(device)   # (1, 16, 3, 224, 224)
-    input_values = batch["input_values"][0:1].to(device)   # (1, T_samples)
-    true_label   = batch["labels"][0].item()
+    pixel_values = batch["pixel_values"][0:1].to(device)  # (1, 16, 3, 224, 224)
+    input_values = batch["input_values"][0:1].to(device)  # (1, T_samples)
+    true_label = batch["labels"][0].item()
 
     log.info("Calculating joint AttnLRP relevance for both modalities...")
     target_cls = cfg.explain.get("target_class", None)
@@ -259,27 +259,27 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     log.info(f"True Class: {true_label_str} | Explained Class: {pred_label_str}")
 
     # Shared config values
-    frame_idx:        int = cfg.explain.get("frame_idx", 0)
-    sample_rate:      int = cfg.explain.get("sample_rate", 16000)
+    frame_idx: int = cfg.explain.get("frame_idx", 0)
+    sample_rate: int = cfg.explain.get("sample_rate", 16000)
     smoothing_kernel: int = cfg.explain.get("smoothing_kernel", 160)
 
     # Prepare video data
-    img     = _inverse_normalize_frame(pixel_values[0, frame_idx])
-    hm      = video_heatmap[0, frame_idx].detach().cpu().numpy()
+    img = _inverse_normalize_frame(pixel_values[0, frame_idx])
+    hm = video_heatmap[0, frame_idx].detach().cpu().numpy()
     hm_vmax = np.max(np.abs(hm))
 
-    #Prepare audio data
-    waveform  = input_values[0].detach().cpu().float().numpy()   # (T_samples,)
+    # Prepare audio data
+    waveform = input_values[0].detach().cpu().float().numpy()  # (T_samples,)
     n_samples = waveform.shape[0]
-    duration  = n_samples / sample_rate
+    duration = n_samples / sample_rate
     t_samples = np.linspace(0, duration, n_samples)
 
     # Abs-max-pool for the relevance strip (avoids sign cancellation from plain avg).
-    rel_raw   = audio_relevance[0].detach().cpu().float()        # (T_samples,)
-    rel_3d    = rearrange(rel_raw, "t -> 1 1 t")
-    abs_smooth   = F_nn.avg_pool1d(rel_3d.abs(),  kernel_size=smoothing_kernel, stride=smoothing_kernel)
-    sign_smooth  = F_nn.avg_pool1d(rel_3d.sign(), kernel_size=smoothing_kernel, stride=smoothing_kernel)
-    rel_smooth   = rearrange(abs_smooth * sign_smooth.sign(), "1 1 t -> t").numpy()
+    rel_raw = audio_relevance[0].detach().cpu().float()  # (T_samples,)
+    rel_3d = rearrange(rel_raw, "t -> 1 1 t")
+    abs_smooth = F_nn.avg_pool1d(rel_3d.abs(), kernel_size=smoothing_kernel, stride=smoothing_kernel)
+    sign_smooth = F_nn.avg_pool1d(rel_3d.sign(), kernel_size=smoothing_kernel, stride=smoothing_kernel)
+    rel_smooth = rearrange(abs_smooth * sign_smooth.sign(), "1 1 t -> t").numpy()
 
     title_str = f"True: {true_label_str}  |  Explained: {pred_label_str}"
 
@@ -309,8 +309,8 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     )
 
     # -- Video row ---
-    ax_orig    = fig_c.add_subplot(gs[0, 0])
-    ax_hm      = fig_c.add_subplot(gs[0, 1])
+    ax_orig = fig_c.add_subplot(gs[0, 0])
+    ax_hm = fig_c.add_subplot(gs[0, 1])
     ax_overlay = fig_c.add_subplot(gs[0, 2])
 
     ax_orig.imshow(img)
@@ -397,7 +397,8 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     log.info("Creating standalone audio Layer 1 figure...")
 
     fig_a, (ax_a1, ax_a2) = plt.subplots(
-        2, 1,
+        2,
+        1,
         figsize=(14, 5),
         sharex=True,
         gridspec_kw={"height_ratios": [2, 1]},
@@ -444,16 +445,16 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     else:
         log.info("Running Layer 2 — word-level aggregation...")
 
-        wx_device: str = (
-            cfg.explain.get("whisperx_device", None) or ("cuda" if torch.cuda.is_available() else "cpu")
-        )
+        wx_device: str = cfg.explain.get("whisperx_device", None) or ("cuda" if torch.cuda.is_available() else "cpu")
         wx_model_name: str = cfg.explain.get("whisperx_model", "base")
-        cache_dir: str     = cfg.explain.get("cache_dir", "outputs/whisperx_cache")
+        wx_language: str = cfg.explain.get("whisperx_language", "en")
+        cache_dir: str = cfg.explain.get("cache_dir", "outputs/whisperx_cache")
 
-        assert sample_rate == 16000, (
-            f"WhisperX requires 16 kHz input, but sample_rate={sample_rate}. "
-            "Resample the audio before running explain_multimodal."
-        )
+        if sample_rate != 16000:  # noqa: PLR2004
+            raise ValueError(
+                f"WhisperX requires 16 kHz input, but sample_rate={sample_rate}. "
+                "Resample the audio before running explain_multimodal."
+            )
 
         word_segments = _load_word_segments(
             waveform_np=waveform.astype(np.float32),
@@ -461,6 +462,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
             whisperx_device=wx_device,
             model_name=wx_model_name,
             cache_dir=cache_dir,
+            language=wx_language,
         )
 
         if not word_segments:
@@ -472,7 +474,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
                 sample_rate=sample_rate,
             )
             bar_colors_l2 = ["firebrick" if v >= 0 else "steelblue" for v in per_word_rel]
-            x_positions   = np.arange(len(word_labels))
+            x_positions = np.arange(len(word_labels))
 
             fig_l2, ax_l2 = plt.subplots(figsize=(14, 4))
             ax_l2.bar(x_positions, per_word_rel, color=bar_colors_l2, width=0.7, edgecolor="none")
@@ -486,10 +488,14 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
                 fontsize=11,
             )
             ax_l2.text(
-                0.99, 0.97,
+                0.99,
+                0.97,
                 "red = Fake evidence  |  blue = Real evidence",
                 transform=ax_l2.transAxes,
-                ha="right", va="top", fontsize=8, color="dimgray",
+                ha="right",
+                va="top",
+                fontsize=8,
+                color="dimgray",
             )
             plt.tight_layout()
 
@@ -523,10 +529,14 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
         fontsize=11,
     )
     ax_l3.text(
-        0.99, 0.02,
+        0.99,
+        0.02,
         "red = Fake evidence  |  blue = Real evidence",
         transform=ax_l3.transAxes,
-        ha="right", va="bottom", fontsize=8, color="dimgray",
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color="dimgray",
     )
     plt.tight_layout()
 

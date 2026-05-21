@@ -18,11 +18,11 @@ ckpt_path: ???
 explain:
   target_class: null   # null = explain predicted class; int = override for entire batch
 
-  # Video 
+  # Video
   frame_idx: 0         # Which frame to visualize (0–15 for 16-frame clips)
   video_save_path: "multimodal_lrp_video.png"
 
-  # Audio 
+  # Audio
   audio_save_path: "multimodal_lrp_audio.png"
   smoothing_kernel: 160        # avg_pool1d kernel/stride for Layer 1 strip: 160 samples = 10 ms at 16 kHz
   sample_rate: 16000           # Wav2Vec2 input sample rate (Hz)
@@ -35,6 +35,7 @@ explain:
   layer2_save_path: "multimodal_lrp_l2_words.png"
   whisperx_model: "base"       # WhisperX model size (tiny/base/small/medium/large)
   whisperx_device: null        # null = auto (cuda if available, else cpu)
+  whisperx_language: "en"      # BCP-47 language code; change for non-English datasets
   cache_dir: "outputs/whisperx_cache"
 
   # Layer 3 — frequency-band summary via band-pass filtering

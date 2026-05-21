@@ -33,7 +33,8 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 @task_wrapper
 def explain_model(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
-    assert cfg.ckpt_path, "Please pass a checkpoint! (ckpt_path=...)"
+    if not cfg.ckpt_path:
+        raise ValueError("Please pass a checkpoint! (ckpt_path=...)")
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
@@ -73,7 +74,7 @@ def explain_model(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     img = img_tensor.permute(1, 2, 0).numpy().clip(0.0, 1.0)
 
     hm = heatmap[0, FRAME_IDX].detach().cpu().numpy()
-    vmax = np.max(np.abs(hm))
+    vmax = max(float(np.max(np.abs(hm))), 1e-8)
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
@@ -96,6 +97,7 @@ def explain_model(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # Hier noch den Pfad anpassen, unter dem die Visualisierung gespeichert werden soll
     save_path = cfg.explain.get("save_path", "lrp_explanation.png")
     plt.savefig(save_path, dpi=300)
+    plt.close(fig)
     log.info(f"Visualization successfully saved under: {save_path}")
 
     return {}, {}

@@ -26,6 +26,7 @@ explain:
   layer2_save_path: "audio_lrp_l2_words.png"  # Separate figure for Layer 2
   whisperx_model: "base"                       # WhisperX model size (tiny/base/small/medium/large)
   whisperx_device: null                        # null = auto (cuda if available, else cpu)
+  whisperx_language: "en"                      # BCP-47 language code; change for non-English datasets
   cache_dir: "outputs/whisperx_cache"          # Word-timestamp JSON cache (keyed by waveform hash)
 
   # Layer 3 — frequency-band summary via band-pass filtering

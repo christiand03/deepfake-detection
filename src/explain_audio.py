@@ -45,25 +45,27 @@ def _load_word_segments(
     whisperx_device: str,
     model_name: str,
     cache_dir: str,
+    language: str = "en",
 ) -> list[dict]:
     """Compute WhisperX word-level timestamps with disk caching.
 
-    The cache is keyed by a 16-char SHA-256 prefix of the raw waveform bytes, so
-    re-running on the same clip skips transcription entirely.
+    The cache is keyed by a 16-char SHA-256 prefix of the raw waveform bytes and
+    the language code, so re-running on the same clip and language skips transcription.
 
     Args:
-        waveform_np: Float32 numpy array of shape (T_samples,). Passed directly to
-            WhisperX — no temp file is written.
-        sample_rate: Audio sample rate in Hz (must match the waveform).
+        waveform_np:     Float32 numpy array of shape (T_samples,).
+        sample_rate:     Audio sample rate in Hz (must match the waveform).
         whisperx_device: Device string passed to whisperx.load_model ("cuda" or "cpu").
-        model_name: WhisperX model size, e.g. "base" or "small".
-        cache_dir: Directory where JSON cache files are stored.
+        model_name:      WhisperX model size, e.g. "base" or "small".
+        cache_dir:       Directory where JSON cache files are stored.
+        language:        BCP-47 language code passed to WhisperX (e.g. "en", "de").
 
     Returns:
         List of dicts [{"word": str, "start": float, "end": float}, ...].
         Returns [] if alignment produced no word segments.
     """
-    cache_key = hashlib.sha256(waveform_np.tobytes()).hexdigest()[:16]
+    # Include language in the cache key so changing the language forces re-transcription.
+    cache_key = hashlib.sha256(waveform_np.tobytes() + language.encode()).hexdigest()[:16]
     cache_path = Path(cache_dir) / f"{cache_key}.json"
 
     if cache_path.exists():
@@ -76,7 +78,7 @@ def _load_word_segments(
 
     audio = waveform_np.astype(np.float32)
     wx_model = whisperx.load_model(model_name, device=whisperx_device, compute_type="float32")
-    result = wx_model.transcribe(audio, batch_size=16, language="en")
+    result = wx_model.transcribe(audio, batch_size=16, language=language)
 
     if not result.get("segments"):
         log.warning("WhisperX returned no segments — Layer 2 will be skipped.")
@@ -193,7 +195,8 @@ def _compute_band_relevance(
 
 @task_wrapper
 def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
-    assert cfg.ckpt_path, "Please pass a checkpoint! (ckpt_path=...)"
+    if not cfg.ckpt_path:
+        raise ValueError("Please pass a checkpoint! (ckpt_path=...)")
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
@@ -209,10 +212,9 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     log.info("Fetching one test batch...")
     batch = next(iter(test_dataloader))
-    # Audio datamodule returns (input_values, labels) tuple — not a dict like the video datamodule.
-    input_values, labels = batch
-    input_values = input_values[0:1].to(device)  # (1, T_samples)
-    true_label = labels[0].item()
+    # Audio datamodule returns a dict with input_values and labels.
+    input_values = batch["input_values"][0:1].to(device)  # (1, T_samples)
+    true_label = batch["labels"][0].item()
 
     log.info("Calculating AttnLRP relevance...")
     target_cls = cfg.explain.get("target_class", None)
@@ -305,14 +307,15 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
         wx_device: str = cfg.explain.get("whisperx_device", None) or ("cuda" if torch.cuda.is_available() else "cpu")
         wx_model_name: str = cfg.explain.get("whisperx_model", "base")
+        wx_language: str = cfg.explain.get("whisperx_language", "en")
         cache_dir: str = cfg.explain.get("cache_dir", "outputs/whisperx_cache")
 
-        # WhisperX requires 16 kHz input — enforce this here so index arithmetic in
-        # _aggregate_word_relevance stays consistent with the returned timestamps.
-        assert sample_rate == 16000, (
-            f"WhisperX requires 16 kHz input, but sample_rate={sample_rate}. "
-            "Resample the audio before running explain_audio."
-        )
+        # WhisperX requires 16 kHz input.
+        if sample_rate != 16000:  # noqa: PLR2004
+            raise ValueError(
+                f"WhisperX requires 16 kHz input, but sample_rate={sample_rate}. "
+                "Resample the audio before running explain_audio."
+            )
 
         # waveform is already a float32 numpy array (T_samples,) from Layer 1 above.
         word_segments = _load_word_segments(
@@ -321,6 +324,7 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             whisperx_device=wx_device,
             model_name=wx_model_name,
             cache_dir=cache_dir,
+            language=wx_language,
         )
 
         if not word_segments:

@@ -144,8 +144,14 @@ def normalize_relevance(
     Returns:
         Normalized tensor of shape (N, D), values in [-1, 1].
     """
+    if relevance.ndim != 2:  # noqa: PLR2004
+        raise ValueError(
+            f"normalize_relevance expects a 2D tensor (N, D), got shape {tuple(relevance.shape)}. "
+            "Reshape to (N, D) before calling — see the docstring example."
+        )
     absmax = relevance.abs().max(dim=1, keepdim=True).values
     return relevance / (absmax + 1e-8)
+
 
 def compute_attnlrp_multimodal(
     net: nn.Module,

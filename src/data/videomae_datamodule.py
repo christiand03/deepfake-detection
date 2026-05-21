@@ -23,8 +23,7 @@ class VideoMAEDataModule(LightningDataModule):
         self.test_dataset: DeepfakeHDF5Dataset | None = None
 
     def setup(self, stage: str | None = None):
-        # Weist die Datensätze je nach Phase zu
-        if self.train_dataset is None and self.val_dataset is None:
+        if self.train_dataset is None:
             self.train_dataset = DeepfakeHDF5Dataset(h5_path=os.path.join(self.hparams.data_dir, "train.h5"))
             self.val_dataset = DeepfakeHDF5Dataset(h5_path=os.path.join(self.hparams.data_dir, "val.h5"))
             self.test_dataset = DeepfakeHDF5Dataset(h5_path=os.path.join(self.hparams.data_dir, "test.h5"))

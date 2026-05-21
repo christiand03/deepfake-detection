@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 from typing import Any
 
 import torch
 from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric
-from torchmetrics.classification.accuracy import Accuracy
+from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import VideoMAEForVideoClassification
 
 
@@ -11,7 +13,7 @@ class VideoMAEModule(LightningModule):
     def __init__(
         self,
         optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler.LRScheduler = None,
+        scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         model_name_or_path: str = "MCG-NJU/videomae-base",
         num_labels: int = 2,
     ):
@@ -19,7 +21,9 @@ class VideoMAEModule(LightningModule):
 
         self.save_hyperparameters(logger=False)
 
-        # Hugging Face Modell laden
+        # Load the pre-trained VideoMAE model with a classification head.
+        # use_mean_pooling=True averages over all patch tokens (excluding CLS) — the
+        # default VideoMAE pooling strategy. AttnLRP propagates through this correctly.
         self.net = VideoMAEForVideoClassification.from_pretrained(
             self.hparams.model_name_or_path,
             num_labels=self.hparams.num_labels,
@@ -27,11 +31,18 @@ class VideoMAEModule(LightningModule):
             use_mean_pooling=True,
         )
 
-        # Metriken
-        task = "binary" if num_labels == 2 else "multiclass"
-        self.train_acc = Accuracy(task=task, num_classes=num_labels)
-        self.val_acc = Accuracy(task=task, num_classes=num_labels)
-        self.test_acc = Accuracy(task=task, num_classes=num_labels)
+        # Metrics — matching Wav2Vec2DeepfakeModule and MultimodalDeepfakeModule exactly
+        # so Phase 1 and Phase 2 results are directly comparable in evaluation tables.
+        self.train_acc = BinaryAccuracy()
+        self.val_acc = BinaryAccuracy()
+        self.test_acc = BinaryAccuracy()
+
+        self.train_f1 = BinaryF1Score()
+        self.val_f1 = BinaryF1Score()
+        self.test_f1 = BinaryF1Score()
+
+        self.val_auc = BinaryAUROC()
+        self.test_auc = BinaryAUROC()
 
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
@@ -51,22 +62,30 @@ class VideoMAEModule(LightningModule):
         logits = outputs.logits
         preds = torch.argmax(logits, dim=1)
 
-        return loss, preds, labels
+        return loss, preds, labels, logits
 
     def training_step(self, batch: Any, batch_idx: int):
-        loss, preds, labels = self.model_step(batch)
+        loss, preds, labels, _ = self.model_step(batch)
         self.train_loss(loss)
         self.train_acc(preds, labels)
+        self.train_f1(preds, labels)
         self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train/f1", self.train_f1, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
     def validation_step(self, batch: Any, batch_idx: int):
-        loss, preds, labels = self.model_step(batch)
+        loss, preds, labels, logits = self.model_step(batch)
+        probs = torch.softmax(logits, dim=1)
+        positive_probs = probs[:, 1]
         self.val_loss(loss)
         self.val_acc(preds, labels)
+        self.val_f1(preds, labels)
+        self.val_auc(positive_probs, labels)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_validation_epoch_end(self):
         acc = self.val_acc.compute()
@@ -74,11 +93,17 @@ class VideoMAEModule(LightningModule):
         self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(self, batch: Any, batch_idx: int):
-        loss, preds, labels = self.model_step(batch)
+        loss, preds, labels, logits = self.model_step(batch)
+        probs = torch.softmax(logits, dim=1)
+        positive_probs = probs[:, 1]
         self.test_loss(loss)
         self.test_acc(preds, labels)
+        self.test_f1(preds, labels)
+        self.test_auc(positive_probs, labels)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/auc", self.test_auc, on_step=False, on_epoch=True, prog_bar=True)
 
     def explain(self, pixel_values: torch.Tensor, target_class: int | None = None):
         """Compute AttnLRP heatmaps for a batch of video clips.

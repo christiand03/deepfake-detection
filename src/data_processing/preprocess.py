@@ -47,9 +47,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import hydra
+import lightning as pl
 import numpy as np
 import pandas as pd
-import pytorch_lightning as pl
 import torchaudio
 from tqdm import tqdm
 
@@ -147,7 +147,7 @@ def _scan_dataset(data_root: Path, metadata_root: Path) -> pd.DataFrame:
 
         modify_type = meta.get("modify_type")
         split = meta.get("split")
-        if modify_type is None or split is None:
+        if modify_type is None:
             log.warning("Missing fields in %s, skipping", json_path)
             continue
 
