@@ -23,6 +23,7 @@ import io
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -92,6 +93,8 @@ class ModelNotReadyError(RuntimeError):
 
 _video_model: VideoMAEModule | None = None
 _audio_model: Wav2Vec2DeepfakeModule | None = None
+_video_model_lock = threading.Lock()
+_audio_model_lock = threading.Lock()
 _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Register safe globals once at module import time
@@ -102,20 +105,22 @@ def get_video_model() -> VideoMAEModule:
     """Return the loaded VideoMAE model; load from checkpoint on first call."""
     global _video_model
     if _video_model is None:
-        ckpt = os.environ.get("VIDEOMAE_CKPT_PATH")
-        if not ckpt:
-            raise ModelNotReadyError(
-                "VIDEOMAE_CKPT_PATH is not set. Train the video model first, then set this environment variable."
-            )
-        if not Path(ckpt).exists():
-            raise ModelNotReadyError(f"VideoMAE checkpoint not found: {ckpt}")
-        from src.models.VideoMAE_module import VideoMAEModule as _M
+        with _video_model_lock:
+            if _video_model is None:  # re-check after acquiring lock
+                ckpt = os.environ.get("VIDEOMAE_CKPT_PATH")
+                if not ckpt:
+                    raise ModelNotReadyError(
+                        "VIDEOMAE_CKPT_PATH is not set. Train the video model first, then set this environment variable."
+                    )
+                if not Path(ckpt).exists():
+                    raise ModelNotReadyError(f"VideoMAE checkpoint not found: {ckpt}")
+                from src.models.VideoMAE_module import VideoMAEModule as _M
 
-        log.info("Loading VideoMAE from %s …", ckpt)
-        _video_model = _M.load_from_checkpoint(ckpt, weights_only=False)
-        _video_model.eval()
-        _video_model = _video_model.to(_device)
-        log.info("VideoMAE loaded on %s", _device)
+                log.info("Loading VideoMAE from %s …", ckpt)
+                _video_model = _M.load_from_checkpoint(ckpt, weights_only=False)
+                _video_model.eval()
+                _video_model = _video_model.to(_device)
+                log.info("VideoMAE loaded on %s", _device)
     return _video_model
 
 
@@ -123,20 +128,22 @@ def get_audio_model() -> Wav2Vec2DeepfakeModule:
     """Return the loaded Wav2Vec2 model; load from checkpoint on first call."""
     global _audio_model
     if _audio_model is None:
-        ckpt = os.environ.get("WAV2VEC2_CKPT_PATH")
-        if not ckpt:
-            raise ModelNotReadyError(
-                "WAV2VEC2_CKPT_PATH is not set. Train the audio model first, then set this environment variable."
-            )
-        if not Path(ckpt).exists():
-            raise ModelNotReadyError(f"Wav2Vec2 checkpoint not found: {ckpt}")
-        from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule as _A
+        with _audio_model_lock:
+            if _audio_model is None:  # re-check after acquiring lock
+                ckpt = os.environ.get("WAV2VEC2_CKPT_PATH")
+                if not ckpt:
+                    raise ModelNotReadyError(
+                        "WAV2VEC2_CKPT_PATH is not set. Train the audio model first, then set this environment variable."
+                    )
+                if not Path(ckpt).exists():
+                    raise ModelNotReadyError(f"Wav2Vec2 checkpoint not found: {ckpt}")
+                from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule as _A
 
-        log.info("Loading Wav2Vec2 from %s …", ckpt)
-        _audio_model = _A.load_from_checkpoint(ckpt, weights_only=False)
-        _audio_model.eval()
-        _audio_model = _audio_model.to(_device)
-        log.info("Wav2Vec2 loaded on %s", _device)
+                log.info("Loading Wav2Vec2 from %s …", ckpt)
+                _audio_model = _A.load_from_checkpoint(ckpt, weights_only=False)
+                _audio_model.eval()
+                _audio_model = _audio_model.to(_device)
+                log.info("Wav2Vec2 loaded on %s", _device)
     return _audio_model
 
 

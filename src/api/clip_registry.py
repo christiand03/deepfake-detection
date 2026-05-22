@@ -84,6 +84,22 @@ class ClipH5Metadata:
 
 # Module-level cache: chunk_id → raw CSV row dict.  Populated lazily on first call.
 _csv_cache: dict[str, dict[str, str]] = {}
+# Module-level cache for clips.json raw entries.  Populated lazily on first call.
+_clips_cache: list[dict] | None = None
+
+
+def _load_clips_json() -> list[dict]:
+    """Load clips.json into the module-level cache; subsequent calls are O(1)."""
+    global _clips_cache
+    if _clips_cache is None:
+        path = _config_path()
+        if not path.exists():
+            log.warning("Clip config not found at %s — returning empty registry", path)
+            _clips_cache = []
+        else:
+            with path.open(encoding="utf-8") as f:
+                _clips_cache = json.load(f)
+    return _clips_cache
 
 
 def load_clips() -> list[ClipMetaSchema]:
@@ -93,12 +109,7 @@ def load_clips() -> list[ClipMetaSchema]:
         Ordered list of :class:`ClipMetaSchema` objects. Empty list if the
         config file does not exist yet (models not yet set up).
     """
-    path = _config_path()
-    if not path.exists():
-        log.warning("Clip config not found at %s — returning empty registry", path)
-        return []
-    with path.open(encoding="utf-8") as f:
-        raw: list[dict] = json.load(f)
+    raw = _load_clips_json()
     # Exclude server-only keys (e.g. videoPath) from the schema
     allowed = ClipMetaSchema.model_fields.keys()
     return [ClipMetaSchema(**{k: v for k, v in entry.items() if k in allowed}) for entry in raw]
@@ -112,12 +123,7 @@ def get_clip_video_path(clip_id: str) -> Path | None:
     Returns:
         Absolute :class:`Path`, or ``None`` if the clip or key is absent.
     """
-    path = _config_path()
-    if not path.exists():
-        return None
-    with path.open(encoding="utf-8") as f:
-        raw: list[dict] = json.load(f)
-    for entry in raw:
+    for entry in _load_clips_json():
         if entry.get("id") == clip_id:
             video_path = entry.get("videoPath")
             if video_path:
@@ -162,8 +168,7 @@ def get_clip_h5_metadata(clip_id: str) -> ClipH5Metadata | None:
     path = _config_path()
     if not path.exists():
         return None
-    with path.open(encoding="utf-8") as f:
-        raw: list[dict] = json.load(f)
+    raw = _load_clips_json()
     entry = next((e for e in raw if e.get("id") == clip_id), None)
     if entry is None:
         return None
