@@ -235,9 +235,11 @@ class MultimodalDeepfakeModule(LightningModule):
         self.train_acc = BinaryAccuracy()
         self.val_acc = BinaryAccuracy()
         self.test_acc = BinaryAccuracy()
+        self.train_f1 = BinaryF1Score()
         self.val_f1 = BinaryF1Score()
         self.test_f1 = BinaryF1Score()
         self.val_auc = BinaryAUROC()
+        self.test_auc = BinaryAUROC()
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
@@ -336,8 +338,10 @@ class MultimodalDeepfakeModule(LightningModule):
         loss, preds, labels, _ = self._model_step(batch)
         self.train_loss(loss)
         self.train_acc(preds, labels)
+        self.train_f1(preds, labels)
         self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train/f1", self.train_f1, on_step=False, on_epoch=True, prog_bar=False)
         return loss
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
@@ -361,13 +365,16 @@ class MultimodalDeepfakeModule(LightningModule):
         self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
-        loss, preds, labels, _ = self._model_step(batch)
+        loss, preds, labels, logits = self._model_step(batch)
+        probs = F.softmax(logits, dim=1)[:, 1]
         self.test_loss(loss)
         self.test_acc(preds, labels)
         self.test_f1(preds, labels)
+        self.test_auc(probs, labels)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/auc", self.test_auc, on_step=False, on_epoch=True, prog_bar=True)
 
     def configure_optimizers(self) -> dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.parameters())
