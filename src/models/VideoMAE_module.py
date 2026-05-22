@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from lightning import LightningModule
@@ -105,13 +105,23 @@ class VideoMAEModule(LightningModule):
         self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/auc", self.test_auc, on_step=False, on_epoch=True, prog_bar=True)
 
-    def explain(self, pixel_values: torch.Tensor, target_class: int | None = None):
+    def explain(
+        self,
+        pixel_values: torch.Tensor,
+        target_class: int | None = None,
+        normalize_mode: Literal["per_frame", "global"] = "global",
+    ):
         """Compute AttnLRP heatmaps for a batch of video clips.
 
         Applies lxt monkey_patch once (guarded by _VIDEOMAE_LRP_PATCHED) and runs
         Input×Gradient LRP via compute_attnlrp(). Returns a per-frame signed heatmap
         normalized to [-1, 1]: positive = evidence FOR the explained class, negative = AGAINST.
         Must be called in eval mode.
+
+        Args:
+            normalize_mode: ``"global"`` (default) normalizes all T frames of a sample
+                together, preserving temporal dynamics. ``"per_frame"`` normalizes each
+                frame independently to [-1, 1].
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
 
@@ -141,11 +151,17 @@ class VideoMAEModule(LightningModule):
         # Upsample back to original spatial resolution
         heatmap_4d = F_nn.interpolate(heatmap_patches, size=(H, W), mode="bilinear", align_corners=False)
 
-        # Per-frame symmetric normalization to [-1, 1].
-        # Reshape to (B*T, H*W) so normalize_relevance treats each frame independently.
-        heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> (b t) (h w)", b=B, t=T)
-        heatmap_2d = normalize_relevance(heatmap_2d)
-        heatmap = rearrange(heatmap_2d, "(b t) (h w) -> b t h w", b=B, t=T, h=H, w=W)
+        if normalize_mode == "global":
+            # Global normalization: all T frames per sample normalized together,
+            # preserving temporal dynamics (frames with weaker relevance stay weaker).
+            heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> b (t h w)", b=B, t=T)
+            heatmap_2d = normalize_relevance(heatmap_2d)
+            heatmap = rearrange(heatmap_2d, "b (t h w) -> b t h w", t=T, h=H, w=W)
+        else:
+            # Per-frame normalization: each frame independently scaled to [-1, 1].
+            heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> (b t) (h w)", b=B, t=T)
+            heatmap_2d = normalize_relevance(heatmap_2d)
+            heatmap = rearrange(heatmap_2d, "(b t) (h w) -> b t h w", b=B, t=T, h=H, w=W)
 
         return heatmap, target_class
 

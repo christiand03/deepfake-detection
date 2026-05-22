@@ -129,7 +129,7 @@ def _aggregate_word_relevance(
     word_segments: list[dict],
     sample_rate: int,
 ) -> tuple[list[str], np.ndarray]:
-    """Sum AttnLRP relevance over each word's sample boundary (signed sum).
+    """Average AttnLRP relevance over each word's sample boundary (signed mean).
 
     Args:
         rel_raw_np:    1-D float32 array of per-sample relevance, shape (T_samples,).
@@ -137,8 +137,8 @@ def _aggregate_word_relevance(
         sample_rate:   Audio sample rate in Hz.
 
     Returns:
-        word_labels:   List of "word\\n(start–end s)" strings for x-tick labels.
-        per_word_rel:  1-D float32 array of shape (N_words,) with signed relevance sums.
+        word_labels:   List of "word\n(start–end s)" strings for x-tick labels.
+        per_word_rel:  1-D float32 array of shape (N_words,) with signed relevance means.
     """
     word_labels: list[str] = []
     per_word_rel_list: list[float] = []
@@ -146,7 +146,7 @@ def _aggregate_word_relevance(
     for seg in word_segments:
         start_idx = max(0, min(int(seg["start"] * sample_rate), len(rel_raw_np)))
         end_idx = max(start_idx, min(int(seg["end"] * sample_rate), len(rel_raw_np)))
-        per_word_rel_list.append(float(rel_raw_np[start_idx:end_idx].sum()))
+        per_word_rel_list.append(float(rel_raw_np[start_idx:end_idx].mean()) if end_idx > start_idx else 0.0)
         word_labels.append(f"{seg['word']}\n({seg['start']:.2f}\u2013{seg['end']:.2f}s)")
 
     return word_labels, np.array(per_word_rel_list, dtype=np.float32)
@@ -481,7 +481,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
             ax_l2.axhline(0, color="black", linewidth=0.6, alpha=0.5)
             ax_l2.set_xticks(x_positions)
             ax_l2.set_xticklabels(word_labels, rotation=45, ha="right", fontsize=8)
-            ax_l2.set_ylabel("Relevance (signed sum)")
+            ax_l2.set_ylabel("Relevance (signed mean)")
             ax_l2.set_xlabel("Word")
             ax_l2.set_title(
                 f"Layer 2 — Word-Level AttnLRP  |  {title_str}",

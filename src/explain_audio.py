@@ -105,10 +105,12 @@ def _aggregate_word_relevance(
     word_segments: list[dict],
     sample_rate: int,
 ) -> tuple[list[str], np.ndarray]:
-    """Sum AttnLRP relevance over each word's sample boundary (signed sum).
+    """Average AttnLRP relevance over each word's sample boundary (signed mean).
 
-    Signed sum preserves direction: a positive value means the word contributes
+    Signed mean preserves direction: a positive value means the word contributes
     evidence FOR the explained class (Fake), negative means evidence AGAINST.
+    Mean is length-normalized, preventing longer words from accumulating more
+    relevance than shorter words of equal intensity.
 
     Args:
         rel_raw_np: 1-D float32 array of per-sample relevance, shape (T_samples,).
@@ -117,7 +119,7 @@ def _aggregate_word_relevance(
 
     Returns:
         word_labels: List of "word\n(start–end s)" strings for x-tick labels.
-        per_word_rel: 1-D float32 array of shape (N_words,) with signed relevance sums.
+        per_word_rel: 1-D float32 array of shape (N_words,) with signed relevance means.
     """
     word_labels: list[str] = []
     per_word_rel_list: list[float] = []
@@ -128,7 +130,7 @@ def _aggregate_word_relevance(
         # Clamp to valid range — alignment can occasionally produce out-of-bound timestamps.
         start_idx = max(0, min(start_idx, len(rel_raw_np)))
         end_idx = max(start_idx, min(end_idx, len(rel_raw_np)))
-        per_word_rel_list.append(float(rel_raw_np[start_idx:end_idx].sum()))
+        per_word_rel_list.append(float(rel_raw_np[start_idx:end_idx].mean()) if end_idx > start_idx else 0.0)
         word_labels.append(f"{seg['word']}\n({seg['start']:.2f}\u2013{seg['end']:.2f}s)")
 
     return word_labels, np.array(per_word_rel_list, dtype=np.float32)
@@ -344,7 +346,7 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             ax.axhline(0, color="black", linewidth=0.6, alpha=0.5)
             ax.set_xticks(x_positions)
             ax.set_xticklabels(word_labels, rotation=45, ha="right", fontsize=8)
-            ax.set_ylabel("Relevance (signed sum)")
+            ax.set_ylabel("Relevance (signed mean)")
             ax.set_xlabel("Word")
             ax.set_title(
                 f"Layer 2 — Word-Level AttnLRP | True: {true_label_str} | Explained: {pred_label_str}",

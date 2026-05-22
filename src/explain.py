@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any
 
 import hydra
 import matplotlib.pyplot as plt
-import numpy as np
 import rootutils
 import torch
 from torch.optim import AdamW
@@ -74,7 +73,6 @@ def explain_model(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     img = img_tensor.permute(1, 2, 0).numpy().clip(0.0, 1.0)
 
     hm = heatmap[0, FRAME_IDX].detach().cpu().numpy()
-    vmax = max(float(np.max(np.abs(hm))), 1e-8)
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
@@ -82,13 +80,13 @@ def explain_model(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     axes[0].set_title(f"Original Frame {FRAME_IDX}")
     axes[0].axis("off")
 
-    im2 = axes[1].imshow(hm, cmap="seismic", vmin=-vmax, vmax=vmax)
+    im2 = axes[1].imshow(hm, cmap="seismic", vmin=-1, vmax=1)
     axes[1].set_title("AttnLRP Heatmap")
     axes[1].axis("off")
     plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
 
     axes[2].imshow(img)
-    axes[2].imshow(hm, cmap="seismic", alpha=0.5, vmin=-vmax, vmax=vmax)
+    axes[2].imshow(hm, cmap="seismic", alpha=0.5, vmin=-1, vmax=1)
     axes[2].set_title("Overlay")
     axes[2].axis("off")
 

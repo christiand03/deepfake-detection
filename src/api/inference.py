@@ -457,8 +457,6 @@ def run_video_inference(
     # Heatmap: one explain() pass per 16-frame chunk — covers the full video
     if xai_mode == "lrp":
         heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
-        max_abs = np.max(np.abs(heatmap_np)) + 1e-8
-        heatmap_np = heatmap_np / max_abs
     else:
         heatmap_np = np.full((n_frames, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
 
@@ -525,8 +523,6 @@ def run_video_inference_h5(
 
     if xai_mode == "lrp":
         heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
-        max_abs = np.max(np.abs(heatmap_np)) + 1e-8
-        heatmap_np = heatmap_np / max_abs
     else:
         heatmap_np = np.full((n_frames, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
 
@@ -601,24 +597,35 @@ def _load_audio(clip_path: Path) -> tuple[np.ndarray, int]:
     return waveform_np, AUDIO_SAMPLE_RATE
 
 
-def _compute_frequency_bands(relevance: np.ndarray, sample_rate: int) -> dict:
-    """Aggregate LRP relevance into three perceptually-motivated frequency bands."""
-    n = len(relevance)
-    fft_mag = np.abs(np.fft.rfft(relevance))
-    freqs = np.fft.rfftfreq(n, 1.0 / sample_rate)
-    max_mag = np.max(fft_mag) + 1e-8
-    sign = 1.0 if np.mean(relevance) > 0 else -1.0
+def _compute_frequency_bands(waveform_np: np.ndarray, relevance: np.ndarray, sample_rate: int) -> dict:
+    """Aggregate LRP relevance into three perceptually-motivated frequency bands via Butterworth filtering.
 
-    def band_score(lo: float, hi: float) -> float:
-        mask = (freqs >= lo) & (freqs < hi)
-        if not mask.any():
-            return 0.0
-        return float(np.clip(sign * np.mean(fft_mag[mask]) / max_mag, -1.0, 1.0))
+    Each band is isolated with a 5th-order zero-phase Butterworth filter (sosfiltfilt),
+    then dotted with the raw per-sample relevance signal. The dot product captures how
+    much energy was in each frequency band at time steps where the model detected Fake
+    evidence. Each band determines its own sign independently.
 
+    Bands:
+        Low  (0–500 Hz)   — Prosody / fundamental frequency
+        Mid  (500–4 kHz)  — Formants / vowels
+        High (4–8 kHz)    — Fricatives / vocoder artefacts
+    """
+    from scipy.signal import butter, sosfiltfilt  # lazy import — scipy optional
+
+    nyq = sample_rate / 2.0
+    band_defs = [
+        ("low", butter(5, 500.0 / nyq, btype="low", output="sos")),
+        ("mid", butter(5, [500.0 / nyq, 4000.0 / nyq], btype="band", output="sos")),
+        ("high", butter(5, 4000.0 / nyq, btype="high", output="sos")),
+    ]
+    raw_scores: list[float] = []
+    for _key, sos in band_defs:
+        filtered = sosfiltfilt(sos, waveform_np).astype(np.float32)
+        raw_scores.append(float((filtered * relevance).sum()))
+    # Normalize relative to each other: sum of abs = 1, sign preserved.
+    total = sum(abs(s) for s in raw_scores) + 1e-8
     return {
-        "low": band_score(0.0, 500.0),
-        "mid": band_score(500.0, 4000.0),
-        "high": band_score(4000.0, 8000.0),
+        key: float(np.clip(score / total, -1.0, 1.0)) for (key, _), score in zip(band_defs, raw_scores, strict=True)
     }
 
 
@@ -722,7 +729,7 @@ def run_audio_inference(clip_path: Path) -> dict | None:
     relevance_norm = (relevance / max_abs).tolist()
     amplitude = waveform_np.tolist()
 
-    frequency_bands = _compute_frequency_bands(relevance, sample_rate)
+    frequency_bands = _compute_frequency_bands(waveform_np, relevance, sample_rate)
     cache_dir = Path(__file__).parents[2] / ".whisperx_cache"
     word_segments = _compute_word_segments(waveform_np, sample_rate, relevance, cache_dir)
 
