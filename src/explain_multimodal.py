@@ -19,9 +19,6 @@ Usage::
 from __future__ import annotations
 
 import functools
-import hashlib
-import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import hydra
@@ -29,8 +26,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import rootutils
 import torch
-import torch.nn.functional as F_nn
-from einops import rearrange
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
@@ -50,155 +45,22 @@ from src.utils import (  # noqa: E402
     extras,
     task_wrapper,
 )
+from src.utils.audio_xai import (  # noqa: E402
+    LABEL_NAMES,
+    aggregate_word_relevance,
+    compute_band_relevance,
+    load_word_segments,
+    plot_audio_layer1,
+    plot_layer2_words,
+    plot_layer3_bands,
+    smooth_audio_relevance,
+)
 
 log = RankedLogger(__name__, rank_zero_only=True)
-
-# Human-readable label names (0 = Real, 1 = Fake) — consistent with explain_audio.py
-_LABEL_NAMES = {0: "Real", 1: "Fake"}
 
 # ImageNet normalization constants for inverse transform — consistent with explain.py
 _IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
 _IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
-
-
-# Audio helper functions (identical to explain_audio.py)
-
-
-def _load_word_segments(
-    waveform_np: np.ndarray,
-    sample_rate: int,
-    whisperx_device: str,
-    model_name: str,
-    cache_dir: str,
-    language: str = "en",
-) -> list[dict]:
-    """Compute WhisperX word-level timestamps with disk caching.
-
-    The cache is keyed by a 16-char SHA-256 prefix of the raw waveform bytes and
-    the language code, so re-running on the same clip and language skips transcription.
-
-    Args:
-        waveform_np:     Float32 numpy array of shape (T_samples,).
-        sample_rate:     Audio sample rate in Hz (must be 16000).
-        whisperx_device: Device string passed to whisperx.load_model.
-        model_name:      WhisperX model size, e.g. "base" or "small".
-        cache_dir:       Directory where JSON cache files are stored.
-        language:        BCP-47 language code passed to WhisperX (e.g. "en", "de").
-
-    Returns:
-        List of dicts [{"word": str, "start": float, "end": float}, ...].
-        Returns [] if alignment produced no word segments.
-    """
-    # Include language in the cache key so changing the language forces re-transcription.
-    cache_key = hashlib.sha256(waveform_np.tobytes() + language.encode()).hexdigest()[:16]
-    cache_path = Path(cache_dir) / f"{cache_key}.json"
-
-    if cache_path.exists():
-        log.info("WhisperX cache hit: %s", cache_path)
-        with cache_path.open() as f:
-            return json.load(f)
-
-    log.info("Running WhisperX transcription (model=%s, device=%s)...", model_name, whisperx_device)
-    import whisperx  # lazy import — optional dep, only needed for Layer 2
-
-    audio = waveform_np.astype(np.float32)
-    wx_model = whisperx.load_model(model_name, device=whisperx_device, compute_type="float32")
-    result = wx_model.transcribe(audio, batch_size=16, language=language)
-
-    if not result.get("segments"):
-        log.warning("WhisperX returned no segments — Layer 2 will be skipped.")
-        return []
-
-    align_model, metadata = whisperx.load_align_model(language_code=result["language"], device=whisperx_device)
-    result = whisperx.align(result["segments"], align_model, metadata, audio, whisperx_device)
-
-    word_segments = [
-        seg for seg in result.get("word_segments", []) if "start" in seg and "end" in seg and "word" in seg
-    ]
-
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    with cache_path.open("w") as f:
-        json.dump(word_segments, f)
-    log.info("WhisperX word segments cached to: %s", cache_path)
-
-    return word_segments
-
-
-def _aggregate_word_relevance(
-    rel_raw_np: np.ndarray,
-    word_segments: list[dict],
-    sample_rate: int,
-) -> tuple[list[str], np.ndarray]:
-    """Average AttnLRP relevance over each word's sample boundary (signed mean).
-
-    Args:
-        rel_raw_np:    1-D float32 array of per-sample relevance, shape (T_samples,).
-        word_segments: Output of _load_word_segments.
-        sample_rate:   Audio sample rate in Hz.
-
-    Returns:
-        word_labels:   List of "word\n(start–end s)" strings for x-tick labels.
-        per_word_rel:  1-D float32 array of shape (N_words,) with signed relevance means.
-    """
-    word_labels: list[str] = []
-    per_word_rel_list: list[float] = []
-
-    for seg in word_segments:
-        start_idx = max(0, min(int(seg["start"] * sample_rate), len(rel_raw_np)))
-        end_idx = max(start_idx, min(int(seg["end"] * sample_rate), len(rel_raw_np)))
-        per_word_rel_list.append(float(rel_raw_np[start_idx:end_idx].mean()) if end_idx > start_idx else 0.0)
-        word_labels.append(f"{seg['word']}\n({seg['start']:.2f}\u2013{seg['end']:.2f}s)")
-
-    return word_labels, np.array(per_word_rel_list, dtype=np.float32)
-
-
-def _compute_band_relevance(
-    waveform_np: np.ndarray,
-    rel_raw_np: np.ndarray,
-    sample_rate: int,
-) -> tuple[list[str], np.ndarray]:
-    """Aggregate AttnLRP relevance into three perceptual frequency bands.
-
-    Bands: Low (0–500 Hz), Mid (500–4 kHz), High (4–8 kHz).
-    Scores are normalized so sum of absolute values equals 1.
-
-    Args:
-        waveform_np:  Float32 numpy array of shape (T_samples,).
-        rel_raw_np:   Float32 per-sample relevance array, shape (T_samples,).
-        sample_rate:  Audio sample rate in Hz (must be 16000).
-
-    Returns:
-        band_labels: List of 3 multiline strings for axis tick labels.
-        band_rels:   Float32 array of shape (3,), values in [-1, 1].
-    """
-    from scipy.signal import butter, sosfiltfilt
-
-    nyq = sample_rate / 2.0
-    band_defs = [
-        (
-            "Low\n(0–500 Hz)\nProsodie / Grundton",
-            butter(5, 500.0 / nyq, btype="low", output="sos"),
-        ),
-        (
-            "Mid\n(500–4 kHz)\nFormanten / Vokale",
-            butter(5, [500.0 / nyq, 4000.0 / nyq], btype="band", output="sos"),
-        ),
-        (
-            "High\n(4–8 kHz)\nFrikative / Vocoder",
-            butter(5, 4000.0 / nyq, btype="high", output="sos"),
-        ),
-    ]
-
-    band_labels: list[str] = []
-    band_rel_list: list[float] = []
-    for label, sos in band_defs:
-        filtered = sosfiltfilt(sos, waveform_np).astype(np.float32)
-        band_rel_list.append(float((filtered * rel_raw_np).sum()))
-        band_labels.append(label)
-
-    band_rels = np.array(band_rel_list, dtype=np.float32)
-    band_rels = band_rels / (np.abs(band_rels).sum() + 1e-8)
-    return band_labels, band_rels
 
 
 # Video helper
@@ -254,8 +116,8 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     )
     pred_class = pred_class_t.item()
 
-    true_label_str = _LABEL_NAMES.get(true_label, str(true_label))
-    pred_label_str = _LABEL_NAMES.get(pred_class, str(pred_class))
+    true_label_str = LABEL_NAMES.get(true_label, str(true_label))
+    pred_label_str = LABEL_NAMES.get(pred_class, str(pred_class))
     log.info("True Class: %s | Explained Class: %s", true_label_str, pred_label_str)
 
     # Shared config values
@@ -276,10 +138,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
 
     # Abs-max-pool for the relevance strip (avoids sign cancellation from plain avg).
     rel_raw = audio_relevance[0].detach().cpu().float()  # (T_samples,)
-    rel_3d = rearrange(rel_raw, "t -> 1 1 t")
-    abs_smooth = F_nn.avg_pool1d(rel_3d.abs(), kernel_size=smoothing_kernel, stride=smoothing_kernel)
-    sign_smooth = F_nn.avg_pool1d(rel_3d.sign(), kernel_size=smoothing_kernel, stride=smoothing_kernel)
-    rel_smooth = rearrange(abs_smooth * sign_smooth.sign(), "1 1 t -> t").numpy()
+    rel_smooth = smooth_audio_relevance(rel_raw, smoothing_kernel)
 
     title_str = f"True: {true_label_str}  |  Explained: {pred_label_str}"
 
@@ -391,51 +250,15 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     plt.close(fig_v)
     log.info("Standalone video figure saved to: %s", video_save_path)
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Figure 3 — Standalone audio Layer 1 (identical layout to explain_audio.py)
-    # ═══════════════════════════════════════════════════════════════════════════
-    log.info("Creating standalone audio Layer 1 figure...")
-
-    fig_a, (ax_a1, ax_a2) = plt.subplots(
-        2,
-        1,
-        figsize=(14, 5),
-        sharex=True,
-        gridspec_kw={"height_ratios": [2, 1]},
-    )
-
-    ax_a1.fill_between(t_samples, waveform, alpha=0.6, color="gray", linewidth=0)
-    ax_a1.axhline(0, color="black", linewidth=0.5, alpha=0.4)
-    ax_a1.set_ylabel("Amplitude")
-    ax_a1.set_title(f"Audio AttnLRP  |  {title_str}", fontsize=11)
-
-    im_a = ax_a2.imshow(
-        rel_smooth[np.newaxis, :],
-        cmap="seismic",
-        vmin=-1,
-        vmax=1,
-        aspect="auto",
-        extent=[0, duration, -1, 1],
-    )
-    ax_a2.set_ylabel("Relevance")
-    ax_a2.set_xlabel("Time (s)")
-    ax_a2.set_yticks([])
-    ax_a2.set_xlim(0, duration)
-
-    plt.colorbar(
-        im_a,
-        ax=ax_a2,
-        orientation="horizontal",
-        fraction=0.8,
-        pad=0.55,
-        label="AttnLRP relevance  (red = Fake evidence, blue = Real evidence)",
-    )
-    plt.tight_layout()
-
     audio_save_path: str = cfg.explain.get("audio_save_path", "multimodal_lrp_audio.png")
-    fig_a.savefig(audio_save_path, dpi=300)
-    plt.close(fig_a)
-    log.info("Standalone audio Layer 1 figure saved to: %s", audio_save_path)
+    plot_audio_layer1(
+        waveform=waveform,
+        t_samples=t_samples,
+        rel_smooth=rel_smooth,
+        duration=duration,
+        title=f"Audio AttnLRP  |  {title_str}",
+        save_path=audio_save_path,
+    )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Layer 2 — Word-level aggregation (identical logic to explain_audio.py)
@@ -456,7 +279,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
                 "Resample the audio before running explain_multimodal."
             )
 
-        word_segments = _load_word_segments(
+        word_segments = load_word_segments(
             waveform_np=waveform.astype(np.float32),
             sample_rate=sample_rate,
             whisperx_device=wx_device,
@@ -468,41 +291,18 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
         if not word_segments:
             log.warning("No word segments returned by WhisperX — Layer 2 skipped.")
         else:
-            word_labels, per_word_rel = _aggregate_word_relevance(
+            word_labels, per_word_rel = aggregate_word_relevance(
                 rel_raw_np=rel_raw.numpy(),
                 word_segments=word_segments,
                 sample_rate=sample_rate,
             )
-            bar_colors_l2 = ["firebrick" if v >= 0 else "steelblue" for v in per_word_rel]
-            x_positions = np.arange(len(word_labels))
-
-            fig_l2, ax_l2 = plt.subplots(figsize=(14, 4))
-            ax_l2.bar(x_positions, per_word_rel, color=bar_colors_l2, width=0.7, edgecolor="none")
-            ax_l2.axhline(0, color="black", linewidth=0.6, alpha=0.5)
-            ax_l2.set_xticks(x_positions)
-            ax_l2.set_xticklabels(word_labels, rotation=45, ha="right", fontsize=8)
-            ax_l2.set_ylabel("Relevance (signed mean)")
-            ax_l2.set_xlabel("Word")
-            ax_l2.set_title(
-                f"Layer 2 — Word-Level AttnLRP  |  {title_str}",
-                fontsize=11,
-            )
-            ax_l2.text(
-                0.99,
-                0.97,
-                "red = Fake evidence  |  blue = Real evidence",
-                transform=ax_l2.transAxes,
-                ha="right",
-                va="top",
-                fontsize=8,
-                color="dimgray",
-            )
-            plt.tight_layout()
-
             layer2_save_path: str = cfg.explain.get("layer2_save_path", "multimodal_lrp_l2_words.png")
-            fig_l2.savefig(layer2_save_path, dpi=300)
-            plt.close(fig_l2)
-            log.info("Layer 2 figure saved to: %s", layer2_save_path)
+            plot_layer2_words(
+                word_labels=word_labels,
+                per_word_rel=per_word_rel,
+                title=f"Layer 2 — Word-Level AttnLRP  |  {title_str}",
+                save_path=layer2_save_path,
+            )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Layer 3 — Frequency-band summary (identical logic to explain_audio.py)
@@ -513,37 +313,18 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
 
     log.info("Running Layer 3 — frequency-band relevance summary...")
 
-    band_labels, band_rels = _compute_band_relevance(
+    band_labels, band_rels = compute_band_relevance(
         waveform_np=waveform.astype(np.float32),
         rel_raw_np=rel_raw.numpy(),
         sample_rate=sample_rate,
     )
-    bar_colors_l3 = ["firebrick" if v >= 0 else "steelblue" for v in band_rels]
-
-    fig_l3, ax_l3 = plt.subplots(figsize=(8, 4))
-    ax_l3.barh(band_labels, band_rels, color=bar_colors_l3, height=0.5, edgecolor="none")
-    ax_l3.axvline(0, color="black", linewidth=0.6, alpha=0.5)
-    ax_l3.set_xlabel("Relative Relevance (signed, normalized)")
-    ax_l3.set_title(
-        f"Layer 3 — Frequency-Band AttnLRP  |  {title_str}",
-        fontsize=11,
-    )
-    ax_l3.text(
-        0.99,
-        0.02,
-        "red = Fake evidence  |  blue = Real evidence",
-        transform=ax_l3.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=8,
-        color="dimgray",
-    )
-    plt.tight_layout()
-
     layer3_save_path: str = cfg.explain.get("layer3_save_path", "multimodal_lrp_l3_bands.png")
-    fig_l3.savefig(layer3_save_path, dpi=300)
-    plt.close(fig_l3)
-    log.info("Layer 3 figure saved to: %s", layer3_save_path)
+    plot_layer3_bands(
+        band_labels=band_labels,
+        band_rels=band_rels,
+        title=f"Layer 3 — Frequency-Band AttnLRP  |  {title_str}",
+        save_path=layer3_save_path,
+    )
 
     return {}, {}
 
