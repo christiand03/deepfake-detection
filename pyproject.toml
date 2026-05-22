@@ -28,6 +28,7 @@ indent-style = "space"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]

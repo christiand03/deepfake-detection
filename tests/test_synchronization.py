@@ -10,9 +10,6 @@ Ausführen:
 """
 
 import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 import torch.nn.functional as F
@@ -210,8 +207,8 @@ def test_attention_weights_not_uniform():
     uniform_a2v = torch.full_like(a2v_w, 1.0 / t_v)
 
     # KL-Divergenz zur Uniform-Verteilung (höher = weniger uniform = besser)
-    kl_v2a = F.kl_div(v2a_w.log().clamp(min=-100), uniform_v2a, reduction="batchmean").item()
-    kl_a2v = F.kl_div(a2v_w.log().clamp(min=-100), uniform_a2v, reduction="batchmean").item()
+    kl_v2a = F.kl_div(uniform_v2a.log().clamp(min=-100), v2a_w, reduction="batchmean").item()
+    kl_a2v = F.kl_div(uniform_a2v.log().clamp(min=-100), a2v_w, reduction="batchmean").item()
 
     # Max-Abweichung von uniform
     max_dev_v2a = (v2a_w - uniform_v2a).abs().max().item()

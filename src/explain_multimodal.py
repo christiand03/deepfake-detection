@@ -94,11 +94,11 @@ def _load_word_segments(
     cache_path = Path(cache_dir) / f"{cache_key}.json"
 
     if cache_path.exists():
-        log.info(f"WhisperX cache hit: {cache_path}")
+        log.info("WhisperX cache hit: %s", cache_path)
         with cache_path.open() as f:
             return json.load(f)
 
-    log.info(f"Running WhisperX transcription (model={model_name}, device={whisperx_device})...")
+    log.info("Running WhisperX transcription (model=%s, device=%s)...", model_name, whisperx_device)
     import whisperx  # lazy import — optional dep, only needed for Layer 2
 
     audio = waveform_np.astype(np.float32)
@@ -119,7 +119,7 @@ def _load_word_segments(
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     with cache_path.open("w") as f:
         json.dump(word_segments, f)
-    log.info(f"WhisperX word segments cached to: {cache_path}")
+    log.info("WhisperX word segments cached to: %s", cache_path)
 
     return word_segments
 
@@ -226,12 +226,12 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     if not cfg.ckpt_path:
         raise ValueError("Please pass a checkpoint! (ckpt_path=...)")
 
-    log.info(f"Instantiating datamodule <{cfg.data._target_}>")
+    log.info("Instantiating datamodule <%s>", cfg.data._target_)
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
     datamodule.setup(stage="test")
     test_dataloader = datamodule.test_dataloader()
 
-    log.info(f"Loading multimodal model from checkpoint: {cfg.ckpt_path}")
+    log.info("Loading multimodal model from checkpoint: %s", cfg.ckpt_path)
     model = MultimodalDeepfakeModule.load_from_checkpoint(cfg.ckpt_path, weights_only=False)
     model.eval()
 
@@ -256,7 +256,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
 
     true_label_str = _LABEL_NAMES.get(true_label, str(true_label))
     pred_label_str = _LABEL_NAMES.get(pred_class, str(pred_class))
-    log.info(f"True Class: {true_label_str} | Explained Class: {pred_label_str}")
+    log.info("True Class: %s | Explained Class: %s", true_label_str, pred_label_str)
 
     # Shared config values
     frame_idx: int = cfg.explain.get("frame_idx", 0)
@@ -361,7 +361,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     combined_save_path: str = cfg.explain.get("combined_save_path", "multimodal_lrp_combined.png")
     fig_c.savefig(combined_save_path, dpi=300)
     plt.close(fig_c)
-    log.info(f"Combined figure saved to: {combined_save_path}")
+    log.info("Combined figure saved to: %s", combined_save_path)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Figure 2 — Standalone video (identical layout to explain.py)
@@ -389,7 +389,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     video_save_path: str = cfg.explain.get("video_save_path", "multimodal_lrp_video.png")
     fig_v.savefig(video_save_path, dpi=300)
     plt.close(fig_v)
-    log.info(f"Standalone video figure saved to: {video_save_path}")
+    log.info("Standalone video figure saved to: %s", video_save_path)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Figure 3 — Standalone audio Layer 1 (identical layout to explain_audio.py)
@@ -435,7 +435,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     audio_save_path: str = cfg.explain.get("audio_save_path", "multimodal_lrp_audio.png")
     fig_a.savefig(audio_save_path, dpi=300)
     plt.close(fig_a)
-    log.info(f"Standalone audio Layer 1 figure saved to: {audio_save_path}")
+    log.info("Standalone audio Layer 1 figure saved to: %s", audio_save_path)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Layer 2 — Word-level aggregation (identical logic to explain_audio.py)
@@ -502,7 +502,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
             layer2_save_path: str = cfg.explain.get("layer2_save_path", "multimodal_lrp_l2_words.png")
             fig_l2.savefig(layer2_save_path, dpi=300)
             plt.close(fig_l2)
-            log.info(f"Layer 2 figure saved to: {layer2_save_path}")
+            log.info("Layer 2 figure saved to: %s", layer2_save_path)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Layer 3 — Frequency-band summary (identical logic to explain_audio.py)
@@ -543,7 +543,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     layer3_save_path: str = cfg.explain.get("layer3_save_path", "multimodal_lrp_l3_bands.png")
     fig_l3.savefig(layer3_save_path, dpi=300)
     plt.close(fig_l3)
-    log.info(f"Layer 3 figure saved to: {layer3_save_path}")
+    log.info("Layer 3 figure saved to: %s", layer3_save_path)
 
     return {}, {}
 

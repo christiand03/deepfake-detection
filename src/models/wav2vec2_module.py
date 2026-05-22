@@ -1,12 +1,15 @@
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn.functional as F
 from beartype import beartype
-
-# Spezifische Imports für jaxtyping und einops
-from jaxtyping import Float, Int
 from lightning.pytorch import LightningModule
+
+if TYPE_CHECKING:
+    # Spezifische Imports für jaxtyping und einops
+    from jaxtyping import Float, Int
 from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import Wav2Vec2ForSequenceClassification
@@ -66,8 +69,8 @@ class Wav2Vec2DeepfakeModule(LightningModule):
         self, batch: Any
     ) -> tuple[
         Float[torch.Tensor, ""],
-        Int[torch.Tensor, "batch"],
-        Int[torch.Tensor, "batch"],
+        Int[torch.Tensor, batch],
+        Int[torch.Tensor, batch],
         Float[torch.Tensor, "batch 2"],
     ]:
         """Central step shared by training, validation, and test.

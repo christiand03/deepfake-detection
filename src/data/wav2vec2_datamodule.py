@@ -1,4 +1,6 @@
-import os
+from __future__ import annotations
+
+from pathlib import Path
 
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
@@ -25,13 +27,13 @@ class Wav2Vec2DataModule(LightningDataModule):
     def setup(self, stage: str | None = None):
         if self.train_dataset is None:
             self.train_dataset = DeepfakeAudioHDF5Dataset(
-                h5_path=os.path.join(self.hparams.data_dir, "train.h5"), label_type=self.hparams.label_type
+                h5_path=Path(self.hparams.data_dir) / "train.h5", label_type=self.hparams.label_type
             )
             self.val_dataset = DeepfakeAudioHDF5Dataset(
-                h5_path=os.path.join(self.hparams.data_dir, "val.h5"), label_type=self.hparams.label_type
+                h5_path=Path(self.hparams.data_dir) / "val.h5", label_type=self.hparams.label_type
             )
             self.test_dataset = DeepfakeAudioHDF5Dataset(
-                h5_path=os.path.join(self.hparams.data_dir, "test.h5"), label_type=self.hparams.label_type
+                h5_path=Path(self.hparams.data_dir) / "test.h5", label_type=self.hparams.label_type
             )
 
     def train_dataloader(self):

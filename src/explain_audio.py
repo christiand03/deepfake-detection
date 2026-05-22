@@ -69,11 +69,11 @@ def _load_word_segments(
     cache_path = Path(cache_dir) / f"{cache_key}.json"
 
     if cache_path.exists():
-        log.info(f"WhisperX cache hit: {cache_path}")
+        log.info("WhisperX cache hit: %s", cache_path)
         with cache_path.open() as f:
             return json.load(f)  # type: ignore[no-any-return]
 
-    log.info(f"Running WhisperX transcription (model={model_name}, device={whisperx_device})...")
+    log.info("Running WhisperX transcription (model=%s, device=%s)...", model_name, whisperx_device)
     import whisperx  # lazy import — optional dep, only needed for Layer 2
 
     audio = waveform_np.astype(np.float32)
@@ -95,7 +95,7 @@ def _load_word_segments(
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     with cache_path.open("w") as f:
         json.dump(word_segments, f)
-    log.info(f"WhisperX word segments cached to: {cache_path}")
+    log.info("WhisperX word segments cached to: %s", cache_path)
 
     return word_segments
 
@@ -200,12 +200,12 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if not cfg.ckpt_path:
         raise ValueError("Please pass a checkpoint! (ckpt_path=...)")
 
-    log.info(f"Instantiating datamodule <{cfg.data._target_}>")
+    log.info("Instantiating datamodule <%s>", cfg.data._target_)
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
     datamodule.setup(stage="test")
     test_dataloader = datamodule.test_dataloader()
 
-    log.info(f"Loading model from checkpoint: {cfg.ckpt_path}")
+    log.info("Loading model from checkpoint: %s", cfg.ckpt_path)
     model = Wav2Vec2DeepfakeModule.load_from_checkpoint(cfg.ckpt_path, weights_only=False)
     model.eval()
 
@@ -225,7 +225,7 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     true_label_str = _LABEL_NAMES.get(true_label, str(true_label))
     pred_label_str = _LABEL_NAMES.get(pred_class, str(pred_class))
-    log.info(f"True Class: {true_label_str} | Explained Class: {pred_label_str}")
+    log.info("True Class: %s | Explained Class: %s", true_label_str, pred_label_str)
 
     log.info("Creating Layer 1 visualization...")
 
@@ -297,7 +297,7 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     save_path: str = cfg.explain.get("save_path", "audio_lrp_explanation.png")
     plt.savefig(save_path, dpi=300)
     plt.close(fig)
-    log.info(f"Layer 1 visualization saved to: {save_path}")
+    log.info("Layer 1 visualization saved to: %s", save_path)
 
     # --- Layer 2: Word-Level Aggregation ---
     # Layer 2 is independent of Layer 3 — early exits are replaced with guarded else-blocks
@@ -367,7 +367,7 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             layer2_save_path: str = cfg.explain.get("layer2_save_path", "audio_lrp_l2_words.png")
             plt.savefig(layer2_save_path, dpi=300)
             plt.close(fig2)
-            log.info(f"Layer 2 visualization saved to: {layer2_save_path}")
+            log.info("Layer 2 visualization saved to: %s", layer2_save_path)
 
     # --- Layer 3: Frequency-Band Summary ---
     if not cfg.explain.get("enable_layer3", True):
@@ -407,7 +407,7 @@ def explain_audio(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     layer3_save_path: str = cfg.explain.get("layer3_save_path", "audio_lrp_l3_bands.png")
     plt.savefig(layer3_save_path, dpi=300)
     plt.close(fig3)
-    log.info(f"Layer 3 visualization saved to: {layer3_save_path}")
+    log.info("Layer 3 visualization saved to: %s", layer3_save_path)
 
     return {}, {}
 

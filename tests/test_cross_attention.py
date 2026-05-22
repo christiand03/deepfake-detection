@@ -14,10 +14,6 @@ Ausführen:
 """
 
 import sys
-from pathlib import Path
-
-# Projekt-Root ins sys.path, falls das Script direkt aufgerufen wird
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 

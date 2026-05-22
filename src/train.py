@@ -64,10 +64,10 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
-    log.info(f"Instantiating datamodule <{cfg.data._target_}>")
+    log.info("Instantiating datamodule <%s>", cfg.data._target_)
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 
-    log.info(f"Instantiating model <{cfg.model._target_}>")
+    log.info("Instantiating model <%s>", cfg.model._target_)
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
     log.info("Instantiating callbacks...")
@@ -76,7 +76,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info("Instantiating loggers...")
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
-    log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
+    log.info("Instantiating trainer <%s>", cfg.trainer._target_)
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
 
     object_dict = {
@@ -109,7 +109,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             log.warning("No checkpoint callback configured; skipping best-checkpoint lookup.")
             ckpt_path = None
         trainer.test(model=model, datamodule=datamodule, ckpt_path=ckpt_path)
-        log.info(f"Best ckpt path: {ckpt_path}")
+        log.info("Best ckpt path: %s", ckpt_path)
 
     test_metrics = trainer.callback_metrics
 

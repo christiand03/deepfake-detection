@@ -1,15 +1,18 @@
+from __future__ import annotations
+
 import contextlib
 
 import h5py
 import torch
+from einops import rearrange
 from torch.utils.data import Dataset
 
 
 class DeepfakeHDF5Dataset(Dataset):
     # ImageNet normalization constants — shared across all instances.
     # Must match MultimodalHDF5Dataset._MEAN/_STD exactly.
-    _MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-    _STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+    _MEAN = rearrange(torch.tensor([0.485, 0.456, 0.406]), "c -> 1 c 1 1")
+    _STD = rearrange(torch.tensor([0.229, 0.224, 0.225]), "c -> 1 c 1 1")
 
     def __init__(self, h5_path: str):
         self.h5_path = h5_path

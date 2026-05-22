@@ -1,4 +1,6 @@
-import os
+from __future__ import annotations
+
+from pathlib import Path
 
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
@@ -24,9 +26,9 @@ class VideoMAEDataModule(LightningDataModule):
 
     def setup(self, stage: str | None = None):
         if self.train_dataset is None:
-            self.train_dataset = DeepfakeHDF5Dataset(h5_path=os.path.join(self.hparams.data_dir, "train.h5"))
-            self.val_dataset = DeepfakeHDF5Dataset(h5_path=os.path.join(self.hparams.data_dir, "val.h5"))
-            self.test_dataset = DeepfakeHDF5Dataset(h5_path=os.path.join(self.hparams.data_dir, "test.h5"))
+            self.train_dataset = DeepfakeHDF5Dataset(h5_path=Path(self.hparams.data_dir) / "train.h5")
+            self.val_dataset = DeepfakeHDF5Dataset(h5_path=Path(self.hparams.data_dir) / "val.h5")
+            self.test_dataset = DeepfakeHDF5Dataset(h5_path=Path(self.hparams.data_dir) / "test.h5")
 
     def train_dataloader(self):
         return DataLoader(

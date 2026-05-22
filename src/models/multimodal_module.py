@@ -276,7 +276,8 @@ class MultimodalDeepfakeModule(LightningModule):
 
         Args:
             pixel_values: ``(B, 16, 3, 224, 224)`` float32 video tensor.
-            input_values: ``(B, 10240)`` float32 audio waveform tensor.
+            input_values: ``(B, T_audio_samples)`` float32 audio waveform tensor.
+                          See ``cfg.preprocessing.audio_samples_per_chunk`` for the configured value.
 
         Returns:
             ``(video_hidden, audio_hidden)`` — shapes
