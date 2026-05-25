@@ -11,15 +11,13 @@ Normalization matches the unimodal datasets exactly:
 
 from __future__ import annotations
 
-import contextlib
-
 import h5py
 import torch
-from einops import rearrange
-from torch.utils.data import Dataset
+
+from .base_hdf5_dataset import BaseHDF5Dataset, normalize_audio, normalize_video_frames
 
 
-class MultimodalHDF5Dataset(Dataset):
+class MultimodalHDF5Dataset(BaseHDF5Dataset):
     """HDF5 dataset that yields aligned (video, audio, label) triples.
 
     Args:
@@ -28,14 +26,9 @@ class MultimodalHDF5Dataset(Dataset):
                     ``"label_video"``, or ``"label_audio"``.  Default: ``"label"``.
     """
 
-    # ImageNet normalization constants – must match DeepfakeHDF5Dataset exactly.
-    _MEAN = rearrange(torch.tensor([0.485, 0.456, 0.406]), "c -> 1 c 1 1")
-    _STD = rearrange(torch.tensor([0.229, 0.224, 0.225]), "c -> 1 c 1 1")
-
     def __init__(self, h5_path: str, label_type: str = "label") -> None:
-        self.h5_path = h5_path
+        super().__init__(h5_path)
         self.label_type = label_type
-        self.h5_file: h5py.File | None = None
 
         with h5py.File(self.h5_path, "r") as f:
             if "video" not in f or "audio" not in f:
@@ -51,28 +44,17 @@ class MultimodalHDF5Dataset(Dataset):
                 )
             self.length = n_video
 
-    def __len__(self) -> int:
-        return self.length
-
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        # Lazy-open once per worker process (HDF5 is not fork-safe).
-        if self.h5_file is None:
-            self.h5_file = h5py.File(self.h5_path, "r")
+        f = self._open_h5()
 
-        # Video
-        # Shape: (16, 3, 224, 224), uint8
-        video_np = self.h5_file["video"][idx]
-        pixel_values = torch.from_numpy(video_np).float() / 255.0
-        pixel_values = (pixel_values - self._MEAN) / self._STD  # ImageNet norm
+        # Video: (16, 3, 224, 224) uint8 → normalised float32
+        pixel_values = normalize_video_frames(f["video"][idx])
 
-        # Audio
-        # Shape: (10240,), float32
-        audio_np = self.h5_file["audio"][idx]
-        input_values = torch.from_numpy(audio_np)
-        input_values = (input_values - input_values.mean()) / torch.sqrt(input_values.var() + 1e-7)
+        # Audio: (10240,) float32 → zero-mean / unit-var
+        input_values = normalize_audio(f["audio"][idx])
 
         # Label
-        label = int(self.h5_file[self.label_type][idx])
+        label = int(f[self.label_type][idx])
         labels = torch.tensor(label, dtype=torch.long)
 
         return {
@@ -80,8 +62,3 @@ class MultimodalHDF5Dataset(Dataset):
             "input_values": input_values,  # (10240,) float32
             "labels": labels,  # scalar long
         }
-
-    def __del__(self) -> None:
-        if self.h5_file is not None:
-            with contextlib.suppress(Exception):
-                self.h5_file.close()

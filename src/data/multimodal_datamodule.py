@@ -7,15 +7,13 @@ the same HDF5 files produced by the preprocessing pipeline.
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
-from lightning import LightningDataModule
-from torch.utils.data import DataLoader
-
+from .base_datamodule import BaseDeepfakeDataModule
 from .multimodal_hdf5_dataset import MultimodalHDF5Dataset
 
 
-class MultimodalDataModule(LightningDataModule):
+class MultimodalDataModule(BaseDeepfakeDataModule):
     """DataModule that provides aligned video+audio batches for fusion training.
 
     Args:
@@ -44,36 +42,8 @@ class MultimodalDataModule(LightningDataModule):
         self.val_dataset: MultimodalHDF5Dataset | None = None
         self.test_dataset: MultimodalHDF5Dataset | None = None
 
-    def setup(self, stage: str | None = None) -> None:
-        if self.train_dataset is None:
-            self.train_dataset = MultimodalHDF5Dataset(
-                h5_path=os.path.join(self.hparams.data_dir, "train.h5"),
-                label_type=self.hparams.label_type,
-            )
-            self.val_dataset = MultimodalHDF5Dataset(
-                h5_path=os.path.join(self.hparams.data_dir, "val.h5"),
-                label_type=self.hparams.label_type,
-            )
-            self.test_dataset = MultimodalHDF5Dataset(
-                h5_path=os.path.join(self.hparams.data_dir, "test.h5"),
-                label_type=self.hparams.label_type,
-            )
-
-    def _make_loader(self, dataset: MultimodalHDF5Dataset, *, shuffle: bool) -> DataLoader:
-        return DataLoader(
-            dataset=dataset,
-            batch_size=self.hparams.batch_size,
-            num_workers=self.hparams.num_workers,
-            pin_memory=self.hparams.pin_memory,
-            shuffle=shuffle,
-            persistent_workers=self.hparams.num_workers > 0,
+    def _make_dataset(self, split: str) -> MultimodalHDF5Dataset:
+        return MultimodalHDF5Dataset(
+            h5_path=str(Path(self.hparams.data_dir) / f"{split}.h5"),
+            label_type=self.hparams.label_type,
         )
-
-    def train_dataloader(self) -> DataLoader:
-        return self._make_loader(self.train_dataset, shuffle=True)
-
-    def val_dataloader(self) -> DataLoader:
-        return self._make_loader(self.val_dataset, shuffle=False)
-
-    def test_dataloader(self) -> DataLoader:
-        return self._make_loader(self.test_dataset, shuffle=False)
