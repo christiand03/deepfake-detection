@@ -30,11 +30,27 @@ Diese To-Do-Liste bietet einen konkreten Zeitplan für das Projekt "Unmasking De
 - [ ] **LRP & Attention Rollout:** Einhaken der xAI-Bibliotheken in den Attention Layer.
 - [ ] **Plot_Style verfeinern:** SciencePlots design, Grid-Builder für die Ausgabe in W&B integrieren.
 
-## Meilenstein 5: Stretch-Goals (Robustness & Frontend) (Monat 4)
-- [ ] **Robustness Skripte:** Rausch/Framedrop Tests implementieren & ausführen.
-- [ ] **Adversarial Attacks:** Foolbox einbinden, White-Box PGD nutzen, LRP Verschiebungen festhalten.
-- [ ] *(Optional)* **FastAPI+React Start:** Kleinen Demo-Prototyp online bringen, in dem der Professor live ein Video evaluieren kann.
-- [ ] Ablation: crop_scale=1.0 vs 1.4 — compare Attention Maps, test hypothesis that neck/jaw region is discriminative
+## Meilenstein 5: Phase 3 & 4 – Erweiterungen (Monat 4)
+
+> Phase 1 & 2 sind abgeschlossen. Das Frontend ist vollständig implementiert (ursprünglich optional).
+> Da wir dem Zeitplan voraus sind, werden Phase 3 & 4 über die ursprünglichen Ziele hinaus erweitert.
+
+### Phase 3 – Robustness (Social Media Pipeline)
+
+- [x] **Interaktives Robustness-Lab (Frontend):** H.264-CRF, FPS-Reduktion, Gaussian Noise via FFmpeg; FastAPI `/robustness`; RobustnessPanel mit Confidence-Delta und Breaking-Point-Anzeige.
+- [ ] **Systematischer Robustness-Sweep → W&B:** Offline-Eval-Skript `scripts/eval_robustness_sweep.py`, das das gesamte Testset über ein Parameter-Grid auswertet (CRF ∈ {18,23,28,35,40,45,51} × FPS ∈ {25,15,10,5}) und AUC/Accuracy-Kurven in W&B loggt. Beantwortet direkt die Forschungsfrage nach dem Breaking Point.
+- [ ] **Audio-Kompressions-Robustheit:** AAC/MP3-Reencoding bei niedrigen Bitraten (32 kbps) in `run_robustness_inference()` ergänzen. Testet Wav2Vec 2.0 unter realen Social-Media-Audiokompressionen (aktuell: `acodec=copy`).
+- [ ] **xAI Attention-Shift unter Degradation:** Phase-3-Ergebnis um `attentionShift`-Liste (Anomalie-Region-Scores vor/nach Degradation) ergänzen – analog zu Phase 4. Beweist quantitativ die „trügerische Merkmale"-Hypothese.
+- [ ] **Upscaling-Artefakt-Simulation:** FFmpeg-Filter `scale=640:360,scale=1280:720` (TikTok/WhatsApp-Reencoding) als vierten Degradations-Modus ergänzen.
+- [ ] Ablation: crop_scale=1.0 vs 1.4 — Attention Maps vergleichen, Hypothese testen ob Kinn/Halsbereich diskriminativ ist.
+
+### Phase 4 – Adversarial Attacks
+
+- [x] **FGSM/PGD (L∞) implementiert:** Native PyTorch-Implementierung in `src/api/inference.py`; FastAPI `/adversarial`; AdversarialPanel mit Frame-Triptych und Attention-Shift-Tabelle.
+- [ ] **Batch-Level Fooling Rate → W&B:** Offline-Eval-Skript `scripts/eval_adversarial_sweep.py`, das den Angriff bei ε ∈ {0.01, 0.02, 0.03, 0.05, 0.1} über das gesamte Testset ausführt und Fooling Rate + mittleren Confidence-Drop in W&B loggt (= „Adversarial Robustness Curve").
+- [ ] **Multimodaler Adversarial Attack:** `run_adversarial_inference()` auf `MultimodalDeepfakeModule` erweitern – isolierter Angriff auf den Audio-Branch (Perturbation der Wellenform, für das Ohr unsichtbar) und gemeinsamer Audio+Video-Angriff. Testet ob der Audio-Branch anfälliger ist.
+- [ ] **Adversarial Fine-Tuning als Verteidigung:** Kurzes PGD-augmentiertes Fine-Tuning (PGD-Beispiele on-the-fly, mit sauberem Batch gemischt). Messung von Clean-Accuracy vs. Adversarial-Accuracy vor/nach Training.
+- [ ] **Universal Adversarial Perturbation (UAP):** Clip-unabhängige Perturbation δ*, die die Fooling Rate über alle Clips maximiert. Zeigt systematische Schwächen in den spatio-temporalen Features.
 
 ## Meilenstein 6: Akademische Schreibphase (Parallel ab Woche 1!)
 - [ ] **Monat 1:** Einleitung, Problemstellung, Related Work.
