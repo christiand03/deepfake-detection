@@ -5,19 +5,18 @@ from typing import TYPE_CHECKING, Any
 import torch
 import torch.nn.functional as F
 from beartype import beartype
-from lightning.pytorch import LightningModule
 
 if TYPE_CHECKING:
     # Spezifische Imports für jaxtyping und einops
     from jaxtyping import Float, Int
-from torchmetrics import MaxMetric, MeanMetric
-from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import Wav2Vec2ForSequenceClassification
+
+from .base_module import BaseDeepfakeModule
 
 # No module-level lxt guard needed — explain() uses plain Input×Gradient.
 
 
-class Wav2Vec2DeepfakeModule(LightningModule):
+class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
     @beartype
     def __init__(
         self,
@@ -36,24 +35,6 @@ class Wav2Vec2DeepfakeModule(LightningModule):
         # frozen feature extractor
         if freeze_feature_extractor:
             self.net.freeze_feature_encoder()
-
-        # Metrics
-        self.train_acc = BinaryAccuracy()
-        self.val_acc = BinaryAccuracy()
-        self.test_acc = BinaryAccuracy()
-
-        self.train_f1 = BinaryF1Score()
-        self.val_f1 = BinaryF1Score()
-        self.test_f1 = BinaryF1Score()
-
-        self.val_auc = BinaryAUROC()
-        self.test_auc = BinaryAUROC()
-
-        self.val_acc_best = MaxMetric()
-
-        self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric()
-        self.test_loss = MeanMetric()
 
     @beartype
     def forward(self, x: Float[torch.Tensor, "batch time"]) -> Float[torch.Tensor, "batch 2"]:
@@ -121,12 +102,6 @@ class Wav2Vec2DeepfakeModule(LightningModule):
         self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
 
     @beartype
-    def on_validation_epoch_end(self) -> None:
-        acc = self.val_acc.compute()
-        self.val_acc_best(acc)
-        self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
-
-    @beartype
     def test_step(self, batch: Any, batch_idx: int) -> None:
         loss, preds, targets, logits = self.model_step(batch)
 
@@ -180,18 +155,3 @@ class Wav2Vec2DeepfakeModule(LightningModule):
         relevance = normalize_relevance(relevance)
 
         return relevance, target_class
-
-    def configure_optimizers(self) -> dict[str, Any]:
-        optimizer = self.hparams.optimizer(params=self.parameters())
-        if self.hparams.scheduler is not None:
-            scheduler = self.hparams.scheduler(optimizer=optimizer)
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "monitor": "val/loss",
-                    "interval": "epoch",
-                    "frequency": 1,
-                },
-            }
-        return {"optimizer": optimizer}

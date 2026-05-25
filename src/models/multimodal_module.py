@@ -36,10 +36,9 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from lightning import LightningModule
-from torchmetrics import MaxMetric, MeanMetric
-from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import VideoMAEModel, Wav2Vec2Model
+
+from .base_module import BaseDeepfakeModule
 
 # Cross-Attention Fusion block
 
@@ -162,7 +161,7 @@ class CrossAttentionFusion(nn.Module):
 # LightningModule
 
 
-class MultimodalDeepfakeModule(LightningModule):
+class MultimodalDeepfakeModule(BaseDeepfakeModule):
     """PyTorch Lightning module for multimodal deepfake detection.
 
     Loads VideoMAEModel and Wav2Vec2Model as frozen (or trainable) feature
@@ -230,20 +229,6 @@ class MultimodalDeepfakeModule(LightningModule):
             dropout=dropout,
             num_classes=num_classes,
         )
-
-        # Metrics
-        self.train_acc = BinaryAccuracy()
-        self.val_acc = BinaryAccuracy()
-        self.test_acc = BinaryAccuracy()
-        self.train_f1 = BinaryF1Score()
-        self.val_f1 = BinaryF1Score()
-        self.test_f1 = BinaryF1Score()
-        self.val_auc = BinaryAUROC()
-        self.test_auc = BinaryAUROC()
-        self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric()
-        self.test_loss = MeanMetric()
-        self.val_acc_best = MaxMetric()
 
     # Helpers
 
@@ -360,11 +345,6 @@ class MultimodalDeepfakeModule(LightningModule):
         self.log("val/f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
 
-    def on_validation_epoch_end(self) -> None:
-        acc = self.val_acc.compute()
-        self.val_acc_best(acc)
-        self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
-
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
         loss, preds, labels, logits = self._model_step(batch)
         probs = F.softmax(logits, dim=1)[:, 1]
@@ -376,21 +356,6 @@ class MultimodalDeepfakeModule(LightningModule):
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/auc", self.test_auc, on_step=False, on_epoch=True, prog_bar=True)
-
-    def configure_optimizers(self) -> dict[str, Any]:
-        optimizer = self.hparams.optimizer(params=self.parameters())
-        if self.hparams.scheduler is not None:
-            scheduler = self.hparams.scheduler(optimizer=optimizer)
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "monitor": "val/loss",
-                    "interval": "epoch",
-                    "frequency": 1,
-                },
-            }
-        return {"optimizer": optimizer}
 
     def explain(
         self,

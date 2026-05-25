@@ -3,13 +3,12 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import torch
-from lightning import LightningModule
-from torchmetrics import MaxMetric, MeanMetric
-from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryF1Score
 from transformers import VideoMAEForVideoClassification
 
+from .base_module import BaseDeepfakeModule
 
-class VideoMAEModule(LightningModule):
+
+class VideoMAEModule(BaseDeepfakeModule):
     def __init__(
         self,
         optimizer: torch.optim.Optimizer,
@@ -30,24 +29,6 @@ class VideoMAEModule(LightningModule):
             ignore_mismatched_sizes=True,
             use_mean_pooling=True,
         )
-
-        # Metrics — matching Wav2Vec2DeepfakeModule and MultimodalDeepfakeModule exactly
-        # so Phase 1 and Phase 2 results are directly comparable in evaluation tables.
-        self.train_acc = BinaryAccuracy()
-        self.val_acc = BinaryAccuracy()
-        self.test_acc = BinaryAccuracy()
-
-        self.train_f1 = BinaryF1Score()
-        self.val_f1 = BinaryF1Score()
-        self.test_f1 = BinaryF1Score()
-
-        self.val_auc = BinaryAUROC()
-        self.test_auc = BinaryAUROC()
-
-        self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric()
-        self.test_loss = MeanMetric()
-        self.val_acc_best = MaxMetric()
 
     def forward(self, pixel_values: torch.Tensor):
         return self.net(pixel_values=pixel_values)
@@ -86,11 +67,6 @@ class VideoMAEModule(LightningModule):
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
-
-    def on_validation_epoch_end(self):
-        acc = self.val_acc.compute()
-        self.val_acc_best(acc)
-        self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(self, batch: Any, batch_idx: int):
         loss, preds, labels, logits = self.model_step(batch)
@@ -164,18 +140,3 @@ class VideoMAEModule(LightningModule):
             heatmap = rearrange(heatmap_2d, "(b t) (h w) -> b t h w", b=B, t=T, h=H, w=W)
 
         return heatmap, target_class
-
-    def configure_optimizers(self):
-        optimizer = self.hparams.optimizer(params=self.parameters())
-        if self.hparams.scheduler is not None:
-            scheduler = self.hparams.scheduler(optimizer=optimizer)
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "monitor": "val/loss",
-                    "interval": "epoch",
-                    "frequency": 1,
-                },
-            }
-        return {"optimizer": optimizer}
