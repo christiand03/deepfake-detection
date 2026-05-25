@@ -16,9 +16,7 @@ if TYPE_CHECKING:
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-torch.serialization.add_safe_globals([functools.partial])
-torch.serialization.add_safe_globals([AdamW])
-torch.serialization.add_safe_globals([ReduceLROnPlateau])
+torch.serialization.add_safe_globals([functools.partial, AdamW, ReduceLROnPlateau])
 
 from src.models.VideoMAE_module import VideoMAEModule  # noqa: E402
 from src.utils import (  # noqa: E402

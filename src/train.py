@@ -14,9 +14,7 @@ if TYPE_CHECKING:
     from lightning.pytorch.loggers import Logger
 
 torch.set_float32_matmul_precision("medium")
-torch.serialization.add_safe_globals([functools.partial])
-torch.serialization.add_safe_globals([AdamW])
-torch.serialization.add_safe_globals([ReduceLROnPlateau])
+torch.serialization.add_safe_globals([functools.partial, AdamW, ReduceLROnPlateau])
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # ------------------------------------------------------------------------------------ #
