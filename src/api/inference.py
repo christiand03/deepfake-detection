@@ -36,6 +36,8 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision import transforms
 
+from src.utils.vision_constants import IMAGENET_MEAN, IMAGENET_STD
+
 if TYPE_CHECKING:
     from src.api.clip_registry import ClipH5Metadata as ClipH5Metadata
     from src.models.VideoMAE_module import VideoMAEModule
@@ -71,14 +73,12 @@ log = logging.getLogger(__name__)
 NUM_FRAMES = 16
 IMG_SIZE = 224
 AUDIO_SAMPLE_RATE = 16_000
-_IMAGENET_MEAN = [0.485, 0.456, 0.406]
-_IMAGENET_STD = [0.229, 0.224, 0.225]
 
 _frame_transform = transforms.Compose(
     [
         transforms.Resize((IMG_SIZE, IMG_SIZE), antialias=True),
         transforms.ToTensor(),
-        transforms.Normalize(mean=_IMAGENET_MEAN, std=_IMAGENET_STD),
+        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ]
 )
 
@@ -175,8 +175,8 @@ def _load_from_hdf5(h5_path: Path, h5_index: int) -> torch.Tensor:
     with h5py.File(h5_path, "r") as f:
         frames_np: np.ndarray = f["video"][h5_index]  # (T, C, H, W) uint8
     frames = frames_np.astype(np.float32) / 255.0
-    mean = np.array(_IMAGENET_MEAN, dtype=np.float32)[:, None, None]  # (3, 1, 1)
-    std = np.array(_IMAGENET_STD, dtype=np.float32)[:, None, None]
+    mean = np.array(IMAGENET_MEAN, dtype=np.float32)[:, None, None]  # (3, 1, 1)
+    std = np.array(IMAGENET_STD, dtype=np.float32)[:, None, None]
     frames = (frames - mean) / std  # broadcast over T: (T, C, H, W)
     return torch.from_numpy(frames).unsqueeze(0)  # (1, T, C, H, W)
 

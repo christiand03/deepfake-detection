@@ -22,6 +22,7 @@ from src.models.VideoMAE_module import VideoMAEModule  # noqa: E402
 from src.utils import (  # noqa: E402
     RankedLogger,
     extras,
+    inverse_normalize_frame,
     task_wrapper,
 )
 
@@ -62,13 +63,7 @@ def explain_model(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     frame_idx = cfg.explain.get("frame_idx", 0)
 
-    # Issue 6: Proper ImageNet inverse normalization so the displayed frame matches
-    # exactly what the model received. min-max rescale would shift colors/contrast.
-    imagenet_mean = torch.tensor([0.485, 0.456, 0.406])
-    imagenet_std = torch.tensor([0.229, 0.224, 0.225])
-    img_tensor = pixel_values[0, frame_idx].detach().cpu()  # (C, H, W)
-    img_tensor = img_tensor * imagenet_std[:, None, None] + imagenet_mean[:, None, None]
-    img = img_tensor.permute(1, 2, 0).numpy().clip(0.0, 1.0)
+    img = inverse_normalize_frame(pixel_values[0, frame_idx])
 
     hm = heatmap[0, frame_idx].detach().cpu().numpy()
 

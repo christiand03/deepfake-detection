@@ -17,14 +17,14 @@ import torch
 from einops import rearrange
 from torch.utils.data import Dataset
 
+from src.utils.vision_constants import IMAGENET_MEAN, IMAGENET_STD
+
 if TYPE_CHECKING:
     import numpy as np
 
 # ImageNet normalisation constants — (1, C, 1, 1) for broadcasting over (T, C, H, W).
-# Single source of truth shared by DeepfakeHDF5Dataset and MultimodalHDF5Dataset;
-# previously duplicated as class-level attributes in each.
-_IMAGENET_MEAN: torch.Tensor = rearrange(torch.tensor([0.485, 0.456, 0.406]), "c -> 1 c 1 1")
-_IMAGENET_STD: torch.Tensor = rearrange(torch.tensor([0.229, 0.224, 0.225]), "c -> 1 c 1 1")
+_IMAGENET_MEAN: torch.Tensor = rearrange(torch.tensor(IMAGENET_MEAN), "c -> 1 c 1 1")
+_IMAGENET_STD: torch.Tensor = rearrange(torch.tensor(IMAGENET_STD), "c -> 1 c 1 1")
 
 
 def normalize_video_frames(video_np: np.ndarray) -> torch.Tensor:

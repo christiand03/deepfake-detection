@@ -41,6 +41,7 @@ from src.models.multimodal_module import MultimodalDeepfakeModule  # noqa: E402
 from src.utils import (  # noqa: E402
     RankedLogger,
     extras,
+    inverse_normalize_frame,
     task_wrapper,
 )
 from src.utils.audio_xai import (  # noqa: E402
@@ -55,27 +56,6 @@ from src.utils.audio_xai import (  # noqa: E402
 )
 
 log = RankedLogger(__name__, rank_zero_only=True)
-
-# ImageNet normalization constants for inverse transform — consistent with explain.py
-_IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
-_IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
-
-
-# Video helper
-
-
-def _inverse_normalize_frame(frame_tensor: torch.Tensor) -> np.ndarray:
-    """Undo ImageNet normalization and return a (H, W, 3) float32 numpy array in [0, 1].
-
-    Args:
-        frame_tensor: (C, H, W) float32 tensor in ImageNet-normalized space.
-
-    Returns:
-        (H, W, 3) float32 numpy array clipped to [0, 1].
-    """
-    img = frame_tensor.detach().cpu()
-    img = img * _IMAGENET_STD[:, None, None] + _IMAGENET_MEAN[:, None, None]
-    return img.permute(1, 2, 0).numpy().clip(0.0, 1.0)
 
 
 # Main task
@@ -124,7 +104,7 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     smoothing_kernel: int = cfg.explain.get("smoothing_kernel", 160)
 
     # Prepare video data
-    img = _inverse_normalize_frame(pixel_values[0, frame_idx])
+    img = inverse_normalize_frame(pixel_values[0, frame_idx])
     hm = video_heatmap[0, frame_idx].detach().cpu().numpy()
     hm_vmax = np.max(np.abs(hm))
 
