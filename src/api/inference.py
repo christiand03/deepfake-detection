@@ -551,6 +551,37 @@ def run_video_inference_h5(
     }
 
 
+def run_video_inference_fast(clip_path: Path) -> tuple[str, float]:
+    """Run video deepfake detection without heatmap generation.
+
+    Intended for batch evaluation (e.g. robustness / adversarial sweeps) where
+    per-frame AttnLRP heatmaps are not required.  Significantly faster than
+    :func:`run_video_inference` because ``_compute_heatmaps_chunked`` is skipped.
+
+    Args:
+        clip_path: Path to the MP4 clip.
+
+    Returns:
+        ``(verdict, confidence)`` where *verdict* is ``"FAKE"`` or ``"REAL"``
+        and *confidence* is the probability of the predicted class.
+
+    Raises:
+        ModelNotReadyError: If the VideoMAE checkpoint is not configured.
+    """
+    model = get_video_model()
+    all_frames = _load_all_frames(clip_path)  # (N, C, H, W)
+    n_frames = all_frames.shape[0]
+    indices = np.linspace(0, n_frames - 1, NUM_FRAMES, dtype=int).tolist()
+    pixel_values = all_frames[indices].unsqueeze(0).to(_device)  # (1, 16, C, H, W)
+    with torch.no_grad():
+        logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
+    probs = torch.softmax(logits, dim=-1)[0]
+    fake_prob = probs[1].item()
+    verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
+    confidence = fake_prob if verdict == "FAKE" else probs[0].item()
+    return verdict, confidence
+
+
 # ── Audio preprocessing ───────────────────────────────────────────────────────
 
 
@@ -740,6 +771,40 @@ def run_audio_inference(clip_path: Path) -> dict | None:
         "wordSegments": word_segments,
         "frequencyBands": frequency_bands,
     }
+
+
+def run_audio_inference_score(clip_path: Path) -> tuple[str, float] | None:
+    """Run Wav2Vec2 deepfake detection without LRP / word-segment analysis.
+
+    Intended for batch evaluation sweeps where only the verdict and confidence
+    are needed.  Significantly faster than :func:`run_audio_inference` because
+    the Input × Gradient backward pass and WhisperX transcription are skipped.
+
+    Args:
+        clip_path: Path to the MP4 clip.
+
+    Returns:
+        ``(verdict, confidence)`` or ``None`` if audio cannot be extracted or
+        the audio model checkpoint is not configured.
+    """
+    try:
+        waveform_np, _ = _load_audio(clip_path)
+    except Exception:  # noqa: BLE001
+        log.warning("Audio loading failed for %s — skipping audio score", clip_path)
+        return None
+    try:
+        model = get_audio_model()
+    except ModelNotReadyError:
+        return None
+    waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
+    waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / torch.sqrt(waveform_tensor.var() + 1e-7)
+    with torch.no_grad():
+        logits = model.net(waveform_tensor).logits  # (1, 2)
+    probs = torch.softmax(logits, dim=-1)[0]
+    fake_prob = probs[1].item()
+    verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
+    confidence = fake_prob if verdict == "FAKE" else probs[0].item()
+    return verdict, confidence
 
 
 # ── PGD / FGSM white-box attack ───────────────────────────────────────────────
