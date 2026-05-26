@@ -30,7 +30,6 @@ export function VideoPanel({
   onClipChange,
   onScanningChange,
 }: VideoPanelProps) {
-  const xaiMode = 'lrp'
   const [clips, setClips] = useState<ClipMeta[]>([])
   const [selectedId, setSelectedId] = useState<string>('')
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.55)
@@ -87,7 +86,7 @@ export function VideoPanel({
   }
 
   function handleAnalyze() {
-    if (selectedId) analyze(selectedId, xaiMode)
+    if (selectedId) analyze(selectedId)
   }
 
   if (!selectedClip) return null

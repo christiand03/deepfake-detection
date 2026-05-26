@@ -94,7 +94,6 @@ class AnalysisResultSchema(BaseModel):
     confidence: float
     perFrameScores: list[float]
     heatmapFrames: list[str]
-    xaiMode: Literal["lrp", "rollout"]
     anomalyRegions: list[AnomalyRegionSchema]
     audio: AudioAnalysisSchema | None = None
     phase3: Phase3ResultSchema | None = None

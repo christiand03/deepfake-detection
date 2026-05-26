@@ -5,7 +5,7 @@
  * analyzeClip always uses the real backend — no mock path.
  */
 
-import type { AnalysisResult, ClipMeta, Phase3Result, Phase4Result, XaiMode } from '../types/analysis'
+import type { AnalysisResult, ClipMeta, Phase3Result, Phase4Result } from '../types/analysis'
 import { DEMO_CLIPS, makeMockPhase3Result, makeMockPhase4Result } from '../lib/mockData'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
@@ -37,9 +37,8 @@ export async function fetchClips(): Promise<ClipMeta[]> {
 
 export async function analyzeClip(
   clipId: string,
-  xaiMode: XaiMode,
 ): Promise<AnalysisResult> {
-  const res = await fetch(`/api/analyze/${clipId}?xai_mode=${xaiMode}`, {
+  const res = await fetch(`/api/analyze/${clipId}`, {
     method: 'POST',
   })
   if (!res.ok) {

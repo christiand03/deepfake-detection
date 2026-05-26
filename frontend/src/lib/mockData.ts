@@ -191,7 +191,6 @@ export function makeMockResult(clip: ClipMeta): AnalysisResult {
     confidence,
     perFrameScores: scores,
     heatmapFrames,
-    xaiMode: 'lrp',
     anomalyRegions: isFake
       ? [
           { region: 'Mouth', score: 0.84 },

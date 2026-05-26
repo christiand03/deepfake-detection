@@ -8,9 +8,8 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 
 from src.api.clip_registry import get_clip_h5_metadata, get_clip_video_path, load_clips
 from src.api.inference import (
@@ -34,13 +33,13 @@ _PROJECT_ROOT = Path(__file__).parents[3]
 _CACHE_DIR = _PROJECT_ROOT / Path(os.environ.get("ANALYSIS_CACHE_DIR", "data/analysis_cache"))
 
 
-def _cache_path(clip_id: str, xai_mode: str) -> Path:
-    """Return the JSON cache file path for a (clip_id, xai_mode) pair.
+def _cache_path(clip_id: str) -> Path:
+    """Return the JSON cache file path for a clip_id.
 
     Raises ``ValueError`` if the resolved path would escape ``_CACHE_DIR``
     (guards against path-traversal via a crafted ``clip_id``).
     """
-    candidate = (_CACHE_DIR / f"{clip_id}__{xai_mode}.json").resolve()
+    candidate = (_CACHE_DIR / f"{clip_id}.json").resolve()
     # Ensure the resolved path stays inside the cache directory.
     cache_root = _CACHE_DIR.resolve()
     if not str(candidate).startswith(str(cache_root) + os.sep) and candidate != cache_root:
@@ -48,13 +47,13 @@ def _cache_path(clip_id: str, xai_mode: str) -> Path:
     return candidate
 
 
-def _load_cached(clip_id: str, xai_mode: str) -> AnalysisResultSchema | None:
+def _load_cached(clip_id: str) -> AnalysisResultSchema | None:
     """Load a previously cached analysis result from disk.
 
     Returns ``None`` if no cache file exists or if deserialization fails
     (e.g. schema changed between runs).
     """
-    path = _cache_path(clip_id, xai_mode)
+    path = _cache_path(clip_id)
     if not path.exists():
         return None
     try:
@@ -72,18 +71,18 @@ def _save_cache(result: AnalysisResultSchema) -> None:
     """
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        path = _cache_path(result.clipId, result.xaiMode)
+        path = _cache_path(result.clipId)
         path.write_text(result.model_dump_json(), encoding="utf-8")
         log.debug("Analysis result cached to %s", path)
     except Exception:  # noqa: BLE001
         log.warning("Failed to write analysis cache for clip %s.", result.clipId)
 
 
-def _run_analysis(clip_id: str, xai_mode: Literal["lrp", "rollout"]) -> AnalysisResultSchema:
+def _run_analysis(clip_id: str) -> AnalysisResultSchema:
     """Synchronous inference worker executed in the thread-pool."""
-    cached = _load_cached(clip_id, xai_mode)
+    cached = _load_cached(clip_id)
     if cached is not None:
-        log.debug("Cache hit for clip %s xai_mode=%s", clip_id, xai_mode)
+        log.debug("Cache hit for clip %s", clip_id)
         return cached
 
     # Prefer HDF5-backed inference — exact training format + full-frame heatmaps.
@@ -92,7 +91,7 @@ def _run_analysis(clip_id: str, xai_mode: Literal["lrp", "rollout"]) -> Analysis
     if h5_meta is not None:
         if not h5_meta.h5_path.exists():
             raise FileNotFoundError(f"HDF5 file missing: {h5_meta.h5_path}")
-        video_result = run_video_inference_h5(h5_meta, xai_mode)
+        video_result = run_video_inference_h5(h5_meta)
         video_path = h5_meta.video_path
     else:
         clip_path = get_clip_video_path(clip_id)
@@ -100,7 +99,7 @@ def _run_analysis(clip_id: str, xai_mode: Literal["lrp", "rollout"]) -> Analysis
             raise ValueError(f"Clip '{clip_id}' not found in registry.")
         if not clip_path.exists():
             raise FileNotFoundError(f"Video file missing: {clip_path}")
-        video_result = run_video_inference(clip_path, xai_mode)
+        video_result = run_video_inference(clip_path)
         video_path = clip_path
 
     # Resolve whether this clip has audio
@@ -121,7 +120,6 @@ def _run_analysis(clip_id: str, xai_mode: Literal["lrp", "rollout"]) -> Analysis
         confidence=video_result["confidence"],
         perFrameScores=video_result["perFrameScores"],
         heatmapFrames=video_result["heatmapFrames"],
-        xaiMode=xai_mode,
         anomalyRegions=video_result["anomalyRegions"],
         audio=audio_result,
         cropBox=crop_box,
@@ -133,17 +131,16 @@ def _run_analysis(clip_id: str, xai_mode: Literal["lrp", "rollout"]) -> Analysis
 @router.post("/{clip_id}", response_model=AnalysisResultSchema)
 async def analyze_clip(
     clip_id: str,
-    xai_mode: Literal["lrp", "rollout"] = Query("lrp", alias="xai_mode"),
 ) -> AnalysisResultSchema:
-    """Run deepfake detection + xAI on the specified clip.
+    """Run deepfake detection + AttnLRP xAI on the specified clip.
 
     Returns a full :class:`AnalysisResultSchema` including per-frame confidence
-    scores, seismic-coloured LRP heatmap PNGs (base64), and audio analysis when
-    available.
+    scores, seismic-coloured AttnLRP heatmap PNGs (base64), and audio analysis
+    when available.
     """
     loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(_executor, _run_analysis, clip_id, xai_mode)
+        return await loop.run_in_executor(_executor, _run_analysis, clip_id)
     except ModelNotReadyError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (ValueError, FileNotFoundError) as exc:

@@ -22,7 +22,7 @@ def _run(req: AdversarialRequest) -> Phase4ResultSchema:
         raise FileNotFoundError(f"Video file not found for clip '{req.clip_id}'.")
 
     # We need the clean result for attention-shift computation
-    base = run_video_inference(clip_path, xai_mode="lrp")
+    base = run_video_inference(clip_path)
 
     result = run_adversarial_inference(
         clip_path=clip_path,

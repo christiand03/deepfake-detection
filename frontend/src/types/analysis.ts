@@ -88,7 +88,6 @@ export interface AnalysisResult {
    * Each string is a full "data:image/png;base64,..." URI ready for canvas drawImage.
    */
   heatmapFrames: string[]
-  xaiMode: 'lrp' | 'rollout'
   /** Top spatial anomaly regions with their LRP contribution scores */
   anomalyRegions: { region: string; score: number }[]
   audio: AudioAnalysis | null
@@ -102,5 +101,3 @@ export type AnalysisState =
   | { status: 'scanning' }
   | { status: 'done'; result: AnalysisResult }
   | { status: 'error'; message: string }
-
-export type XaiMode = 'lrp' | 'rollout'

@@ -2,9 +2,9 @@
  * VerdictPanel — right column of the main layout (Phase 3).
  *
  * Shows:
- *  • Idle:    XaiModeToggle + "run analysis" empty state
- *  • Scanning: skeleton shimmer blocks + XaiModeToggle (disabled)
- *  • Done:    VerdictGauge + AnomalyRegionBars + XaiModeToggle
+ *  • Idle:    "run analysis" empty state
+ *  • Scanning: skeleton shimmer blocks
+ *  • Done:    VerdictGauge + AnomalyRegionBars
  */
 
 import { motion, AnimatePresence } from 'framer-motion'

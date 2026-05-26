@@ -429,17 +429,15 @@ def _compute_heatmaps_chunked(
 
 def run_video_inference(
     clip_path: Path,
-    xai_mode: Literal["lrp", "rollout"],
 ) -> dict:
-    """Run video deepfake detection with per-frame xAI heatmaps.
+    """Run video deepfake detection with per-frame AttnLRP heatmaps.
 
     Args:
         clip_path: Path to the MP4 clip.
-        xai_mode: ``"lrp"`` for AttnLRP, ``"rollout"`` for Attention Rollout.
 
     Returns:
         Dict with keys: verdict, confidence, perFrameScores, heatmapFrames,
-        xaiMode, anomalyRegions.
+        anomalyRegions.
 
     Raises:
         ModelNotReadyError: If the VideoMAE checkpoint is not configured.
@@ -461,11 +459,8 @@ def run_video_inference(
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     confidence = fake_prob if verdict == "FAKE" else probs[0].item()
 
-    # Heatmap: one explain() pass per 16-frame chunk — covers the full video
-    if xai_mode == "lrp":
-        heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
-    else:
-        heatmap_np = np.full((n_frames, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
+    # Heatmap: one AttnLRP pass per 16-frame chunk — covers the full video
+    heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
 
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
     heatmap_frames = [_array_to_data_uri(heatmap_np[i]) for i in range(n_frames)]
@@ -476,14 +471,12 @@ def run_video_inference(
         "confidence": confidence,
         "perFrameScores": per_frame_scores,
         "heatmapFrames": heatmap_frames,
-        "xaiMode": xai_mode,
         "anomalyRegions": anomaly_regions,
     }
 
 
 def run_video_inference_h5(
     h5_metadata: ClipH5Metadata,
-    xai_mode: Literal["lrp", "rollout"],
 ) -> dict:
     """Run video deepfake detection from preprocessed HDF5 data.
 
@@ -498,11 +491,10 @@ def run_video_inference_h5(
     Args:
         h5_metadata: :class:`~src.api.clip_registry.ClipH5Metadata` from
                      :func:`~src.api.clip_registry.get_clip_h5_metadata`.
-        xai_mode:    ``"lrp"`` for AttnLRP, ``"rollout"`` for Attention Rollout.
 
     Returns:
         Dict with keys: verdict, confidence, perFrameScores, heatmapFrames,
-        xaiMode, anomalyRegions, cropBox.
+        anomalyRegions, cropBox.
 
     Raises:
         ModelNotReadyError: If the VideoMAE checkpoint is not configured.
@@ -528,10 +520,7 @@ def run_video_inference_h5(
     all_frames = _load_all_frames_cropped(h5_metadata.video_path, cx1, cy1, cx2, cy2)
     n_frames = all_frames.shape[0]
 
-    if xai_mode == "lrp":
-        heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
-    else:
-        heatmap_np = np.full((n_frames, IMG_SIZE, IMG_SIZE), fake_prob * 2 - 1, dtype=np.float32)
+    heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
 
     # Per-frame scores: mean absolute LRP relevance
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
@@ -550,7 +539,6 @@ def run_video_inference_h5(
         "confidence": confidence,
         "perFrameScores": per_frame_scores,
         "heatmapFrames": heatmap_frames,
-        "xaiMode": xai_mode,
         "anomalyRegions": anomaly_regions,
         "cropBox": {
             "x1": cx1,
@@ -841,7 +829,7 @@ def run_robustness_inference(
         except Exception as exc:
             raise RuntimeError(f"FFmpeg degradation failed: {exc}") from exc
 
-        degraded = run_video_inference(degraded_path, xai_mode="lrp")
+        degraded = run_video_inference(degraded_path)
 
     return {
         "degradedHeatmapFrames": degraded["heatmapFrames"],
