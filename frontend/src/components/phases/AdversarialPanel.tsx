@@ -190,6 +190,9 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
   const [method, setMethod] = useState<'FGSM' | 'PGD'>('FGSM')
   const [epsilon, setEpsilon] = useState(0.03)
   const [steps, setSteps] = useState(20)
+  const [useMultimodal, setUseMultimodal] = useState(false)
+  const [attackModalities, setAttackModalities] = useState<'video' | 'audio' | 'both'>('both')
+  const [audioEpsilon, setAudioEpsilon] = useState(0.03)
   const [phase4, setPhase4] = useState<Phase4Result | null>(null)
   const [isRunning, setIsRunning] = useState(false)
 
@@ -203,7 +206,16 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
     if (!result) return
     setIsRunning(true)
     setPhase4(null)
-    runAdversarialAttack(result.clipId, method, epsilon, steps, result)
+    runAdversarialAttack(
+      result.clipId,
+      method,
+      epsilon,
+      steps,
+      result,
+      useMultimodal,
+      attackModalities,
+      audioEpsilon,
+    )
       .then(p4 => setPhase4(p4))
       .catch(err => showError(`Adversarial attack failed: ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setIsRunning(false))
@@ -412,6 +424,163 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
             </div>
           )}
 
+          {/* Multimodal toggle — only when clip has audio */}
+          {result?.audio != null && (
+            <div
+              style={{
+                marginBottom: 16,
+                borderTop: '1px solid #2a2f42',
+                paddingTop: 14,
+              }}
+            >
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  cursor: isRunning ? 'not-allowed' : 'pointer',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={useMultimodal}
+                  disabled={isRunning}
+                  onChange={e => setUseMultimodal(e.target.checked)}
+                  style={{ accentColor: '#a855f7', cursor: 'inherit' }}
+                />
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    color: useMultimodal ? '#a855f7' : '#e8eaf0',
+                    fontWeight: 600,
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  MULTIMODAL MODEL
+                </span>
+              </label>
+              <div
+                style={{
+                  marginTop: 4,
+                  fontSize: 9,
+                  fontFamily: 'monospace',
+                  color: '#4d5470',
+                }}
+              >
+                Attack via joint video+audio model
+              </div>
+
+              {useMultimodal && (
+                <div style={{ marginTop: 12 }}>
+                  {/* Modality selector */}
+                  <div
+                    style={{
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      color: '#e8eaf0',
+                      fontWeight: 600,
+                      marginBottom: 6,
+                    }}
+                  >
+                    Target Modalities
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+                    {(['video', 'audio', 'both'] as const).map(m => (
+                      <button
+                        key={m}
+                        onClick={() => setAttackModalities(m)}
+                        disabled={isRunning}
+                        style={{
+                          flex: 1,
+                          padding: '5px 0',
+                          borderRadius: 5,
+                          border: `1px solid ${
+                            attackModalities === m
+                              ? 'rgba(168,85,247,0.5)'
+                              : '#2a2f42'
+                          }`,
+                          backgroundColor:
+                            attackModalities === m
+                              ? 'rgba(168,85,247,0.12)'
+                              : '#0d0f14',
+                          color:
+                            attackModalities === m ? '#a855f7' : '#4d5470',
+                          fontFamily: 'monospace',
+                          fontSize: 9,
+                          fontWeight: attackModalities === m ? 700 : 400,
+                          cursor: isRunning ? 'not-allowed' : 'pointer',
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Audio epsilon */}
+                  <div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        marginBottom: 4,
+                        alignItems: 'baseline',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          color: '#e8eaf0',
+                          fontWeight: 600,
+                        }}
+                      >
+                        Audio ε
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                          color: '#a855f7',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {audioEpsilon.toFixed(3)}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 9,
+                        fontFamily: 'monospace',
+                        color: '#4d5470',
+                        marginBottom: 5,
+                      }}
+                    >
+                      Audio L∞ perturbation budget
+                    </div>
+                    <input
+                      type="range"
+                      min={0.01}
+                      max={0.5}
+                      step={0.01}
+                      value={audioEpsilon}
+                      disabled={isRunning}
+                      onChange={e => setAudioEpsilon(Number(e.target.value))}
+                      style={{
+                        width: '100%',
+                        accentColor: '#a855f7',
+                        cursor: isRunning ? 'not-allowed' : 'pointer',
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             onClick={handleAttack}
             disabled={!hasResult || isRunning}
@@ -532,6 +701,35 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
 
                 {/* Attention shifts */}
                 <AttentionShiftTable shifts={phase4.attentionShift} />
+
+                {/* Audio frequency-band shift (multimodal attacks only) */}
+                {phase4.audioAttentionShift && phase4.audioAttentionShift.length > 0 && (
+                  <>
+                    <div
+                      style={{
+                        fontSize: 9,
+                        fontFamily: 'monospace',
+                        color: '#a855f7',
+                        letterSpacing: '0.15em',
+                        marginTop: 4,
+                      }}
+                    >
+                      AUDIO FREQUENCY SHIFT
+                      {phase4.attackModalities && (
+                        <span
+                          style={{
+                            marginLeft: 8,
+                            color: '#4d5470',
+                            textTransform: 'uppercase',
+                          }}
+                        >
+                          [{phase4.attackModalities}]
+                        </span>
+                      )}
+                    </div>
+                    <AttentionShiftTable shifts={phase4.audioAttentionShift} />
+                  </>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

@@ -85,6 +85,8 @@ class Phase4ResultSchema(BaseModel):
     attackMethod: Literal["FGSM", "PGD"]
     epsilon: float
     attentionShift: list[AttentionShiftSchema]
+    audioAttentionShift: list[AttentionShiftSchema] | None = None
+    attackModalities: str | None = None
 
 
 class CropBoxSchema(BaseModel):
@@ -129,3 +131,8 @@ class AdversarialRequest(BaseModel):
     method: Literal["FGSM", "PGD"] = "FGSM"
     epsilon: float = Field(0.03, gt=0.0, le=0.5, description="L∞ perturbation budget")
     steps: int = Field(20, ge=1, le=100, description="Gradient-descent iterations (PGD only)")
+    use_multimodal: bool = False
+    attack_modalities: Literal["video", "audio", "both"] = "both"
+    audio_epsilon: float = Field(
+        0.03, gt=0.0, le=0.5, description="Audio L\u221e perturbation budget (multimodal only)"
+    )

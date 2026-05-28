@@ -8,7 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 
 from src.api.clip_registry import get_clip_video_path
-from src.api.inference import ModelNotReadyError, run_adversarial_inference, run_video_inference
+from src.api.inference import (
+    ModelNotReadyError,
+    run_adversarial_inference,
+    run_multimodal_adversarial_inference,
+    run_video_inference,
+)
 from src.api.schemas import AdversarialRequest, Phase4ResultSchema
 
 router = APIRouter(prefix="/adversarial", tags=["adversarial"])
@@ -24,13 +29,24 @@ def _run(req: AdversarialRequest) -> Phase4ResultSchema:
     # We need the clean result for attention-shift computation
     base = run_video_inference(clip_path)
 
-    result = run_adversarial_inference(
-        clip_path=clip_path,
-        method=req.method,  # type: ignore[arg-type]
-        epsilon=req.epsilon,
-        steps=req.steps,
-        base_result=base,
-    )
+    if req.use_multimodal:
+        result = run_multimodal_adversarial_inference(
+            clip_path=clip_path,
+            method=req.method,  # type: ignore[arg-type]
+            epsilon=req.epsilon,
+            audio_epsilon=req.audio_epsilon,
+            steps=req.steps,
+            attack_modalities=req.attack_modalities,  # type: ignore[arg-type]
+            base_result=base,
+        )
+    else:
+        result = run_adversarial_inference(
+            clip_path=clip_path,
+            method=req.method,  # type: ignore[arg-type]
+            epsilon=req.epsilon,
+            steps=req.steps,
+            base_result=base,
+        )
     return Phase4ResultSchema(**result)
 
 

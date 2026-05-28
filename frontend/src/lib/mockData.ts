@@ -334,6 +334,8 @@ export function makeMockPhase4Result(
   attackMethod: 'FGSM' | 'PGD',
   epsilon: number,
   baseResult: AnalysisResult,
+  useMultimodal?: boolean,
+  attackModalities?: string,
 ): Phase4Result {
   const isFake = baseResult.verdict === 'FAKE'
   const attackStrength = attackMethod === 'PGD' ? epsilon * 2.5 : epsilon * 1.5
@@ -347,7 +349,7 @@ export function makeMockPhase4Result(
   )
   const differenceFrames = baseResult.perFrameScores.map(() => makeDifferenceDataUri(epsilon))
 
-  return {
+  const base: Phase4Result = {
     perturbedFrames,
     perturbedConfidence,
     differenceFrames,
@@ -365,4 +367,15 @@ export function makeMockPhase4Result(
       },
     ],
   }
+
+  if (useMultimodal) {
+    base.audioAttentionShift = [
+      { region: 'Low 0\u2013500 Hz', before: 0.21, after: Math.max(0.02, 0.21 - attackStrength * 0.4) },
+      { region: 'Mid 500\u20134 kHz', before: 0.54, after: Math.max(0.03, 0.54 - attackStrength * 0.7) },
+      { region: 'High 4\u20138 kHz', before: 0.25, after: Math.min(0.88, 0.25 + attackStrength * 0.9) },
+    ]
+    base.attackModalities = attackModalities ?? 'both'
+  }
+
+  return base
 }

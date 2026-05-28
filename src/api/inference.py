@@ -40,6 +40,7 @@ from src.utils.vision_constants import IMAGENET_MEAN, IMAGENET_STD
 
 if TYPE_CHECKING:
     from src.api.clip_registry import ClipH5Metadata as ClipH5Metadata
+    from src.models.multimodal_module import MultimodalDeepfakeModule
     from src.models.VideoMAE_module import VideoMAEModule
     from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule
 
@@ -93,8 +94,10 @@ class ModelNotReadyError(RuntimeError):
 
 _video_model: VideoMAEModule | None = None
 _audio_model: Wav2Vec2DeepfakeModule | None = None
+_multimodal_model: MultimodalDeepfakeModule | None = None
 _video_model_lock = threading.Lock()
 _audio_model_lock = threading.Lock()
+_multimodal_model_lock = threading.Lock()
 _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Register safe globals once at module import time
@@ -147,14 +150,39 @@ def get_audio_model() -> Wav2Vec2DeepfakeModule:
     return _audio_model
 
 
+def get_multimodal_model() -> MultimodalDeepfakeModule:
+    """Return the loaded MultimodalDeepfakeModule; load from checkpoint on first call."""
+    global _multimodal_model
+    if _multimodal_model is None:
+        with _multimodal_model_lock:
+            if _multimodal_model is None:  # re-check after acquiring lock
+                ckpt = os.environ.get("MULTIMODAL_CKPT_PATH")
+                if not ckpt:
+                    raise ModelNotReadyError(
+                        "MULTIMODAL_CKPT_PATH is not set. Train the multimodal model first, then set this environment variable."
+                    )
+                if not Path(ckpt).exists():
+                    raise ModelNotReadyError(f"Multimodal checkpoint not found: {ckpt}")
+                from src.models.multimodal_module import MultimodalDeepfakeModule as _MM
+
+                log.info("Loading MultimodalDeepfakeModule from %s …", ckpt)
+                _multimodal_model = _MM.load_from_checkpoint(ckpt, weights_only=False)
+                _multimodal_model.eval()
+                _multimodal_model = _multimodal_model.to(_device)
+                log.info("MultimodalDeepfakeModule loaded on %s", _device)
+    return _multimodal_model
+
+
 def models_status() -> dict:
     """Return a dict summarising which models are currently loaded."""
     return {
         "video_model_loaded": _video_model is not None,
         "audio_model_loaded": _audio_model is not None,
+        "multimodal_model_loaded": _multimodal_model is not None,
         "device": str(_device),
         "videomae_ckpt_configured": bool(os.environ.get("VIDEOMAE_CKPT_PATH")),
         "wav2vec2_ckpt_configured": bool(os.environ.get("WAV2VEC2_CKPT_PATH")),
+        "multimodal_ckpt_configured": bool(os.environ.get("MULTIMODAL_CKPT_PATH")),
     }
 
 
@@ -1172,3 +1200,244 @@ def run_adversarial_batch(
         shift_intensity = 0.0
 
     return adv_verdict, adv_confidence, shift_intensity
+
+
+# ── Multimodal PGD / FGSM white-box attack ────────────────────────────────────
+
+
+def _pgd_attack_multimodal(
+    model: MultimodalDeepfakeModule,
+    pixel_values: torch.Tensor,
+    input_values: torch.Tensor,
+    target_class: int,
+    epsilon: float,
+    audio_epsilon: float,
+    steps: int,
+    step_size: float,
+    step_size_audio: float,
+    attack_modalities: Literal["video", "audio", "both"],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Joint PGD white-box attack on video and/or audio via MultimodalDeepfakeModule.
+
+    A single forward+backward pass per step preserves cross-modal attention
+    gradients flowing through ``CrossAttentionFusion``.  Video and audio
+    perturbations are clipped independently to their respective L∞ balls.
+
+    Args:
+        model:             Loaded ``MultimodalDeepfakeModule`` in eval mode.
+        pixel_values:      ``(1, 16, 3, 224, 224)`` float32 video tensor.
+        input_values:      ``(1, T_samples)`` float32 z-score-normalised waveform.
+        target_class:      Class index to maximise cross-entropy towards.
+        epsilon:           L∞ budget for video perturbation.
+        audio_epsilon:     L∞ budget for audio perturbation.
+        steps:             Gradient-descent iterations (1 = FGSM).
+        step_size:         Per-step size for video (epsilon for FGSM).
+        step_size_audio:   Per-step size for audio (audio_epsilon for FGSM).
+        attack_modalities: Which inputs to perturb: ``"video"``, ``"audio"``,
+                           or ``"both"``.
+
+    Returns:
+        ``(adv_pixel_values, adv_input_values)`` — both detached, clamped to
+        their respective ε-balls.
+    """
+    attack_video = attack_modalities in ("video", "both")
+    attack_audio = attack_modalities in ("audio", "both")
+
+    pv_orig = pixel_values.clone().detach()
+    iv_orig = input_values.clone().detach()
+    target_t = torch.tensor([target_class], device=_device)
+
+    # Initialise with random uniform noise within the ε-ball.
+    pv_adv = pv_orig + torch.zeros_like(pv_orig).uniform_(-epsilon, epsilon)
+    pv_adv = torch.clamp(pv_adv, pv_orig.min(), pv_orig.max()).detach()
+    iv_adv = iv_orig + torch.zeros_like(iv_orig).uniform_(-audio_epsilon, audio_epsilon)
+    iv_adv = iv_adv.detach()
+
+    for _ in range(steps):
+        if attack_video:
+            pv_adv = pv_adv.requires_grad_(True)
+        if attack_audio:
+            iv_adv = iv_adv.requires_grad_(True)
+
+        # Single joint forward pass — preserves cross-modal attention gradients.
+        logits = model(pixel_values=pv_adv, input_values=iv_adv)
+        loss = F.cross_entropy(logits, target_t)
+        model.zero_grad()
+        loss.backward()
+
+        if attack_video and pv_adv.grad is not None:
+            grad_sign = pv_adv.grad.detach().sign()
+            pv_adv = pv_adv.detach() + step_size * grad_sign
+            delta = torch.clamp(pv_adv - pv_orig, min=-epsilon, max=epsilon)
+            pv_adv = torch.clamp(pv_orig + delta, pv_orig.min(), pv_orig.max()).detach()
+        else:
+            pv_adv = pv_adv.detach()
+
+        if attack_audio and iv_adv.grad is not None:
+            grad_sign = iv_adv.grad.detach().sign()
+            iv_adv = iv_adv.detach() + step_size_audio * grad_sign
+            delta = torch.clamp(iv_adv - iv_orig, min=-audio_epsilon, max=audio_epsilon)
+            iv_adv = (iv_orig + delta).detach()
+        else:
+            iv_adv = iv_adv.detach()
+
+    return pv_adv, iv_adv
+
+
+# ── Multimodal adversarial inference ─────────────────────────────────────────
+
+
+def run_multimodal_adversarial_inference(
+    clip_path: Path,
+    method: Literal["FGSM", "PGD"],
+    epsilon: float,
+    audio_epsilon: float,
+    steps: int,
+    attack_modalities: Literal["video", "audio", "both"],
+    base_result: dict,
+) -> dict:
+    """Multimodal adversarial attack using ``MultimodalDeepfakeModule``.
+
+    Jointly perturbs video and/or audio in a single backward pass per step so
+    that cross-modal attention gradients are preserved.  Returns a ``Phase4``
+    dict extended with ``audioAttentionShift`` (frequency-band LRP shift) and
+    ``attackModalities``.
+
+    Args:
+        clip_path:         Path to the original MP4 clip.
+        method:            ``"FGSM"`` (1 step) or ``"PGD"`` (multi-step).
+        epsilon:           L∞ budget for the video modality.
+        audio_epsilon:     L∞ budget for the audio modality.
+        steps:             PGD iterations; ignored for FGSM.
+        attack_modalities: Which modalities to perturb.
+        base_result:       Clean video-inference dict (must contain
+                           ``"verdict"``, ``"anomalyRegions"``).
+
+    Returns:
+        Phase4 result dict with additional keys ``audioAttentionShift`` and
+        ``attackModalities``.
+    """
+    import subprocess
+
+    model = get_multimodal_model()
+
+    # ── Preprocessing ─────────────────────────────────────────────────────────
+    pixel_values = _preprocess_video(clip_path).to(_device)
+
+    try:
+        waveform_np, sample_rate = _load_audio(clip_path)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Audio extraction failed for {clip_path.name}: {exc}") from exc
+
+    waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)
+    # Z-score normalise (Wav2Vec2 expects values close to zero-mean unit-variance).
+    waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / (waveform_tensor.std() + 1e-7)
+
+    # ── Attack schedule ───────────────────────────────────────────────────────
+    clean_verdict: Literal["FAKE", "REAL"] = base_result["verdict"]
+    target_class = 1 if clean_verdict == "FAKE" else 0
+    n_steps = 1 if method == "FGSM" else steps
+    step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
+    step_size_audio = audio_epsilon if method == "FGSM" else audio_epsilon / steps * 2.5
+
+    adv_pv, adv_iv = _pgd_attack_multimodal(
+        model,
+        pixel_values,
+        waveform_tensor,
+        target_class,
+        epsilon,
+        audio_epsilon,
+        n_steps,
+        step_size,
+        step_size_audio,
+        attack_modalities,
+    )
+
+    # ── Adversarial confidence ────────────────────────────────────────────────
+    with torch.no_grad():
+        logits_adv = model(pixel_values=adv_pv, input_values=adv_iv)
+    probs_adv = torch.softmax(logits_adv, dim=-1)[0]
+    adv_fake_prob = probs_adv[1].item()
+    adv_confidence = adv_fake_prob if adv_fake_prob > 0.5 else probs_adv[0].item()
+
+    # ── Clean LRP ─────────────────────────────────────────────────────────────
+    try:
+        video_hm_clean, audio_rel_clean, _ = model.explain(
+            pixel_values=pixel_values,
+            input_values=waveform_tensor,
+        )
+        video_hm_clean_np = video_hm_clean.detach().cpu().numpy()[0]  # (T, H, W)
+        audio_rel_clean_np = audio_rel_clean.detach().cpu().numpy()[0]  # (T_samples,)
+    except Exception:  # noqa: BLE001
+        video_hm_clean_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        audio_rel_clean_np = np.zeros_like(waveform_np)
+
+    # ── Adversarial LRP ───────────────────────────────────────────────────────
+    try:
+        video_hm_adv, audio_rel_adv, _ = model.explain(
+            pixel_values=adv_pv,
+            input_values=adv_iv,
+        )
+        video_hm_adv_np = video_hm_adv.detach().cpu().numpy()[0]  # (T, H, W)
+        audio_rel_adv_np = audio_rel_adv.detach().cpu().numpy()[0]  # (T_samples,)
+    except Exception:  # noqa: BLE001
+        video_hm_adv_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        audio_rel_adv_np = np.zeros_like(waveform_np)
+
+    # ── Perturbed video frames ────────────────────────────────────────────────
+    hm_adv_norm = video_hm_adv_np / (np.max(np.abs(video_hm_adv_np)) + 1e-8)
+    perturbed_frames = [_array_to_data_uri(hm_adv_norm[i]) for i in range(NUM_FRAMES)]
+
+    # Difference map: L1 pixel delta averaged over channels, normalised to [0, 1].
+    diff = (adv_pv - pixel_values).abs().detach().cpu().numpy()[0]  # (T, C, H, W)
+    diff_grey = diff.mean(axis=1)  # (T, H, W)
+    diff_norm = diff_grey / (diff_grey.max() + 1e-8)
+    difference_frames = [_array_to_data_uri(diff_norm[i] * 2 - 1) for i in range(NUM_FRAMES)]
+
+    # ── Video attention shift ─────────────────────────────────────────────────
+    hm_clean_norm = video_hm_clean_np / (np.max(np.abs(video_hm_clean_np)) + 1e-8)
+    clean_regions = _extract_anomaly_regions(hm_clean_norm)
+    adv_regions = _extract_anomaly_regions(hm_adv_norm)
+    clean_by_region = {r["region"]: r["score"] for r in clean_regions}
+    attention_shift = [
+        {
+            "region": r["region"],
+            "before": float(clean_by_region.get(r["region"], 0.0)),
+            "after": float(r["score"]),
+        }
+        for r in adv_regions
+    ]
+
+    # ── Audio frequency-band attention shift ──────────────────────────────────
+    adv_waveform_np = adv_iv.squeeze(0).cpu().numpy()
+    # Trim/pad relevance arrays to match waveform length for _compute_frequency_bands.
+    t_len = len(waveform_np)
+    audio_rel_clean_trimmed = (
+        audio_rel_clean_np[:t_len]
+        if len(audio_rel_clean_np) >= t_len
+        else np.pad(audio_rel_clean_np, (0, t_len - len(audio_rel_clean_np)))
+    )
+    adv_waveform_trimmed = adv_waveform_np[:t_len] if len(adv_waveform_np) >= t_len else waveform_np
+    audio_rel_adv_trimmed = (
+        audio_rel_adv_np[:t_len]
+        if len(audio_rel_adv_np) >= t_len
+        else np.pad(audio_rel_adv_np, (0, t_len - len(audio_rel_adv_np)))
+    )
+    clean_bands = _compute_frequency_bands(waveform_np, audio_rel_clean_trimmed, sample_rate)
+    adv_bands = _compute_frequency_bands(adv_waveform_trimmed, audio_rel_adv_trimmed, sample_rate)
+    audio_attention_shift = [
+        {"region": "Low 0\u2013500 Hz", "before": clean_bands["low"], "after": adv_bands["low"]},
+        {"region": "Mid 500\u20134 kHz", "before": clean_bands["mid"], "after": adv_bands["mid"]},
+        {"region": "High 4\u20138 kHz", "before": clean_bands["high"], "after": adv_bands["high"]},
+    ]
+
+    return {
+        "perturbedFrames": perturbed_frames,
+        "perturbedConfidence": adv_confidence,
+        "differenceFrames": difference_frames,
+        "attackMethod": method,
+        "epsilon": epsilon,
+        "attentionShift": attention_shift,
+        "audioAttentionShift": audio_attention_shift,
+        "attackModalities": attack_modalities,
+    }

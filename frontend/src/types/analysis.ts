@@ -74,6 +74,8 @@ export interface Phase4Result {
   attackMethod: 'FGSM' | 'PGD'
   epsilon: number
   attentionShift: AttentionShift[]
+  audioAttentionShift?: AttentionShift[]
+  attackModalities?: string
 }
 
 export interface CropBox {

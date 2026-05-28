@@ -81,15 +81,26 @@ export async function runAdversarialAttack(
   epsilon: number,
   steps: number,
   baseResult: AnalysisResult,
+  useMultimodal?: boolean,
+  attackModalities?: 'video' | 'audio' | 'both',
+  audioEpsilon?: number,
 ): Promise<Phase4Result> {
   if (USE_MOCK) {
     await delay(method === 'FGSM' ? 1200 : 1800)
-    return makeMockPhase4Result(method, epsilon, baseResult)
+    return makeMockPhase4Result(method, epsilon, baseResult, useMultimodal, attackModalities)
   }
   const res = await fetch('/api/adversarial', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clip_id: clipId, method, epsilon, steps }),
+    body: JSON.stringify({
+      clip_id: clipId,
+      method,
+      epsilon,
+      steps,
+      ...(useMultimodal !== undefined && { use_multimodal: useMultimodal }),
+      ...(attackModalities !== undefined && { attack_modalities: attackModalities }),
+      ...(audioEpsilon !== undefined && { audio_epsilon: audioEpsilon }),
+    }),
   })
   if (!res.ok) {
     const text = await res.text()
