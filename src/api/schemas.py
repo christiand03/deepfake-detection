@@ -60,6 +60,7 @@ class Phase3ResultSchema(BaseModel):
     degradedHeatmapFrames: list[str]
     degradedConfidence: float
     params: Phase3ParamsSchema
+    attentionShift: list[AttentionShiftSchema]
 
 
 class AttentionShiftSchema(BaseModel):

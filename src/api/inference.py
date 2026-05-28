@@ -852,8 +852,7 @@ def run_robustness_inference(
     crf: int,
     fps: int,
     noise_sigma: int,
-    base_heatmap_frames: list[str],
-    base_confidence: float,
+    base_anomaly_regions: list[dict],
 ) -> dict:
     """Apply social-media degradation via FFmpeg and re-run video inference.
 
@@ -862,8 +861,10 @@ def run_robustness_inference(
         crf: H.264 CRF (18–51).
         fps: Output frame rate.
         noise_sigma: Gaussian noise σ in pixel units.
-        base_heatmap_frames: Clean heatmap frames for metadata.
-        base_confidence: Clean confidence for metadata.
+        base_anomaly_regions: Anomaly-region scores from the clean clip
+            (``_extract_anomaly_regions`` format: list of
+            ``{"region": str, "score": float}``).  Used to compute the
+            attention-shift between clean and degraded passes.
 
     Returns:
         Phase3Result dict.
@@ -896,10 +897,22 @@ def run_robustness_inference(
 
         degraded = run_video_inference(degraded_path)
 
+    # Attention-shift: compare clean vs. degraded anomaly-region scores
+    clean_by_region = {r["region"]: r["score"] for r in base_anomaly_regions}
+    attention_shift = [
+        {
+            "region": r["region"],
+            "before": float(clean_by_region.get(r["region"], 0.0)),
+            "after": float(r["score"]),
+        }
+        for r in degraded["anomalyRegions"]
+    ]
+
     return {
         "degradedHeatmapFrames": degraded["heatmapFrames"],
         "degradedConfidence": degraded["confidence"],
         "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma},
+        "attentionShift": attention_shift,
     }
 
 

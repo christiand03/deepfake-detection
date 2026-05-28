@@ -12,6 +12,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { runRobustnessTest } from '../../api/client'
 import { useErrorToast } from '../../context/ErrorToastContext'
 import type { AnalysisResult, Phase3Result } from '../../types/analysis'
+import { AttentionShiftTable } from '../shared/AttentionShiftTable'
 
 interface RobustnessPanelProps {
   result: AnalysisResult | null
@@ -579,6 +580,11 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                     phase3.degradedHeatmapFrames[8] ?? phase3.degradedHeatmapFrames[0]
                   }
                 />
+
+                {/* Attention shift */}
+                {phase3.attentionShift.length > 0 && (
+                  <AttentionShiftTable shifts={phase3.attentionShift} />
+                )}
               </motion.div>
             )}
           </AnimatePresence>

@@ -156,6 +156,8 @@ export function makeMockResult(clip: ClipMeta): AnalysisResult {
     ? (() => {
         const { amplitude, relevance, sampleRate } = makeMockAudioData(isFake)
         return {
+          verdict: isFake ? ('FAKE' as const) : ('REAL' as const),
+          confidence: isFake ? 0.924 : 0.871,
           waveformRelevance: relevance,
           waveformAmplitude: amplitude,
           sampleRate,
@@ -286,7 +288,18 @@ export function makeMockPhase3Result(
       degradation,
     ),
   )
-  return { degradedHeatmapFrames, degradedConfidence, params }
+  return {
+    degradedHeatmapFrames,
+    degradedConfidence,
+    params,
+    attentionShift: [
+      { region: 'Mouth',      before: 0.84, after: Math.max(0.05, 0.84 - degradation * 0.5) },
+      { region: 'Left Eye',   before: 0.41, after: Math.max(0.03, 0.41 - degradation * 0.3) },
+      { region: 'Right Eye',  before: 0.33, after: Math.max(0.02, 0.33 - degradation * 0.25) },
+      { region: 'Jaw',        before: 0.22, after: Math.max(0.02, 0.22 - degradation * 0.2) },
+      { region: 'Background', before: 0.04, after: Math.min(0.60, 0.04 + degradation * 0.3) },
+    ],
+  }
 }
 
 /**

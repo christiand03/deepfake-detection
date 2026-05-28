@@ -55,6 +55,7 @@ export interface Phase3Result {
     fps: number
     noiseSigma: number
   }
+  attentionShift: AttentionShift[]
 }
 
 export interface Phase4Result {

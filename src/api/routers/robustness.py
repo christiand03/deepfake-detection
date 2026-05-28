@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 
 from src.api.clip_registry import get_clip_video_path
-from src.api.inference import ModelNotReadyError, run_robustness_inference
+from src.api.inference import ModelNotReadyError, run_robustness_inference, run_video_inference
 from src.api.schemas import Phase3ResultSchema, RobustnessRequest
 
 router = APIRouter(prefix="/robustness", tags=["robustness"])
@@ -21,13 +21,13 @@ def _run(req: RobustnessRequest) -> Phase3ResultSchema:
     if clip_path is None or not clip_path.exists():
         raise FileNotFoundError(f"Video file not found for clip '{req.clip_id}'.")
 
+    base = run_video_inference(clip_path)
     result = run_robustness_inference(
         clip_path=clip_path,
         crf=req.crf,
         fps=req.fps,
         noise_sigma=req.noise_sigma,
-        base_heatmap_frames=[],
-        base_confidence=0.0,
+        base_anomaly_regions=base["anomalyRegions"],
     )
     return Phase3ResultSchema(**result)
 
