@@ -807,6 +807,108 @@ def run_audio_inference_score(clip_path: Path) -> tuple[str, float] | None:
     return verdict, confidence
 
 
+# ── Audio compression robustness ──────────────────────────────────────────────
+
+
+def _run_audio_for_robustness(clip_path: Path) -> dict | None:
+    """Run Wav2Vec2 inference for robustness comparison (confidence + frequency bands only).
+
+    Mirrors :func:`run_audio_inference` but skips WhisperX word-segment transcription
+    so it runs significantly faster.  Suitable for before/after comparisons where
+    absolute per-word relevance is not needed.
+
+    Returns:
+        ``{"confidence": float, "frequencyBands": {"low": float, "mid": float, "high": float}}``
+        or ``None`` if audio cannot be extracted or the audio model is not configured.
+    """
+    try:
+        waveform_np, sample_rate = _load_audio(clip_path)
+    except Exception:  # noqa: BLE001
+        log.warning("Audio loading failed for %s — skipping audio robustness", clip_path)
+        return None
+
+    try:
+        model = get_audio_model()
+    except ModelNotReadyError:
+        return None
+
+    waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
+    waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / torch.sqrt(waveform_tensor.var() + 1e-7)
+
+    with torch.no_grad():
+        logits = model.net(waveform_tensor).logits  # (1, 2)
+
+    probs = torch.softmax(logits, dim=-1)[0]
+    fake_prob = probs[1].item()
+    audio_verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
+    confidence = fake_prob if audio_verdict == "FAKE" else probs[0].item()
+
+    try:
+        wt = waveform_tensor.detach().requires_grad_(True)
+        logits_lrp = model.net(wt).logits
+        target = logits_lrp[0, 1] if fake_prob > 0.5 else logits_lrp[0, 0]
+        target.backward()
+        if wt.grad is None:
+            raise RuntimeError("wt.grad is None")
+        relevance = (wt.grad * wt).detach().cpu().squeeze(0).numpy()
+    except Exception:  # noqa: BLE001
+        log.warning("LRP backward failed for audio in %s; using zero relevance", clip_path)
+        relevance = np.zeros_like(waveform_np)
+
+    frequency_bands = _compute_frequency_bands(waveform_np, relevance, sample_rate)
+    return {"confidence": confidence, "frequencyBands": frequency_bands}
+
+
+def run_audio_robustness_inference(clip_path: Path, audio_bitrate: int) -> dict | None:
+    """Re-encode audio to AAC at *audio_bitrate* kbps and compare Wav2Vec2 responses.
+
+    Args:
+        clip_path: Path to the original MP4.
+        audio_bitrate: Target AAC bitrate in kbps (8–320).
+
+    Returns:
+        ``AudioRobustness``-compatible dict or ``None`` if audio is unavailable.
+    """
+    import tempfile
+
+    import ffmpeg
+
+    base = _run_audio_for_robustness(clip_path)
+    if base is None:
+        return None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        degraded_path = Path(tmpdir) / "audio_degraded.mp4"
+        try:
+            (
+                ffmpeg.input(str(clip_path))
+                .output(
+                    str(degraded_path),
+                    vcodec="copy",
+                    acodec="aac",
+                    **{"b:a": f"{audio_bitrate}k"},
+                    loglevel="error",
+                )
+                .overwrite_output()
+                .run()
+            )
+        except Exception as exc:
+            raise RuntimeError(f"FFmpeg audio re-encode failed: {exc}") from exc
+
+        degraded = _run_audio_for_robustness(degraded_path)
+
+    if degraded is None:
+        return None
+
+    return {
+        "baseConfidence": base["confidence"],
+        "degradedConfidence": degraded["confidence"],
+        "baseFrequencyBands": base["frequencyBands"],
+        "degradedFrequencyBands": degraded["frequencyBands"],
+        "bitrate": audio_bitrate,
+    }
+
+
 # ── PGD / FGSM white-box attack ───────────────────────────────────────────────
 
 

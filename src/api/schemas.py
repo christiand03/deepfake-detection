@@ -56,11 +56,20 @@ class Phase3ParamsSchema(BaseModel):
     noiseSigma: int
 
 
+class AudioRobustnessSchema(BaseModel):
+    baseConfidence: float
+    degradedConfidence: float
+    baseFrequencyBands: FrequencyBandsSchema
+    degradedFrequencyBands: FrequencyBandsSchema
+    bitrate: int
+
+
 class Phase3ResultSchema(BaseModel):
     degradedHeatmapFrames: list[str]
     degradedConfidence: float
     params: Phase3ParamsSchema
     attentionShift: list[AttentionShiftSchema]
+    audioRobustness: AudioRobustnessSchema | None = None
 
 
 class AttentionShiftSchema(BaseModel):
@@ -110,6 +119,9 @@ class RobustnessRequest(BaseModel):
     crf: int = Field(28, ge=18, le=51, description="H.264 CRF (18=lossless, 51=worst quality)")
     fps: int = Field(25, ge=5, le=30, description="Output frame rate in fps")
     noise_sigma: int = Field(0, ge=0, le=50, description="Gaussian noise σ in pixel units (0=off)")
+    audio_bitrate: int | None = Field(
+        None, ge=8, le=320, description="AAC audio bitrate in kbps; None = skip audio compression test"
+    )
 
 
 class AdversarialRequest(BaseModel):

@@ -8,7 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 
 from src.api.clip_registry import get_clip_video_path
-from src.api.inference import ModelNotReadyError, run_robustness_inference, run_video_inference
+from src.api.inference import (
+    ModelNotReadyError,
+    run_audio_robustness_inference,
+    run_robustness_inference,
+    run_video_inference,
+)
 from src.api.schemas import Phase3ResultSchema, RobustnessRequest
 
 router = APIRouter(prefix="/robustness", tags=["robustness"])
@@ -29,6 +34,8 @@ def _run(req: RobustnessRequest) -> Phase3ResultSchema:
         noise_sigma=req.noise_sigma,
         base_anomaly_regions=base["anomalyRegions"],
     )
+    if req.audio_bitrate is not None:
+        result["audioRobustness"] = run_audio_robustness_inference(clip_path, req.audio_bitrate)
     return Phase3ResultSchema(**result)
 
 

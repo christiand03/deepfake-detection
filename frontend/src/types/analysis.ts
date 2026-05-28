@@ -47,6 +47,14 @@ export interface AttentionShift {
   after: number
 }
 
+export interface AudioRobustness {
+  baseConfidence: number
+  degradedConfidence: number
+  baseFrequencyBands: FrequencyBands
+  degradedFrequencyBands: FrequencyBands
+  bitrate: number
+}
+
 export interface Phase3Result {
   degradedHeatmapFrames: string[]
   degradedConfidence: number
@@ -56,6 +64,7 @@ export interface Phase3Result {
     noiseSigma: number
   }
   attentionShift: AttentionShift[]
+  audioRobustness?: AudioRobustness
 }
 
 export interface Phase4Result {

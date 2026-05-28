@@ -13,6 +13,7 @@ import { runRobustnessTest } from '../../api/client'
 import { useErrorToast } from '../../context/ErrorToastContext'
 import type { AnalysisResult, Phase3Result } from '../../types/analysis'
 import { AttentionShiftTable } from '../shared/AttentionShiftTable'
+import { AudioFrequencyShift } from '../shared/AudioFrequencyShift'
 
 interface RobustnessPanelProps {
   result: AnalysisResult | null
@@ -337,6 +338,8 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
   const [crf, setCrf] = useState(28)
   const [fps, setFps] = useState(25)
   const [noiseSigma, setNoiseSigma] = useState(0)
+  const [audioEnabled, setAudioEnabled] = useState(false)
+  const [audioBitrate, setAudioBitrate] = useState(64)
   const [phase3, setPhase3] = useState<Phase3Result | null>(null)
   const [isRunning, setIsRunning] = useState(false)
 
@@ -351,7 +354,11 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
     if (!result) return
     setIsRunning(true)
     setPhase3(null)
-    runRobustnessTest(result.clipId, { crf, fps, noiseSigma }, result)
+    runRobustnessTest(
+      result.clipId,
+      { crf, fps, noiseSigma, audioBitrate: audioEnabled ? audioBitrate : undefined },
+      result,
+    )
       .then(p3 => setPhase3(p3))
       .catch(err => showError(`Robustness test failed: ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setIsRunning(false))
@@ -429,6 +436,53 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
             onChange={setNoiseSigma}
             disabled={isRunning}
           />
+
+          {/* Audio compression toggle */}
+          <div
+            style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #2a2f42' }}
+          >
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                cursor: isRunning ? 'not-allowed' : 'pointer',
+                opacity: isRunning ? 0.5 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={audioEnabled}
+                onChange={e => setAudioEnabled(e.target.checked)}
+                disabled={isRunning}
+                style={{ accentColor: '#00e5ff', cursor: 'inherit' }}
+              />
+              <span
+                style={{
+                  fontSize: 10,
+                  fontFamily: 'monospace',
+                  color: audioEnabled ? '#8b92a8' : '#4d5470',
+                  letterSpacing: '0.08em',
+                }}
+              >
+                TEST AUDIO COMPRESSION
+              </span>
+            </label>
+            {audioEnabled && (
+              <SliderRow
+                label="Audio Bitrate"
+                sublabel="AAC target bitrate (kbps)"
+                value={audioBitrate}
+                min={8}
+                max={320}
+                step={8}
+                leftLabel="8 kbps"
+                rightLabel="320 kbps"
+                onChange={setAudioBitrate}
+                disabled={isRunning}
+              />
+            )}
+          </div>
 
           <button
             onClick={handleRun}
@@ -584,6 +638,11 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                 {/* Attention shift */}
                 {phase3.attentionShift.length > 0 && (
                   <AttentionShiftTable shifts={phase3.attentionShift} />
+                )}
+
+                {/* Audio frequency-band shift */}
+                {phase3.audioRobustness && (
+                  <AudioFrequencyShift audio={phase3.audioRobustness} />
                 )}
               </motion.div>
             )}

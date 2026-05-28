@@ -273,10 +273,10 @@ function makeDifferenceDataUri(epsilon: number): string {
  * reduction, and Gaussian noise.
  */
 export function makeMockPhase3Result(
-  params: { crf: number; fps: number; noiseSigma: number },
+  params: { crf: number; fps: number; noiseSigma: number; audioBitrate?: number },
   baseResult: AnalysisResult,
 ): Phase3Result {
-  const { crf, fps, noiseSigma } = params
+  const { crf, fps, noiseSigma, audioBitrate } = params
   const degradation = Math.min(
     1,
     ((crf - 18) / 33) * 0.5 + (1 - fps / 30) * 0.3 + (noiseSigma / 50) * 0.2,
@@ -288,6 +288,30 @@ export function makeMockPhase3Result(
       degradation,
     ),
   )
+
+  const audioRobustness =
+    audioBitrate !== undefined
+      ? (() => {
+          const isFake = baseResult.verdict === 'FAKE'
+          const baseConf = baseResult.audio?.confidence ?? (isFake ? 0.88 : 0.82)
+          const compressionEffect = Math.max(0, (128 - audioBitrate) / 128)
+          const baseBands = isFake
+            ? { low: 0.21, mid: 0.54, high: 0.25 }
+            : { low: 0.15, mid: 0.52, high: 0.33 }
+          return {
+            baseConfidence: baseConf,
+            degradedConfidence: Math.max(0.05, baseConf * (1 - compressionEffect * 0.4)),
+            baseFrequencyBands: baseBands,
+            degradedFrequencyBands: {
+              low: Math.max(0.01, baseBands.low * (1 - compressionEffect * 0.08)),
+              mid: Math.max(0.01, baseBands.mid * (1 - compressionEffect * 0.45)),
+              high: Math.max(0.01, baseBands.high * (1 - compressionEffect * 0.55)),
+            },
+            bitrate: audioBitrate,
+          }
+        })()
+      : undefined
+
   return {
     degradedHeatmapFrames,
     degradedConfidence,
@@ -299,6 +323,7 @@ export function makeMockPhase3Result(
       { region: 'Jaw',        before: 0.22, after: Math.max(0.02, 0.22 - degradation * 0.2) },
       { region: 'Background', before: 0.04, after: Math.min(0.60, 0.04 + degradation * 0.3) },
     ],
+    ...(audioRobustness !== undefined ? { audioRobustness } : {}),
   }
 }
 

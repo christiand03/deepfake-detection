@@ -50,7 +50,7 @@ export async function analyzeClip(
 
 export async function runRobustnessTest(
   clipId: string,
-  params: { crf: number; fps: number; noiseSigma: number },
+  params: { crf: number; fps: number; noiseSigma: number; audioBitrate?: number },
   baseResult: AnalysisResult,
 ): Promise<Phase3Result> {
   if (USE_MOCK) {
@@ -65,6 +65,7 @@ export async function runRobustnessTest(
       crf: params.crf,
       fps: params.fps,
       noise_sigma: params.noiseSigma,
+      audio_bitrate: params.audioBitrate ?? null,
     }),
   })
   if (!res.ok) {
