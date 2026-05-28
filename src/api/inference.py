@@ -973,3 +973,87 @@ def run_adversarial_inference(
         "epsilon": epsilon,
         "attentionShift": attention_shift,
     }
+
+
+# ── Batch adversarial evaluation ──────────────────────────────────────────────
+
+
+def run_adversarial_batch(
+    clip_path: Path,
+    method: Literal["FGSM", "PGD"],
+    epsilon: float,
+    steps: int,
+) -> tuple[str, float, float]:
+    """Run a white-box adversarial attack and return the adversarial verdict,
+    confidence, and attention-shift intensity.
+
+    Intended for batch evaluation sweeps (``scripts/eval_adversarial_sweep.py``).
+    Runs two LRP backward passes — one on the clean clip and one on the
+    adversarial clip — so that the mean absolute change in per-region LRP
+    scores can be reported alongside the classification result.
+
+    The step-size schedule mirrors :func:`run_adversarial_inference`:
+    FGSM uses a single step of size ``epsilon``; PGD uses ``steps`` steps
+    with ``step_size = epsilon / steps * 2.5``.
+
+    Args:
+        clip_path: Path to the MP4 clip.
+        method: ``"FGSM"`` (single step) or ``"PGD"`` (multi-step).
+        epsilon: L∞ perturbation budget.
+        steps: Number of PGD iterations; ignored when *method* is ``"FGSM"``.
+
+    Returns:
+        ``(adv_verdict, adv_confidence, attention_shift_intensity)`` where
+        *attention_shift_intensity* is the mean absolute change in normalised
+        LRP region scores between the clean and adversarial forward passes.
+    """
+    model = get_video_model()
+    pixel_values = _preprocess_video(clip_path).to(_device)
+
+    # ── Clean forward pass ────────────────────────────────────────────────────
+    with torch.no_grad():
+        clean_logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
+    clean_probs = torch.softmax(clean_logits, dim=-1)[0]
+    clean_fake_prob = clean_probs[1].item()
+    clean_verdict: Literal["FAKE", "REAL"] = "FAKE" if clean_fake_prob > 0.5 else "REAL"
+    target_class = 1 if clean_verdict == "FAKE" else 0
+
+    # ── Clean LRP ─────────────────────────────────────────────────────────────
+    try:
+        hm_clean, _ = model.explain(pixel_values=pixel_values)
+        hm_clean_np = hm_clean.detach().cpu().numpy()[0]  # (T, H, W)
+        hm_clean_np = hm_clean_np / (np.max(np.abs(hm_clean_np)) + 1e-8)
+    except Exception:  # noqa: BLE001
+        hm_clean_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    clean_region_scores = {r["region"]: r["score"] for r in _extract_anomaly_regions(hm_clean_np)}
+
+    # ── Adversarial attack ────────────────────────────────────────────────────
+    n_steps = 1 if method == "FGSM" else steps
+    step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
+    adv_pv = _pgd_attack(model, pixel_values, target_class, epsilon, n_steps, step_size)
+
+    # ── Adversarial forward pass ──────────────────────────────────────────────
+    with torch.no_grad():
+        adv_logits = model.net(pixel_values=adv_pv).logits  # (1, 2)
+    adv_probs = torch.softmax(adv_logits, dim=-1)[0]
+    adv_fake_prob = adv_probs[1].item()
+    adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
+    adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else adv_probs[0].item()
+
+    # ── Adversarial LRP ───────────────────────────────────────────────────────
+    try:
+        hm_adv, _ = model.explain(pixel_values=adv_pv)
+        hm_adv_np = hm_adv.detach().cpu().numpy()[0]  # (T, H, W)
+        hm_adv_np = hm_adv_np / (np.max(np.abs(hm_adv_np)) + 1e-8)
+    except Exception:  # noqa: BLE001
+        hm_adv_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    adv_region_scores = {r["region"]: r["score"] for r in _extract_anomaly_regions(hm_adv_np)}
+
+    # ── Attention-shift intensity ─────────────────────────────────────────────
+    shared_regions = set(clean_region_scores) & set(adv_region_scores)
+    if shared_regions:
+        shift_intensity = float(np.mean([abs(clean_region_scores[r] - adv_region_scores[r]) for r in shared_regions]))
+    else:
+        shift_intensity = 0.0
+
+    return adv_verdict, adv_confidence, shift_intensity

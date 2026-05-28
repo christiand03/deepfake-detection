@@ -190,7 +190,77 @@ python src/explain_audio.py experiment=train_audio \
 
 ---
 
-## 7. Gesamtreihenfolge (Kurzübersicht)
+## 7. Offline-Sweeps (Phase 3 & 4)
+
+Beide Skripte lesen das Testset aus `data/processed/test_metadata.csv` und laden
+die rohen MP4-Dateien aus `data/normalized/`. `VIDEOMAE_CKPT_PATH` muss gesetzt
+sein; der Robustness-Sweep benötigt zusätzlich `WAV2VEC2_CKPT_PATH` für den
+optionalen Audio-Branch.
+
+### 7.1 Robustness-Sweep – Phase 3 (CRF × FPS + Audio-Bitrate)
+
+```powershell
+# Umgebungsvariablen setzen (PowerShell)
+$env:VIDEOMAE_CKPT_PATH  = "checkpoints/epoch=2-step=837.ckpt"
+$env:WAV2VEC2_CKPT_PATH  = "checkpoints/epoch=2-step=261.ckpt"  # optional
+```
+
+```bash
+# Dry-run: 3 Videos, ein Grid-Punkt, kein Audio-Sweep
+python scripts/eval_robustness_sweep.py \
+    --max-videos 3 --crf-grid 28 --fps-grid 25 --no-audio-sweep
+
+# Vollständiger Video-Sweep (CRF × FPS, kein Audio)
+python scripts/eval_robustness_sweep.py --no-audio-sweep
+
+# Vollständiger Sweep inkl. Audio-Bitrate-Sweep
+python scripts/eval_robustness_sweep.py
+
+# Eigenes Grid und W&B-Run-Name
+python scripts/eval_robustness_sweep.py \
+    --crf-grid 23 28 35 \
+    --fps-grid 25 10 \
+    --audio-bitrate-grid 128 32 \
+    --wandb-run-name robustness-subset
+```
+
+**Ausgabe:** W&B-Table `sweep_results` mit den Spalten
+`modality`, `crf`, `fps`, `audio_bitrate_kbps`, `auc`, `accuracy`,
+`fooling_rate`, `mean_fake_prob_delta`.
+
+### 7.2 Adversarial-Sweep – Phase 4 (FGSM & PGD über ε-Grid)
+
+```powershell
+# Umgebungsvariable setzen (PowerShell)
+$env:VIDEOMAE_CKPT_PATH = "checkpoints/epoch=2-step=837.ckpt"
+```
+
+```bash
+# Dry-run: 2 Videos, ε=0.03, nur FGSM
+python scripts/eval_adversarial_sweep.py \
+    --max-videos 2 --epsilon-grid 0.03 --methods FGSM
+
+# Vollständiger Sweep (FGSM + PGD, Standard-ε-Grid)
+python scripts/eval_adversarial_sweep.py
+
+# Nur FGSM über das vollständige Testset
+python scripts/eval_adversarial_sweep.py --methods FGSM
+
+# Eigene Parameter
+python scripts/eval_adversarial_sweep.py \
+    --epsilon-grid 0.01 0.02 0.03 0.05 0.1 \
+    --pgd-steps 20 \
+    --methods FGSM PGD \
+    --wandb-run-name adversarial-custom
+```
+
+**Ausgabe:** W&B-Table `adversarial_sweep_results` mit den Spalten
+`method`, `epsilon`, `pgd_steps`, `n_clips`, `auc`, `accuracy`,
+`fooling_rate`, `mean_fake_prob_delta`, `mean_attention_shift`.
+
+---
+
+## 8. Gesamtreihenfolge (Kurzübersicht)
 
 | Schritt | Befehl |
 |---------|--------|
@@ -200,10 +270,12 @@ python src/explain_audio.py experiment=train_audio \
 | 4. Evaluation Audio | `python src/eval.py experiment=train_audio ckpt_path=checkpoints/wav2vec2.ckpt` |
 | 5. xAI Video | `python src/explain.py experiment=train_video ckpt_path=checkpoints/videomae_colleague.ckpt` |
 | 6. xAI Audio | `python src/explain_audio.py experiment=train_audio ckpt_path=checkpoints/wav2vec2.ckpt` |
+| 7. Robustness-Sweep | `python scripts/eval_robustness_sweep.py --no-audio-sweep` |
+| 8. Adversarial-Sweep | `python scripts/eval_adversarial_sweep.py` |
 
 ---
 
-## 8. Backend-API und Frontend-Devserver starten
+## 9. Backend-API und Frontend-Devserver starten
 
 Für die interaktive Demo müssen **beide** Prozesse gleichzeitig laufen –
 jeweils in einem eigenen Terminal.
