@@ -983,6 +983,7 @@ def run_robustness_inference(
     fps: int,
     noise_sigma: int,
     base_anomaly_regions: list[dict],
+    upscale: bool = False,
 ) -> dict:
     """Apply social-media degradation via FFmpeg and re-run video inference.
 
@@ -995,6 +996,8 @@ def run_robustness_inference(
             (``_extract_anomaly_regions`` format: list of
             ``{"region": str, "score": float}``).  Used to compute the
             attention-shift between clean and degraded passes.
+        upscale: When ``True``, simulate TikTok/WhatsApp re-encoding by
+            downscaling to 640×360 then upscaling back to 1280×720.
 
     Returns:
         Phase3Result dict.
@@ -1006,6 +1009,8 @@ def run_robustness_inference(
     with tempfile.TemporaryDirectory() as tmpdir:
         degraded_path = Path(tmpdir) / "degraded.mp4"
         video_filter = f"fps={fps}"
+        if upscale:
+            video_filter += ",scale=640:360,scale=1280:720"
         if noise_sigma > 0:
             video_filter += f",noise=alls={noise_sigma}:allf=t+u"
         try:
@@ -1041,7 +1046,7 @@ def run_robustness_inference(
     return {
         "degradedHeatmapFrames": degraded["heatmapFrames"],
         "degradedConfidence": degraded["confidence"],
-        "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma},
+        "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma, "upscale": upscale},
         "attentionShift": attention_shift,
     }
 

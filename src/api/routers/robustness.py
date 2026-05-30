@@ -33,6 +33,7 @@ def _run(req: RobustnessRequest) -> Phase3ResultSchema:
         fps=req.fps,
         noise_sigma=req.noise_sigma,
         base_anomaly_regions=base["anomalyRegions"],
+        upscale=req.upscale,
     )
     if req.audio_bitrate is not None:
         result["audioRobustness"] = run_audio_robustness_inference(clip_path, req.audio_bitrate)

@@ -110,6 +110,7 @@ def _degrade_video(
     crf: int,
     fps: int,
     audio_bitrate_kbps: int | None = None,
+    upscale: bool = False,
 ) -> None:
     """Re-encode *src* into *dst* with the requested degradation parameters.
 
@@ -120,17 +121,22 @@ def _degrade_video(
         fps: Output frame rate.
         audio_bitrate_kbps: When set, re-encode audio as AAC at this bitrate
             (kbps).  When ``None``, the audio stream is copied unchanged.
+        upscale: When ``True``, simulate TikTok/WhatsApp re-encoding by
+            downscaling to 640×360 then upscaling back to 1280×720.
     """
     audio_kwargs: dict = (
         {"acodec": "aac", "audio_bitrate": f"{audio_bitrate_kbps}k"}
         if audio_bitrate_kbps is not None
         else {"acodec": "copy"}
     )
+    vf = f"fps={fps}"
+    if upscale:
+        vf += ",scale=640:360,scale=1280:720"
     (
         ffmpeg.input(str(src))
         .output(
             str(dst),
-            vf=f"fps={fps}",
+            vf=vf,
             vcodec="libx264",
             crf=crf,
             loglevel="error",
@@ -436,6 +442,85 @@ def _run_audio_sweep(
             pbar.update(1)
 
 
+def _run_upscale_sweep(
+    videos: list[dict],
+    baseline_verdicts: list[str],
+    baseline_scores: list[float],
+    fixed_crf: int,
+    fixed_fps: int,
+    summary_rows: list[list],
+) -> None:
+    """Upscale-artefact sweep: one pass with downscale→upscale (640×360→1280×720).
+
+    Simulates TikTok/WhatsApp re-encoding at fixed CRF/FPS and measures the
+    resulting drop in model confidence and AUC.
+    """
+    labels = [rec["label"] for rec in videos]
+    degraded_verdicts: list[str] = []
+    degraded_scores: list[float] = []
+    active_labels: list[int] = []
+    active_baseline_verdicts: list[str] = []
+    active_baseline_scores: list[float] = []
+
+    with tqdm(total=len(videos), desc="Upscale sweep", unit="video") as pbar:
+        for i, rec in enumerate(videos):
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    degraded = Path(tmpdir) / "degraded.mp4"
+                    _degrade_video(
+                        rec["video_path"],
+                        degraded,
+                        crf=fixed_crf,
+                        fps=fixed_fps,
+                        upscale=True,
+                    )
+                    v_verdict, v_conf = run_video_inference_fast(degraded)
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "Upscale inference failed for %s — skipping.",
+                    rec["video_id"],
+                )
+                pbar.update(1)
+                continue
+            degraded_verdicts.append(v_verdict)
+            degraded_scores.append(_to_fake_score(v_verdict, v_conf))
+            active_labels.append(labels[i])
+            active_baseline_verdicts.append(baseline_verdicts[i])
+            active_baseline_scores.append(baseline_scores[i])
+            pbar.update(1)
+
+    if not degraded_verdicts:
+        log.warning("No valid clips in upscale sweep — skipping.")
+        return
+
+    metrics = _compute_metrics(
+        active_labels,
+        active_baseline_verdicts,
+        active_baseline_scores,
+        degraded_verdicts,
+        degraded_scores,
+    )
+    summary_rows.append(
+        [
+            "video_upscale",
+            fixed_crf,
+            fixed_fps,
+            None,
+            metrics["auc"],
+            metrics["accuracy"],
+            metrics["fooling_rate"],
+            metrics["mean_fake_prob_delta"],
+        ]
+    )
+    log.info(
+        "Upscale sweep | AUC=%.3f  Acc=%.3f  FR=%.3f  Δfake=%.4f",
+        metrics["auc"] if not np.isnan(metrics["auc"]) else -1.0,
+        metrics["accuracy"],
+        metrics["fooling_rate"] if not np.isnan(metrics["fooling_rate"]) else -1.0,
+        metrics["mean_fake_prob_delta"],
+    )
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 
@@ -521,6 +606,25 @@ def main() -> None:
         action="store_true",
         help="Skip the audio bitrate sweep.",
     )
+    parser.add_argument(
+        "--no-upscale-sweep",
+        action="store_true",
+        help="Skip the upscale-artefact sweep (640\u00d7360 \u2192 1280\u00d7720).",
+    )
+    parser.add_argument(
+        "--fixed-crf-for-upscale",
+        type=int,
+        default=23,
+        metavar="CRF",
+        help="CRF held constant during the upscale sweep (default: 23).",
+    )
+    parser.add_argument(
+        "--fixed-fps-for-upscale",
+        type=int,
+        default=25,
+        metavar="FPS",
+        help="FPS held constant during the upscale sweep (default: 25).",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -577,6 +681,7 @@ def main() -> None:
             "fixed_fps_for_audio": args.fixed_fps_for_audio,
             "n_test_videos": len(videos),
             "run_audio_sweep": run_audio,
+            "run_upscale_sweep": not args.no_upscale_sweep,
         },
     )
 
@@ -664,6 +769,20 @@ def main() -> None:
         )
     else:
         log.info("Audio sweep skipped.")
+
+    # ── Upscale sweep ──────────────────────────────────────────────────────────
+    if not args.no_upscale_sweep:
+        log.info("Starting upscale sweep (640×360 → 1280×720) …")
+        _run_upscale_sweep(
+            videos,
+            baseline_v_verdicts,
+            baseline_v_scores,
+            args.fixed_crf_for_upscale,
+            args.fixed_fps_for_upscale,
+            summary_rows,
+        )
+    else:
+        log.info("Upscale sweep skipped (--no-upscale-sweep).")
 
     # ── W&B summary table ──────────────────────────────────────────────────────
     if summary_rows:

@@ -224,9 +224,35 @@ python scripts/eval_robustness_sweep.py \
     --wandb-run-name robustness-subset
 ```
 
+```bash
+# Nur Upscaling-Sweep (TikTok/WhatsApp-Simulation), kein CRF×FPS- oder Audio-Sweep
+python scripts/eval_robustness_sweep.py \
+    --no-video-sweep --no-audio-sweep
+
+# Upscaling-Sweep mit eigenen festen Parametern (CRF 28, 15 FPS)
+python scripts/eval_robustness_sweep.py \
+    --no-video-sweep --no-audio-sweep \
+    --fixed-crf-for-upscale 28 --fixed-fps-for-upscale 15
+
+# Dry-run: 2 Videos, nur Upscaling
+python scripts/eval_robustness_sweep.py \
+    --max-videos 2 --no-video-sweep --no-audio-sweep
+
+# Vollständiger Sweep inkl. Upscaling (CRF × FPS + Audio + Upscale)
+python scripts/eval_robustness_sweep.py
+
+# Upscaling-Sweep deaktivieren
+python scripts/eval_robustness_sweep.py --no-upscale-sweep
+```
+
+**Hintergrund Upscaling-Simulation:** TikTok und WhatsApp re-enkodieren Videos
+intern auf 360p und skalieren sie bilinear auf 720p hoch. Der Filter
+`scale=640:360,scale=1280:720` bildet genau diesen Artefakt nach.
+
 **Ausgabe:** W&B-Table `sweep_results` mit den Spalten
 `modality`, `crf`, `fps`, `audio_bitrate_kbps`, `auc`, `accuracy`,
 `fooling_rate`, `mean_fake_prob_delta`.
+Mögliche `modality`-Werte: `video`, `audio`, `video_upscale`.
 
 ### 7.2 Adversarial-Sweep – Phase 4 (FGSM & PGD über ε-Grid)
 
@@ -271,6 +297,7 @@ python scripts/eval_adversarial_sweep.py \
 | 5. xAI Video | `python src/explain.py experiment=train_video ckpt_path=checkpoints/videomae_colleague.ckpt` |
 | 6. xAI Audio | `python src/explain_audio.py experiment=train_audio ckpt_path=checkpoints/wav2vec2.ckpt` |
 | 7. Robustness-Sweep | `python scripts/eval_robustness_sweep.py --no-audio-sweep` |
+| 7a. Upscaling-Sweep | `python scripts/eval_robustness_sweep.py --no-video-sweep --no-audio-sweep` |
 | 8. Adversarial-Sweep | `python scripts/eval_adversarial_sweep.py` |
 
 ---

@@ -124,6 +124,7 @@ class RobustnessRequest(BaseModel):
     audio_bitrate: int | None = Field(
         None, ge=8, le=320, description="AAC audio bitrate in kbps; None = skip audio compression test"
     )
+    upscale: bool = Field(False, description="Simulate TikTok/WhatsApp downscale-upscale (640×360 → 1280×720)")
 
 
 class AdversarialRequest(BaseModel):
