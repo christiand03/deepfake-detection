@@ -49,8 +49,8 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         self, batch: Any
     ) -> tuple[
         Float[torch.Tensor, ""],
-        Int[torch.Tensor, batch],
-        Int[torch.Tensor, batch],
+        Int[torch.Tensor, "batch"],
+        Int[torch.Tensor, "batch"],
         Float[torch.Tensor, "batch 2"],
     ]:
         """Central step shared by training, validation, and test.

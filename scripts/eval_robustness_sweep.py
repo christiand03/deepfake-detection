@@ -39,9 +39,10 @@ import ffmpeg
 import numpy as np
 import rootutils
 import torch
-import wandb
 from torchmetrics.functional.classification import binary_auroc
 from tqdm import tqdm
+
+import wandb
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
