@@ -757,23 +757,23 @@ def run_audio_inference(clip_path: Path) -> dict | None:
     fake_prob = probs[1].item()
 
     model.eval()
-    import transformers.models.wav2vec2.modeling_wav2vec2 as _w2v_mod
-
-    if getattr(_w2v_mod, "_lxt_patched", False):
-        log.info("Audio analysis for %s — true AttnLRP (lxt-patched).", clip_path)
-    else:
-        log.warning(
-            "Audio analysis for %s — AttnLRP patch not yet applied; relevance may be plain Input\u00d7Gradient.",
-            clip_path,
-        )
     try:
         relevance_tensor, _ = model.explain(
             input_values=waveform_tensor,
             target_class=1 if fake_prob > 0.5 else 0,
         )
         relevance = relevance_tensor.detach().cpu().squeeze(0).numpy()
-    except Exception:
-        log.warning("AttnLRP backward failed for audio in %s; using zero relevance", clip_path)
+        import transformers.models.wav2vec2.modeling_wav2vec2 as _w2v_mod
+
+        if getattr(_w2v_mod, "_lxt_patched", False):
+            log.info("Audio analysis for %s — true AttnLRP (lxt-patched).", clip_path)
+        else:
+            log.warning(
+                "Audio analysis for %s — AttnLRP patch not applied; relevance is plain Input\u00d7Gradient.",
+                clip_path,
+            )
+    except Exception:  # noqa: BLE001
+        log.exception("AttnLRP backward failed for audio in %s; using zero relevance", clip_path)
         relevance = np.zeros_like(waveform_np)
 
     relevance_norm = relevance.tolist()  # normalize_relevance() already called inside explain()
@@ -868,23 +868,23 @@ def _run_audio_for_robustness(clip_path: Path) -> dict | None:
     confidence = fake_prob if audio_verdict == "FAKE" else probs[0].item()
 
     model.eval()
-    import transformers.models.wav2vec2.modeling_wav2vec2 as _w2v_mod
-
-    if getattr(_w2v_mod, "_lxt_patched", False):
-        log.info("Audio robustness for %s — true AttnLRP (lxt-patched).", clip_path)
-    else:
-        log.warning(
-            "Audio robustness for %s — AttnLRP patch not yet applied; relevance may be plain Input\u00d7Gradient.",
-            clip_path,
-        )
     try:
         relevance_tensor, _ = model.explain(
             input_values=waveform_tensor,
             target_class=1 if fake_prob > 0.5 else 0,
         )
         relevance = relevance_tensor.detach().cpu().squeeze(0).numpy()
+        import transformers.models.wav2vec2.modeling_wav2vec2 as _w2v_mod
+
+        if getattr(_w2v_mod, "_lxt_patched", False):
+            log.info("Audio robustness for %s — true AttnLRP (lxt-patched).", clip_path)
+        else:
+            log.warning(
+                "Audio robustness for %s — AttnLRP patch not applied; relevance is plain Input\u00d7Gradient.",
+                clip_path,
+            )
     except Exception:  # noqa: BLE001
-        log.warning("LRP backward failed for audio in %s; using zero relevance", clip_path)
+        log.exception("LRP backward failed for audio in %s; using zero relevance", clip_path)
         relevance = np.zeros_like(waveform_np)
 
     frequency_bands = _compute_frequency_bands(waveform_np, relevance, sample_rate)

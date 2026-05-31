@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import torch
 import torch.nn.functional as F
 from beartype import beartype
-
-if TYPE_CHECKING:
-    # Spezifische Imports für jaxtyping und einops
-    from jaxtyping import Float, Int
+from jaxtyping import Float, Int  # noqa: TC002
 from transformers import Wav2Vec2ForSequenceClassification
 
 from .base_module import BaseDeepfakeModule
@@ -128,14 +125,24 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
     ) -> tuple[Float[torch.Tensor, "batch time"], torch.Tensor]:
         """Compute AttnLRP relevance for a batch of raw audio waveforms.
 
-        Applies lxt monkey_patch once (guarded by _WAV2VEC2_LRP_PATCHED) and runs
-        Input×Gradient LRP via compute_attnlrp(). Returns per-sample signed relevance
-        normalized to [-1, 1]: positive = evidence FOR the explained class, negative = AGAINST.
+        Relevance is computed at the **CNN → Transformer boundary** (feature extractor
+        output), not at raw waveform level.  Wav2Vec2's 7-layer Conv1d feature extractor
+        uses GELU activations.  With lxt's GELU identity rule (output/input) patched
+        globally, negative-activation neurons suppress the gradient at each layer; after
+        7 layers the gradient reaching raw waveform samples is < 1e-8, so
+        normalize_relevance produces near-zero relevance everywhere.
 
-        No temporal smoothing is applied here — the caller (visualization script) is
-        responsible for pooling to word boundaries or fixed-size windows, so that both
-        Layer 1 (waveform overlay) and Layer 2 (word-level aggregation) can use the same
-        raw relevance without re-running the backward pass.
+        Instead, the CNN is treated as a fixed (non-differentiable) encoder:
+        1. Run the CNN feature extractor with torch.no_grad() → (B, T', 512).
+        2. Enable gradients at the CNN output boundary.
+        3. Run the Transformer (feature_projection → encoder → projector → classifier)
+           with lxt-patched attention, GELU, and LayerNorm active.
+        4. Compute Input×Gradient relevance on (B, T', 512).
+        5. Aggregate over the 512 channels (signed mean), upsample to (B, T_samples)
+           via nearest-neighbor (wav2vec2-base stride ≈ 320 samples/frame @ 16 kHz).
+
+        Returns per-sample signed relevance normalized to [-1, 1]:
+        positive = evidence FOR the explained class, negative = AGAINST.
 
         Must be called in eval mode.
         """
@@ -150,17 +157,38 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
 
         from src.utils.attnlrp import compute_attnlrp, normalize_relevance
 
-        # relevance: (B, T_samples) — same shape as input_values.
-        # forward_fn uses the keyword argument expected by Wav2Vec2ForSequenceClassification.
-        relevance, target_class = compute_attnlrp(
+        # Stage 1: frozen CNN feature extractor — no gradient tracking.
+        with torch.no_grad():
+            cnn_out = self.net.wav2vec2.feature_extractor(input_values)  # (B, 512, T')
+            cnn_out = cnn_out.transpose(1, 2)  # (B, T', 512)
+
+        # Stage 2: attach gradients at the CNN output boundary.
+        hidden_input = cnn_out.clone().detach().requires_grad_(True)  # (B, T', 512)
+
+        def _forward_from_cnn_out(h: torch.Tensor) -> torch.Tensor:
+            projected, _ = self.net.wav2vec2.feature_projection(h)  # (B, T', hidden_size)
+            encoder_out = self.net.wav2vec2.encoder(projected)
+            last_hidden = encoder_out[0]  # (B, T', hidden_size)
+            proj_out = self.net.projector(last_hidden)  # (B, T', proj_size)
+            pooled = proj_out.mean(dim=1)  # (B, proj_size)
+            return self.net.classifier(pooled)  # (B, num_labels)
+
+        relevance, target_class_resolved = compute_attnlrp(
             net=self.net,
-            input_tensor=input_values,
-            forward_fn=lambda x: self.net(input_values=x).logits,
+            input_tensor=hidden_input,
+            forward_fn=_forward_from_cnn_out,
             target_class=target_class,
         )
+        # relevance: (B, T', 512) — mean over channels gives signed scalar per frame.
+        relevance_temporal = relevance.mean(dim=-1)  # (B, T')
 
-        # relevance is (B, T_samples): already 2D, normalize per sample.
-        # normalize_relevance expects (N, D) — no reshape needed for 1D audio.
-        relevance = normalize_relevance(relevance)
+        # Upsample to raw waveform length via nearest-neighbor.
+        T = input_values.shape[1]
+        relevance_upsampled = F.interpolate(
+            relevance_temporal.unsqueeze(1),  # (B, 1, T')
+            size=T,
+            mode="nearest",
+        ).squeeze(1)  # (B, T)
 
-        return relevance, target_class
+        relevance_norm = normalize_relevance(relevance_upsampled)
+        return relevance_norm, target_class_resolved
