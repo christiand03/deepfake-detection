@@ -60,6 +60,74 @@ def build_common_patch_map() -> dict:
     }
 
 
+def patch_videomae_for_attnlrp(net: nn.Module) -> None:
+    """Surgically patch VideoMAE for AttnLRP at transformers==4.57.6.
+
+    Replaces the module-level ``eager_attention_forward`` in
+    ``transformers.models.videomae.modeling_videomae`` with lxt's
+    ``wrap_attention_forward`` wrapper, which divides gradients through the
+    attention softmax as required by AttnLRP.  Also calls ``monkey_patch``
+    on *net* to instrument LayerNorm, GELU, and Dropout.
+
+    Safe to call multiple times — guarded by a ``_lxt_patched`` attribute on
+    the modeling module so the wrap is applied exactly once even when several
+    model instances exist (e.g. in a multimodal setup).
+
+    Must be called with ``attn_implementation="eager"`` set at model load time,
+    otherwise VideoMAE dispatches through SDPA whose fused kernels have no
+    differentiable path for gradient-based relevance propagation.
+
+    Args:
+        net: The ``VideoMAEForVideoClassification`` instance whose non-attention
+            layers (LayerNorm, GELU, Dropout) will be patched in-place via
+            ``monkey_patch``.
+    """
+    import transformers.models.videomae.modeling_videomae as _mod
+    from lxt.efficient import monkey_patch
+    from lxt.efficient.patches import wrap_attention_forward
+
+    if not getattr(_mod, "_lxt_patched", False):
+        _mod.eager_attention_forward = wrap_attention_forward(_mod.eager_attention_forward)
+        _mod._lxt_patched = True
+    monkey_patch(net, patch_map=build_common_patch_map())
+
+
+def patch_wav2vec2_for_attnlrp(net: nn.Module) -> None:
+    """Surgically patch Wav2Vec2 for AttnLRP at transformers==4.57.6.
+
+    Replaces the module-level ``eager_attention_forward`` in
+    ``transformers.models.wav2vec2.modeling_wav2vec2`` with lxt's
+    ``wrap_attention_forward`` wrapper.  Also calls ``monkey_patch`` on *net*
+    to instrument LayerNorm, GELU, and Dropout.
+
+    At transformers==4.57.6, Wav2Vec2 was migrated from the old
+    ``WAV2VEC2_ATTENTION_CLASSES`` init-time class-selection pattern to the
+    same unified dispatch used by VideoMAE::
+
+        attention_interface: Callable = eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[key]
+
+    With ``attn_implementation="eager"``, the ``if``-branch is never taken, so
+    replacing ``modeling_wav2vec2.eager_attention_forward`` at module level is
+    sufficient — ``ALL_ATTENTION_FUNCTIONS`` is left untouched.
+
+    Safe to call multiple times — guarded by ``_lxt_patched`` on the module.
+
+    Args:
+        net: The ``Wav2Vec2ForSequenceClassification`` instance whose
+            non-attention layers will be patched in-place via ``monkey_patch``.
+    """
+    import transformers.models.wav2vec2.modeling_wav2vec2 as _mod
+    from lxt.efficient import monkey_patch
+    from lxt.efficient.patches import wrap_attention_forward
+
+    if not getattr(_mod, "_lxt_patched", False):
+        _mod.eager_attention_forward = wrap_attention_forward(_mod.eager_attention_forward)
+        _mod._lxt_patched = True
+    monkey_patch(net, patch_map=build_common_patch_map())
+
+
 def compute_attnlrp(
     net: nn.Module,
     input_tensor: torch.Tensor,

@@ -7,6 +7,8 @@ from transformers import VideoMAEForVideoClassification
 
 from .base_module import BaseDeepfakeModule
 
+_VIDEOMAE_LRP_PATCHED: bool = False
+
 
 class VideoMAEModule(BaseDeepfakeModule):
     def __init__(
@@ -28,6 +30,7 @@ class VideoMAEModule(BaseDeepfakeModule):
             num_labels=self.hparams.num_labels,
             ignore_mismatched_sizes=True,
             use_mean_pooling=True,
+            attn_implementation="eager",
         )
 
     def forward(self, pixel_values: torch.Tensor):
@@ -100,6 +103,13 @@ class VideoMAEModule(BaseDeepfakeModule):
                 frame independently to [-1, 1].
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
+
+        global _VIDEOMAE_LRP_PATCHED
+        if not _VIDEOMAE_LRP_PATCHED:
+            from src.utils.attnlrp import patch_videomae_for_attnlrp
+
+            patch_videomae_for_attnlrp(self.net)
+            _VIDEOMAE_LRP_PATCHED = True
 
         import torch.nn.functional as F_nn
         from einops import rearrange, reduce

@@ -30,7 +30,6 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import torch
 import torch.nn.functional as F
-import transformers.pytorch_utils as _tpu
 from PIL import Image
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -43,29 +42,6 @@ if TYPE_CHECKING:
     from src.models.multimodal_module import MultimodalDeepfakeModule
     from src.models.VideoMAE_module import VideoMAEModule
     from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule
-
-# ── Compatibility shim for transformers 5.x ───────────────────────────────────
-# lxt (LRP for Transformers) imports find_pruneable_heads_and_indices from
-# transformers.pytorch_utils, which was removed in transformers 5.0.
-# Restore it here before lxt is first imported (lazily, inside explain()).
-if not hasattr(_tpu, "find_pruneable_heads_and_indices"):
-
-    def _find_pruneable_heads_and_indices(
-        heads: list[int],
-        n_heads: int,
-        head_size: int,
-        already_pruned_heads: set[int],
-    ) -> tuple[set[int], torch.LongTensor]:
-        mask = torch.ones(n_heads, head_size)
-        heads_set = set(heads) - already_pruned_heads
-        for orig_head in heads_set:
-            adj = orig_head - sum(1 if h < orig_head else 0 for h in already_pruned_heads)
-            mask[adj] = 0
-        mask = mask.view(-1).contiguous().eq(1)
-        index: torch.LongTensor = torch.arange(len(mask))[mask].long()
-        return heads_set, index
-
-    _tpu.find_pruneable_heads_and_indices = _find_pruneable_heads_and_indices
 
 log = logging.getLogger(__name__)
 
@@ -445,6 +421,20 @@ def _compute_heatmaps_chunked(
             pad = chunk[-1:].expand(NUM_FRAMES - chunk.shape[0], -1, -1, -1)
             chunk = torch.cat([chunk, pad], dim=0)
         pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
+        import transformers.models.videomae.modeling_videomae as _vmae_mod
+
+        if getattr(_vmae_mod, "_lxt_patched", False):
+            log.info(
+                "Heatmap chunk %d/%d — true AttnLRP (lxt-patched).",
+                chunk_idx + 1,
+                n_chunks,
+            )
+        else:
+            log.warning(
+                "Heatmap chunk %d/%d — AttnLRP patch not applied; relevance may be plain Input\u00d7Gradient.",
+                chunk_idx + 1,
+                n_chunks,
+            )
         heatmap_tensor, _ = model.explain(pixel_values=pv)
         hm = heatmap_tensor.detach().cpu().numpy()[0]  # (16, H, W)
         heatmap_np[chunk_start:chunk_end] = hm[: chunk_end - chunk_start]
@@ -766,21 +756,27 @@ def run_audio_inference(clip_path: Path) -> dict | None:
     probs = torch.softmax(logits, dim=-1)[0]
     fake_prob = probs[1].item()
 
-    # Input × Gradient relevance
+    model.eval()
+    import transformers.models.wav2vec2.modeling_wav2vec2 as _w2v_mod
+
+    if getattr(_w2v_mod, "_lxt_patched", False):
+        log.info("Audio analysis for %s — true AttnLRP (lxt-patched).", clip_path)
+    else:
+        log.warning(
+            "Audio analysis for %s — AttnLRP patch not yet applied; relevance may be plain Input\u00d7Gradient.",
+            clip_path,
+        )
     try:
-        wt = waveform_tensor.detach().requires_grad_(True)
-        logits_lrp = model.net(wt).logits
-        target = logits_lrp[0, 1] if fake_prob > 0.5 else logits_lrp[0, 0]
-        target.backward()
-        if wt.grad is None:
-            raise RuntimeError("wt.grad is None — no differentiable path through Wav2Vec2 for LRP.")
-        relevance = (wt.grad * wt).detach().cpu().squeeze(0).numpy()
+        relevance_tensor, _ = model.explain(
+            input_values=waveform_tensor,
+            target_class=1 if fake_prob > 0.5 else 0,
+        )
+        relevance = relevance_tensor.detach().cpu().squeeze(0).numpy()
     except Exception:
         log.warning("AttnLRP backward failed for audio in %s; using zero relevance", clip_path)
         relevance = np.zeros_like(waveform_np)
 
-    max_abs = np.max(np.abs(relevance)) + 1e-8
-    relevance_norm = (relevance / max_abs).tolist()
+    relevance_norm = relevance.tolist()  # normalize_relevance() already called inside explain()
     amplitude = waveform_np.tolist()
 
     frequency_bands = _compute_frequency_bands(waveform_np, relevance, sample_rate)
@@ -871,14 +867,22 @@ def _run_audio_for_robustness(clip_path: Path) -> dict | None:
     audio_verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     confidence = fake_prob if audio_verdict == "FAKE" else probs[0].item()
 
+    model.eval()
+    import transformers.models.wav2vec2.modeling_wav2vec2 as _w2v_mod
+
+    if getattr(_w2v_mod, "_lxt_patched", False):
+        log.info("Audio robustness for %s — true AttnLRP (lxt-patched).", clip_path)
+    else:
+        log.warning(
+            "Audio robustness for %s — AttnLRP patch not yet applied; relevance may be plain Input\u00d7Gradient.",
+            clip_path,
+        )
     try:
-        wt = waveform_tensor.detach().requires_grad_(True)
-        logits_lrp = model.net(wt).logits
-        target = logits_lrp[0, 1] if fake_prob > 0.5 else logits_lrp[0, 0]
-        target.backward()
-        if wt.grad is None:
-            raise RuntimeError("wt.grad is None")
-        relevance = (wt.grad * wt).detach().cpu().squeeze(0).numpy()
+        relevance_tensor, _ = model.explain(
+            input_values=waveform_tensor,
+            target_class=1 if fake_prob > 0.5 else 0,
+        )
+        relevance = relevance_tensor.detach().cpu().squeeze(0).numpy()
     except Exception:  # noqa: BLE001
         log.warning("LRP backward failed for audio in %s; using zero relevance", clip_path)
         relevance = np.zeros_like(waveform_np)

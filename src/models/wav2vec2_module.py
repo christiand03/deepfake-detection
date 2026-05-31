@@ -13,7 +13,7 @@ from transformers import Wav2Vec2ForSequenceClassification
 
 from .base_module import BaseDeepfakeModule
 
-# No module-level lxt guard needed — explain() uses plain Input×Gradient.
+_WAV2VEC2_LRP_PATCHED: bool = False
 
 
 class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
@@ -30,7 +30,9 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         self.save_hyperparameters(logger=False)
 
         # Load the pre-trained Wav2Vec2 model for sequence classification (2 Klassen: Echt vs. Fake)
-        self.net = Wav2Vec2ForSequenceClassification.from_pretrained(model_name_or_path, num_labels=2)
+        self.net = Wav2Vec2ForSequenceClassification.from_pretrained(
+            model_name_or_path, num_labels=2, attn_implementation="eager"
+        )
 
         # frozen feature extractor
         if freeze_feature_extractor:
@@ -138,6 +140,13 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         Must be called in eval mode.
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
+
+        global _WAV2VEC2_LRP_PATCHED
+        if not _WAV2VEC2_LRP_PATCHED:
+            from src.utils.attnlrp import patch_wav2vec2_for_attnlrp
+
+            patch_wav2vec2_for_attnlrp(self.net)
+            _WAV2VEC2_LRP_PATCHED = True
 
         from src.utils.attnlrp import compute_attnlrp, normalize_relevance
 
