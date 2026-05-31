@@ -42,6 +42,7 @@ import csv
 import logging
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import rootutils
@@ -56,7 +57,6 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from src.api.inference import (  # noqa: E402
     get_multimodal_model,
     get_video_model,
-    run_video_inference_fast,
 )
 from src.api.uap import (  # noqa: E402
     compute_multimodal_uap,
@@ -146,39 +146,50 @@ def _fooling_rate(
 # ── Evaluation passes ────────────────────────────────────────────────────────────
 
 
-def _run_baseline(videos: list[dict]) -> tuple[list[str], list[float]]:
-    """Evaluate the video model on clean (un-perturbed) eval clips."""
-    verdicts: list[str] = []
-    scores: list[float] = []
-    for rec in tqdm(videos, desc="Baseline", unit="video"):
-        verdict, conf = run_video_inference_fast(rec["video_path"])
-        verdicts.append(verdict)
-        scores.append(_to_fake_score(verdict, conf))
-    return verdicts, scores
+class TransferEval(NamedTuple):
+    """Aligned clean-vs-perturbed eval results (one entry per *successful* clip)."""
+
+    labels: list[int]
+    baseline_verdicts: list[str]
+    baseline_scores: list[float]
+    adv_verdicts: list[str]
+    adv_scores: list[float]
 
 
-def _run_perturbed(
+def _evaluate_transfer(
     videos: list[dict],
     modality: str,
     model,  # noqa: ANN001 — VideoMAEModule | MultimodalDeepfakeModule
     delta_video: torch.Tensor,
     delta_audio: torch.Tensor | None,
-) -> tuple[list[str], list[float]]:
-    """Apply δ* to every eval clip and collect ``(verdicts, fake-scores)``.
+) -> TransferEval:
+    """Evaluate clean and perturbed predictions for every clip in a single pass.
 
-    Clips that raise an exception are skipped (their slot is dropped from both
-    returned lists, so callers must align labels via the same iteration).
+    Both predictions use the *same* model and preprocessing (clean = no δ*,
+    perturbed = with δ*), so the comparison isolates the perturbation's effect.
+    Each clip is evaluated under one try/except: if either prediction raises, the
+    clip is dropped from *all* output lists, keeping labels/verdicts/scores
+    aligned by index.
     """
-    verdicts: list[str] = []
-    scores: list[float] = []
-    for rec in tqdm(videos, desc="Perturbed", unit="video"):
-        if modality == "video":
-            verdict, conf = evaluate_video_uap(model, rec["video_path"], delta_video)
-        else:
-            verdict, conf = evaluate_multimodal_uap(model, rec["video_path"], delta_video, delta_audio)
-        verdicts.append(verdict)
-        scores.append(_to_fake_score(verdict, conf))
-    return verdicts, scores
+    out = TransferEval([], [], [], [], [])
+    for rec in tqdm(videos, desc="Transfer eval", unit="video"):
+        path = rec["video_path"]
+        try:
+            if modality == "video":
+                base_v, base_c = evaluate_video_uap(model, path)
+                adv_v, adv_c = evaluate_video_uap(model, path, delta_video)
+            else:
+                base_v, base_c = evaluate_multimodal_uap(model, path)
+                adv_v, adv_c = evaluate_multimodal_uap(model, path, delta_video, delta_audio)
+        except Exception:  # noqa: BLE001
+            log.warning("Evaluation failed for %s — skipping clip.", rec["video_id"])
+            continue
+        out.labels.append(rec["label"])
+        out.baseline_verdicts.append(base_v)
+        out.baseline_scores.append(_to_fake_score(base_v, base_c))
+        out.adv_verdicts.append(adv_v)
+        out.adv_scores.append(_to_fake_score(adv_v, adv_c))
+    return out
 
 
 # ── δ* artefact saving ───────────────────────────────────────────────────────────
@@ -327,10 +338,12 @@ def main() -> None:
     if not eval_videos:
         raise RuntimeError("No eval videos found. Check --eval-metadata and --normalized-dir.")
 
-    # ── Load model(s) ──────────────────────────────────────────────────────────
-    log.info("Loading models …")
-    video_model = get_video_model()  # always needed for the clean baseline
-    fit_model = get_multimodal_model() if args.modality == "multimodal" else video_model
+    # ── Load model ─────────────────────────────────────────────────────────────
+    # The same model is used to fit δ*, to compute the clean baseline, and to
+    # evaluate the perturbed clips — so the baseline-vs-perturbed comparison is
+    # apples-to-apples (critical for the multimodal modality).
+    log.info("Loading model …")
+    fit_model = get_multimodal_model() if args.modality == "multimodal" else get_video_model()
 
     # ── W&B init ───────────────────────────────────────────────────────────────
     wandb.init(
@@ -350,16 +363,6 @@ def main() -> None:
             "n_eval_videos": len(eval_videos),
         },
     )
-
-    # ── Baseline (clean) eval ──────────────────────────────────────────────────
-    log.info("Running clean baseline on %d eval clips …", len(eval_videos))
-    baseline_verdicts, baseline_scores = _run_baseline(eval_videos)
-    eval_labels = [rec["label"] for rec in eval_videos]
-    baseline_auc = _safe_auc(eval_labels, baseline_scores)
-    baseline_acc = _accuracy(baseline_verdicts, eval_labels)
-    baseline_target_prob = float(np.mean([s if target_class == 1 else 1.0 - s for s in baseline_scores]))
-    wandb.log({"baseline/auc": baseline_auc, "baseline/accuracy": baseline_acc})
-    log.info("Baseline — AUC=%.3f  Acc=%.3f", baseline_auc if not np.isnan(baseline_auc) else -1.0, baseline_acc)
 
     # ── Fit δ* ─────────────────────────────────────────────────────────────────
     fit_paths = [rec["video_path"] for rec in fit_videos]
@@ -393,21 +396,32 @@ def main() -> None:
     linf = float(delta_video.abs().max().item())
     log.info("δ* fitted — video L∞=%.4f (budget %.4f).", linf, args.epsilon)
 
-    # ── Transfer eval ──────────────────────────────────────────────────────────
-    log.info("Evaluating δ* transfer on %d eval clips …", len(eval_videos))
-    adv_verdicts, adv_scores = _run_perturbed(eval_videos, args.modality, fit_model, delta_video, delta_audio)
-    adv_auc = _safe_auc(eval_labels, adv_scores)
-    adv_acc = _accuracy(adv_verdicts, eval_labels)
-    fooling_rate = _fooling_rate(baseline_verdicts, adv_verdicts, target_class)
-    adv_target_prob = float(np.mean([s if target_class == 1 else 1.0 - s for s in adv_scores]))
+    # ── Clean baseline + δ* transfer eval (single aligned pass) ─────────────────
+    log.info("Evaluating clean baseline and δ* transfer on %d eval clips …", len(eval_videos))
+    ev = _evaluate_transfer(eval_videos, args.modality, fit_model, delta_video, delta_audio)
+    if not ev.labels:
+        raise RuntimeError("All eval clips failed evaluation — cannot compute transfer metrics.")
+
+    n_eval = len(ev.labels)
+    baseline_auc = _safe_auc(ev.labels, ev.baseline_scores)
+    baseline_acc = _accuracy(ev.baseline_verdicts, ev.labels)
+    adv_auc = _safe_auc(ev.labels, ev.adv_scores)
+    adv_acc = _accuracy(ev.adv_verdicts, ev.labels)
+    fooling_rate = _fooling_rate(ev.baseline_verdicts, ev.adv_verdicts, target_class)
+    baseline_target_prob = float(np.mean([s if target_class == 1 else 1.0 - s for s in ev.baseline_scores]))
+    adv_target_prob = float(np.mean([s if target_class == 1 else 1.0 - s for s in ev.adv_scores]))
     mean_target_prob_delta = adv_target_prob - baseline_target_prob
 
+    wandb.log({"baseline/auc": baseline_auc, "baseline/accuracy": baseline_acc})
+    log.info("Baseline — AUC=%.3f  Acc=%.3f", baseline_auc if not np.isnan(baseline_auc) else -1.0, baseline_acc)
     log.info(
-        "Transfer — AUC=%.3f  Acc=%.3f  FoolingRate=%.3f  Δtarget-prob=%.4f",
+        "Transfer — AUC=%.3f  Acc=%.3f  FoolingRate=%.3f  Δtarget-prob=%.4f  (%d/%d clips)",
         adv_auc if not np.isnan(adv_auc) else -1.0,
         adv_acc,
         fooling_rate if not np.isnan(fooling_rate) else -1.0,
         mean_target_prob_delta,
+        n_eval,
+        len(eval_videos),
     )
 
     # ── Save δ* artefacts ──────────────────────────────────────────────────────
@@ -448,7 +462,7 @@ def main() -> None:
         args.target_class,
         args.epsilon,
         args.attack_modalities if args.modality == "multimodal" else "n/a",
-        len(eval_videos),
+        n_eval,
         baseline_acc,
         adv_acc,
         baseline_auc,

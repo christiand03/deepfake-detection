@@ -189,6 +189,13 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
                           called with ``params=self.parameters()``.
         scheduler:        Optional partial / callable that returns an LR scheduler
                           when called with ``optimizer=optimizer``.
+        adv_train:        Enable Phase 4.2 PGD-augmented training (1:1 clean/adv
+                          batch-splitting).  Default: ``False`` (baseline training).
+        adv_epsilon:      L∞ budget for the video perturbation.  Default: 0.03.
+        adv_audio_epsilon: L∞ budget for the audio perturbation.  Default: 0.03.
+        adv_steps:        PGD iterations used to craft adversarial samples.  Default: 7.
+        adv_modalities:   Which modalities to perturb during adversarial training:
+                          ``"video"``, ``"audio"``, or ``"both"``.  Default: ``"both"``.
     """
 
     def __init__(
@@ -202,8 +209,20 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         freeze_backbones: bool = True,
         optimizer: Any = None,
         scheduler: Any = None,
+        adv_train: bool = False,
+        adv_epsilon: float = 0.03,
+        adv_audio_epsilon: float = 0.03,
+        adv_steps: int = 7,
+        adv_modalities: str = "both",
     ) -> None:
         super().__init__()
+
+        if adv_train:
+            if adv_steps < 1:
+                raise ValueError(f"adv_steps must be >= 1 when adv_train is True, got {adv_steps}.")
+            if adv_modalities not in ("video", "audio", "both"):
+                raise ValueError(f"adv_modalities must be 'video', 'audio', or 'both', got {adv_modalities!r}.")
+
         self.save_hyperparameters(logger=False)
 
         # Backbones
@@ -320,7 +339,88 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
 
     # Lightning hooks
 
+    # Adversarial training (Phase 4.2)
+
+    def _pgd_perturb(
+        self,
+        pixel_values: torch.Tensor,
+        input_values: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Generate untargeted PGD adversarial inputs for the configured modalities.
+
+        Runs the attack with the model in eval mode (fixed dropout) and restores
+        the previous mode afterwards.  ``adv_modalities`` selects which of video /
+        audio are perturbed; the untouched modality is returned unchanged.
+        """
+        from src.utils.adversarial import untargeted_pgd
+
+        modalities = self.hparams.adv_modalities
+        attack_video = modalities in ("video", "both")
+        attack_audio = modalities in ("audio", "both")
+        step_v = self.hparams.adv_epsilon / self.hparams.adv_steps * 2.5
+        step_a = self.hparams.adv_audio_epsilon / self.hparams.adv_steps * 2.5
+
+        pv_adv, iv_adv = pixel_values, input_values
+        was_training = self.training
+        self.eval()
+        try:
+            if attack_video and attack_audio:
+                pv_adv, iv_adv = untargeted_pgd(
+                    forward_fn=lambda pv, iv: self.forward(pv, iv),
+                    inputs=(pixel_values, input_values),
+                    labels=labels,
+                    epsilons=(self.hparams.adv_epsilon, self.hparams.adv_audio_epsilon),
+                    steps=self.hparams.adv_steps,
+                    step_sizes=(step_v, step_a),
+                )
+            elif attack_video:
+                (pv_adv,) = untargeted_pgd(
+                    forward_fn=lambda pv: self.forward(pv, input_values),
+                    inputs=(pixel_values,),
+                    labels=labels,
+                    epsilons=(self.hparams.adv_epsilon,),
+                    steps=self.hparams.adv_steps,
+                    step_sizes=(step_v,),
+                )
+            elif attack_audio:
+                (iv_adv,) = untargeted_pgd(
+                    forward_fn=lambda iv: self.forward(pixel_values, iv),
+                    inputs=(input_values,),
+                    labels=labels,
+                    epsilons=(self.hparams.adv_audio_epsilon,),
+                    steps=self.hparams.adv_steps,
+                    step_sizes=(step_a,),
+                )
+        finally:
+            self.train(was_training)
+        return pv_adv, iv_adv
+
+    def _adversarial_mix(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Replace the first half of the batch with PGD-adversarial inputs (1:1 mix).
+
+        Batch-splitting keeps per-step VRAM identical to clean training (a single
+        combined forward pass); see docs/model.md for the rationale.
+        """
+        from src.utils.adversarial import num_adversarial_samples
+
+        pixel_values = batch["pixel_values"]
+        input_values = batch["input_values"]
+        labels = batch["labels"]
+        n_adv = num_adversarial_samples(pixel_values.shape[0])
+        if n_adv == 0:
+            return batch
+
+        pv_adv, iv_adv = self._pgd_perturb(pixel_values[:n_adv], input_values[:n_adv], labels[:n_adv])
+        pv_mixed = pixel_values.clone()
+        iv_mixed = input_values.clone()
+        pv_mixed[:n_adv] = pv_adv
+        iv_mixed[:n_adv] = iv_adv
+        return {"pixel_values": pv_mixed, "input_values": iv_mixed, "labels": labels}
+
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        if self.hparams.adv_train:
+            batch = self._adversarial_mix(batch)
         loss, preds, labels, _ = self._model_step(batch)
         self.train_loss(loss)
         self.train_acc(preds, labels)

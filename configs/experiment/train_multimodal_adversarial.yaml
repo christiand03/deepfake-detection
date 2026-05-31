@@ -1,0 +1,21 @@
+# @package _global_
+
+# Phase 4.2 — Adversarial fine-tuning (defense) for the multimodal detector.
+# PGD-augmented training with a 1:1 clean/adv mix (batch-splitting), perturbing
+# video and/or audio per adv_modalities.
+# Run: python src/train.py experiment=train_multimodal_adversarial
+
+defaults:
+  - override /data: deepfake_multimodal
+  - override /model: multimodal
+  - override /logger: wandb
+  - override /trainer: gpu
+
+model:
+  adv_train: true
+  adv_epsilon: 0.03        # L∞ budget for the video modality
+  adv_audio_epsilon: 0.03  # L∞ budget for the audio modality
+  adv_steps: 7             # PGD iterations per step
+  adv_modalities: both     # video | audio | both
+
+tags: ["multimodal", "cross-attention", "adversarial-training", "phase4", "defense"]

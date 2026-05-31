@@ -262,15 +262,17 @@ def _verdict_and_confidence(probs: Tensor) -> tuple[Literal["FAKE", "REAL"], flo
 def evaluate_video_uap(
     model: VideoMAEModule,
     clip_path: Path,
-    delta: Float[Tensor, "1 frames channels height width"],
+    delta: Float[Tensor, "1 frames channels height width"] | None = None,
 ) -> tuple[Literal["FAKE", "REAL"], float]:
-    """Apply a precomputed video δ* to *clip_path* and return its prediction.
+    """Run video inference on *clip_path*, optionally adding a precomputed δ*.
 
-    Counterpart to :func:`src.api.inference.run_video_inference_fast` — no
-    heatmaps, suitable for transfer-evaluation sweeps.
+    With ``delta=None`` this is the *clean* prediction; with a δ* it is the
+    perturbed prediction.  Using one code path for both guarantees the clean
+    baseline and the perturbed eval share identical preprocessing.  Counterpart
+    to :func:`src.api.inference.run_video_inference_fast` — no heatmaps.
     """
     x = _preprocess_video(clip_path).to(_device)
-    x_adv = x + delta
+    x_adv = x if delta is None else x + delta
     with torch.no_grad():
         logits = model.net(pixel_values=x_adv).logits  # (1, 2)
     probs = torch.softmax(logits, dim=-1)[0]
@@ -280,14 +282,22 @@ def evaluate_video_uap(
 def evaluate_multimodal_uap(
     model: MultimodalDeepfakeModule,
     clip_path: Path,
-    delta_video: Float[Tensor, "1 frames channels height width"],
-    delta_audio: Float[Tensor, "1 snippet"],
+    delta_video: Float[Tensor, "1 frames channels height width"] | None = None,
+    delta_audio: Float[Tensor, "1 snippet"] | None = None,
 ) -> tuple[Literal["FAKE", "REAL"], float]:
-    """Apply a precomputed ``(δ_video, δ_audio)`` to *clip_path* and return its prediction."""
+    """Run multimodal inference on *clip_path*, optionally adding ``(δ_video, δ_audio)``.
+
+    With both deltas ``None`` this is the *clean* multimodal prediction; passing
+    deltas yields the perturbed prediction.  Sharing one path keeps the clean
+    baseline and perturbed eval on identical preprocessing *and* the same model.
+    """
     x_v = _preprocess_video(clip_path).to(_device)
     x_a = _load_audio_tensor(clip_path)
-    x_a_adv = x_a + _tile_audio(delta_audio, x_a.shape[-1])
+    if delta_video is not None:
+        x_v = x_v + delta_video
+    if delta_audio is not None:
+        x_a = x_a + _tile_audio(delta_audio, x_a.shape[-1])
     with torch.no_grad():
-        logits = model(pixel_values=x_v + delta_video, input_values=x_a_adv)  # (1, 2)
+        logits = model(pixel_values=x_v, input_values=x_a)  # (1, 2)
     probs = torch.softmax(logits, dim=-1)[0]
     return _verdict_and_confidence(probs)

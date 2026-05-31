@@ -17,8 +17,14 @@ class VideoMAEModule(BaseDeepfakeModule):
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         model_name_or_path: str = "MCG-NJU/videomae-base",
         num_labels: int = 2,
+        adv_train: bool = False,
+        adv_epsilon: float = 0.03,
+        adv_steps: int = 7,
     ):
         super().__init__()
+
+        if adv_train and adv_steps < 1:
+            raise ValueError(f"adv_steps must be >= 1 when adv_train is True, got {adv_steps}.")
 
         self.save_hyperparameters(logger=False)
 
@@ -48,7 +54,52 @@ class VideoMAEModule(BaseDeepfakeModule):
 
         return loss, preds, labels, logits
 
+    def _pgd_perturb(self, pixel_values: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Generate untargeted PGD adversarial frames for *pixel_values*.
+
+        Runs the attack with the backbone in eval mode (fixed dropout) and
+        restores the previous mode afterwards.  Returns a detached tensor.
+        """
+        from src.utils.adversarial import untargeted_pgd
+
+        step_size = self.hparams.adv_epsilon / self.hparams.adv_steps * 2.5
+        was_training = self.net.training
+        self.net.eval()
+        try:
+            (adv,) = untargeted_pgd(
+                forward_fn=lambda pv: self.net(pixel_values=pv).logits,
+                inputs=(pixel_values,),
+                labels=labels,
+                epsilons=(self.hparams.adv_epsilon,),
+                steps=self.hparams.adv_steps,
+                step_sizes=(step_size,),
+            )
+        finally:
+            self.net.train(was_training)
+        return adv
+
+    def _adversarial_mix(self, batch: Any) -> dict[str, torch.Tensor]:
+        """Replace the first half of the batch with PGD-adversarial frames (1:1 mix).
+
+        Batch-splitting keeps per-step VRAM identical to clean training (a single
+        combined forward pass); see docs/model.md for the rationale.
+        """
+        from src.utils.adversarial import num_adversarial_samples
+
+        pixel_values = batch["pixel_values"]
+        labels = batch["labels"]
+        n_adv = num_adversarial_samples(pixel_values.shape[0])
+        if n_adv == 0:
+            return batch
+
+        adv = self._pgd_perturb(pixel_values[:n_adv], labels[:n_adv])
+        mixed = pixel_values.clone()
+        mixed[:n_adv] = adv
+        return {"pixel_values": mixed, "labels": labels}
+
     def training_step(self, batch: Any, batch_idx: int):
+        if self.hparams.adv_train:
+            batch = self._adversarial_mix(batch)
         loss, preds, labels, _ = self.model_step(batch)
         self.train_loss(loss)
         self.train_acc(preds, labels)

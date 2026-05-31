@@ -1,0 +1,18 @@
+# @package _global_
+
+# Phase 4.2 — Adversarial fine-tuning (defense) for the VideoMAE detector.
+# PGD-augmented training with a 1:1 clean/adv mix (batch-splitting).
+# Run: python src/train.py experiment=train_video_adversarial
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+model:
+  adv_train: true
+  adv_epsilon: 0.03   # L∞ perturbation budget (normalised pixel space)
+  adv_steps: 7        # PGD iterations per step
+
+tags: ["videomae", "video", "adversarial-training", "phase4", "defense"]
