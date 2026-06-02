@@ -7,4 +7,4 @@ devices: 1
 #Transformeroptimierung
 
 precision: "bf16-mixed"
-accumulate_grad_batches: 1
+accumulate_grad_batches: 3  # batch_size 2 x 3 = effektiv 6

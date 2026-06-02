@@ -37,6 +37,61 @@ Der geforderte 1:1-Mix aus sauberen und adversarialen Daten wird durch **Batch-S
 
 Die naheliegende Alternative — *Loss-Averaging* (`loss = 0.5·CE(clean) + 0.5·CE(adv)`) — bräuchte **zwei volle Forward-Passes** pro Schritt und damit annähernd den doppelten VRAM. Da VideoMAE bereits am VRAM-Limit trainiert (siehe `configs/data/deepfake_video.yaml`: *"VideoMAE ist hungrig nach VRAM, starte klein!"*), wurde Batch-Splitting bewusst gewählt: Der Speicherbedarf pro Schritt bleibt identisch zum Baseline-Training, während Modell trotzdem zu gleichen Teilen sauberen und adversarialen Beispielen ausgesetzt wird. Dies ist eine direkte Folge der Hardware-Beschränkung (16 GB VRAM Mindestanforderung).
 
+## 6. VRAM-Optimierung & Out-of-Memory (8-GB-GPUs)
+
+VideoMAE-base wird als **vollständiges Fine-Tuning** (~86 Mio. trainierbare Parameter, Input `16×3×224×224`) trainiert. Auf einer **RTX 3060 Ti mit nur 8 GB VRAM** brach `python src/train.py experiment=train_video` zuverlässig mit `torch.OutOfMemoryError: CUDA out of memory` ab. Dieser Abschnitt dokumentiert die Ursache, den umgesetzten Fix und die empirisch vermessenen Grenzen.
+
+### 6.1 Ursache
+
+Zwei vermeidbare Speicherkosten dominierten:
+
+1. **Kein Gradient Checkpointing** — die Aktivierungen aller 12 Transformer-Layer wurden für den Backward-Pass gehalten (der größte ungenutzte Hebel bei Transformern).
+2. **`attn_implementation="eager"`** (`src/models/VideoMAE_module.py`) materialisiert die volle Attention-Score-Matrix `B×12×1568×1568` in *jedem* Layer, und der Softmax läuft in `float32`. Bei `batch_size: 6` sind das mehrere GB allein für die Attention.
+
+> **Constraint:** Eager-Attention ist für den AttnLRP-`explain()`-Pfad **zwingend** (`src/utils/attnlrp.py` patcht `eager_attention_forward`; genutzt aus `src/api/inference.py`, `src/explain.py`). Eager kann daher nicht global durch SDPA ersetzt werden — Training und Erklärung haben unterschiedliche Anforderungen.
+
+### 6.2 Umgesetzter Fix (committet)
+
+Bewusst die **"contained"-Variante**: Eager bleibt überall erhalten, der Speicher wird über Checkpointing, kleineren Per-Step-Batch und Gradient-Accumulation reduziert. Der `explain()`-Pfad bleibt unberührt, die **effektive Batch-Größe bleibt 6**.
+
+| Änderung | Datei | Wert |
+| --- | --- | --- |
+| Gradient Checkpointing aktiviert (`use_reentrant=False`) | `src/models/VideoMAE_module.py` (Flag `gradient_checkpointing: bool = True`) | an |
+| Per-Step-Batch verkleinert | `configs/data/deepfake_video.yaml` | `batch_size: 6 → 2` |
+| Gradient-Accumulation erhöht | `configs/trainer/gpu.yaml` | `accumulate_grad_batches: 1 → 3` |
+| Allokator-Fragmentierung reduziert | `src/train.py` | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` |
+
+`2 × 3 = 6` → identische Gradienten-Statistik wie zuvor, aber ~1/3 des Per-Step-Aktivierungsspeichers. Gradient Checkpointing greift nur, wenn `self.training == True`; der eval-mode-`explain()`-Pfad ist damit **nicht** betroffen (keine Recompute-Pässe während LRP).
+
+> **Hinweis zur Hardware-Anforderung:** Die früher in Abschnitt 5 genannte "16 GB VRAM Mindestanforderung" gilt seit diesem Fix nicht mehr für das Baseline-Video-Training — es läuft jetzt stabil auf 8 GB. Das adversariale Training (Phase 4.2) bleibt durch die zusätzlichen PGD-Forward-Pässe deutlich speicherhungriger.
+
+### 6.3 Empirische Vermessung (echtes `torch.cuda.max_memory_allocated`, bf16, Forward+Backward)
+
+Gemessen auf der RTX 3060 Ti (8 GB), VideoMAE-base, ein Optimizer-Schritt:
+
+| Attention | Batch | Checkpointing | Peak VRAM | Durchsatz |
+| --- | --- | --- | --- | --- |
+| **eager** | **2** | **an** *(aktuelle Config)* | **2,3 GB** | **6,4 Samples/s** |
+| eager | 2 | aus | 6,9 GB | 7,0 Samples/s |
+| eager | 4 | aus | 12,6 GB → **Spill** | 0,29 Samples/s |
+| sdpa | 2 | aus | 2,7 GB | 15,1 Samples/s |
+| sdpa | 8 | aus | 6,2 GB | 17,5 Samples/s |
+| sdpa | 16 | aus | 10,9 GB → **Spill** | 0,49 Samples/s |
+
+### 6.4 Zentrale Erkenntnisse
+
+- **Der freie VRAM ist unter Eager nicht nutzbar.** Die aktuelle Config belegt real nur ~2,3 GB, doch Eager-Attention-Speicher ist `O(batch × N²)` und besteht aus kurzlebigen Softmax-Spitzen, nicht aus dauerhaftem Speicher. Die GPU *wirkt* leer, kippt aber sofort um, sobald der Working-Set wächst.
+- **Per-Step-Batch lässt sich unter Eager nicht erhöhen.** `batch_size: 4` benötigt bereits 12,6 GB und läuft in den Windows-Shared-Memory-Spill (siehe 6.5). Batch 2 ist die Obergrenze.
+- **Checkpointing abschalten bringt nichts.** Spart unter Eager nur ~10 % Zeit (nicht 20–30 %), drückt den Peak aber auf 6,9 GB — zusammen mit dem Lightning-Overhead (Metriken, gepinnte DataLoader-Buffer, Optimizer-States) riskiert das den Spill. Nicht empfohlen.
+- **Effektive Batch-Größe ist kostenlos skalierbar** über `accumulate_grad_batches` (kein zusätzlicher VRAM, da weiterhin Micro-Batches à 2 verarbeitet werden). `4 → eff. 8`, `6 → eff. 12`, `8 → eff. 16`. Das ist ein **Trainings-Dynamik-Knopf, kein Durchsatz-Knopf**: glattere Gradienten, aber langsamere Konvergenz pro Epoche; die Learning Rate (`configs/model/videomae.yaml`, aktuell `1e-4`) sollte grob linear mit der effektiven Batch-Größe mitskaliert werden.
+- **Der einzige echte Durchsatz-Hebel ist SDPA fürs Training** (~2,8× schneller, Batch 8 in 6,2 GB). Da die Modellgewichte unabhängig von der Attention-Implementierung identisch sind, kann ein mit SDPA trainiertes Modell für `explain()` weiterhin mit `attn_implementation="eager"` geladen werden. Bewusst aufgeschoben, um den AttnLRP-Pfad einfach zu halten — Option bleibt offen, falls die Trainingszeit zum Engpass wird.
+
+### 6.5 Fallstrick: Windows Shared-Memory-Spillover
+
+Unter Windows (WDDM) erlaubt der NVIDIA-Treiber die **Überbelegung des GPU-Speichers in den geteilten System-RAM** (im Task-Manager: *"Gemeinsamer GPU-Speicher"*). Statt eines sauberen OOM **spillt** ein zu großer Batch lautlos in den System-RAM und läuft **~9× langsamer** (gemessen: Batch 4 in Lightning = 629 s vs. 70 s für 40 Batches bei Batch 2). Erst wenn auch der Shared Memory erschöpft ist, kommt der harte OOM (z. B. Batch 8).
+
+> **Mess-Hinweis:** `nvidia-smi` / Task-Manager zeigen den *reservierten* Cache des PyTorch-Caching-Allocators (kriecht Richtung Kapazität, da freigegebene Blöcke gecacht werden) — **nicht** den echten Bedarf. Ein Screenshot mit "3,6 / 8,0 GB" bedeutet nicht, dass 4 GB frei nutzbar sind. Für belastbare Zahlen `torch.cuda.max_memory_allocated()` verwenden, nicht `nvidia-smi`.
+
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"
 - "Cross-Modal Attention Networks for Lip-Sync Detection"

@@ -1,5 +1,5 @@
 _target_: src.data.videomae_datamodule.VideoMAEDataModule
 data_dir: ${paths.data_dir}/processed
-batch_size: 10  # VideoMAE ist hungrig nach VRAM, starte klein!
+batch_size: 2  # VideoMAE ist hungrig nach VRAM; mit accumulate_grad_batches=3 effektiv 6
 num_workers: 2
 pin_memory: True

@@ -1,4 +1,6 @@
 import functools
+import os
+import sys
 from typing import TYPE_CHECKING, Any
 
 import hydra
@@ -15,6 +17,14 @@ if TYPE_CHECKING:
 
 torch.set_float32_matmul_precision("medium")
 torch.serialization.add_safe_globals([functools.partial, AdamW, ReduceLROnPlateau])
+
+# Use expandable CUDA segments to reduce allocator fragmentation OOMs on small
+# GPUs. PyTorch reads this lazily at first CUDA allocation (well after import),
+# so setting it here is in time. setdefault respects an externally-set value.
+# Linux-only: on Windows PyTorch warns "expandable_segments not supported on
+# this platform" and ignores it, so we skip it there.
+if sys.platform != "win32":
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # ------------------------------------------------------------------------------------ #
