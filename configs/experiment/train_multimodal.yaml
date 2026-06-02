@@ -6,4 +6,6 @@ defaults:
   - override /logger: wandb
   - override /trainer: gpu
 
+ckpt_export_name: multimodal
+
 tags: ["multimodal", "cross-attention", "fusion", "videomae", "wav2vec2"]

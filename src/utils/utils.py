@@ -1,11 +1,16 @@
+import shutil
 import warnings
 from collections.abc import Callable
 from importlib.util import find_spec
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from omegaconf import DictConfig
 
 from src.utils import pylogger, rich_utils
+
+if TYPE_CHECKING:
+    from lightning import Trainer
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
@@ -118,3 +123,50 @@ def get_metric_value(metric_dict: dict[str, Any], metric_name: str | None) -> fl
     log.info("Retrieved metric value! <%s=%s>", metric_name, metric_value)
 
     return metric_value
+
+
+# Map LightningModule class name -> stable export filename stem expected by the
+# API env vars (VIDEOMAE_CKPT_PATH / WAV2VEC2_CKPT_PATH / MULTIMODAL_CKPT_PATH).
+_CKPT_NAME_BY_CLASS = {
+    "VideoMAEModule": "videomae",
+    "Wav2Vec2DeepfakeModule": "wav2vec2",
+    "MultimodalDeepfakeModule": "multimodal",
+}
+
+
+def export_best_checkpoint(cfg: DictConfig, trainer: "Trainer") -> None:
+    """Copy the best checkpoint to a stable path so the API/frontend can reuse it.
+
+    The ``ModelCheckpoint`` callback saves the best model under a timestamped run
+    directory with a metric-dependent filename. This copies it to
+    ``<paths.export_dir>/<name>.ckpt`` — a predictable location the API loads via
+    its ``*_CKPT_PATH`` environment variables. No-op unless ``cfg.export_ckpt`` is
+    truthy.
+
+    The filename stem comes from ``cfg.ckpt_export_name`` if set, otherwise it is
+    derived from the model class (e.g. ``VideoMAEModule`` -> ``videomae``).
+
+    :param cfg: A DictConfig configuration composed by Hydra.
+    :param trainer: The Lightning ``Trainer`` after fit/test.
+    """
+    if not cfg.get("export_ckpt"):
+        return
+
+    callback = trainer.checkpoint_callback
+    if callback is None or not getattr(callback, "best_model_path", ""):
+        log.warning(
+            "No best checkpoint to export (checkpointing disabled or no validation run)."
+        )
+        return
+
+    name = cfg.get("ckpt_export_name")
+    if not name:
+        class_name = str(cfg.model._target_).rsplit(".", 1)[-1]
+        name = _CKPT_NAME_BY_CLASS.get(class_name, class_name.lower())
+
+    export_dir = Path(cfg.paths.export_dir)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    dst = export_dir / f"{name}.ckpt"
+
+    shutil.copy2(callback.best_model_path, dst)
+    log.info("Exported best checkpoint to %s", dst)

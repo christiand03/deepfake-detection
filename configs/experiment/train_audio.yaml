@@ -6,4 +6,6 @@ defaults:
   - override /logger: wandb
   - override /trainer: gpu
 
+ckpt_export_name: wav2vec2
+
 tags: ["wav2vec2", "audio", "baseline"]

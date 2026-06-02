@@ -13,6 +13,11 @@ data_dir: ${oc.env:DEEPFAKE_DATA_DIR,${paths.root_dir}/data/}
 # path to logging directory (same env-var override mechanism as data_dir)
 log_dir: ${oc.env:DEEPFAKE_LOG_DIR,${paths.root_dir}/logs/}
 
+# directory the best checkpoint is exported to after training (see export_ckpt in
+# train.yaml). Honours DEEPFAKE_CKPT_DIR so W&B Launch jobs (temp clone) can write
+# to an absolute host path instead of the throwaway run dir; else <root>/checkpoints/.
+export_dir: ${oc.env:DEEPFAKE_CKPT_DIR,${paths.root_dir}/checkpoints/}
+
 # path to output directory, created dynamically by hydra
 # path generation pattern is specified in `configs/hydra/default.yaml`
 # use it to store all files generated during the run, like ckpts and metrics

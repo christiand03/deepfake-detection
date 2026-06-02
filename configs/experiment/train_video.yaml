@@ -6,5 +6,6 @@ defaults:
   - override /logger: wandb
   - override /trainer: gpu
 
+ckpt_export_name: videomae
 
 tags: ["videomae", "video", "baseline"]

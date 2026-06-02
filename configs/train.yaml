@@ -45,5 +45,14 @@ test: True
 # simply provide checkpoint path to resume training
 ckpt_path: null
 
+# after training, copy the best checkpoint to a stable path (paths.export_dir) so
+# the API/frontend can reuse it via its *_CKPT_PATH env vars. Set False to disable.
+export_ckpt: True
+
+# filename stem for the exported checkpoint (<export_dir>/<name>.ckpt). If null,
+# it is derived from the model class (e.g. VideoMAEModule -> videomae). Experiment
+# configs set this explicitly so adversarial runs don't overwrite the baselines.
+ckpt_export_name: null
+
 # seed for random number generators in pytorch, numpy and python.random
 seed: null

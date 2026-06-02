@@ -10,6 +10,8 @@ defaults:
   - override /logger: wandb
   - override /trainer: gpu
 
+ckpt_export_name: videomae_adv
+
 model:
   adv_train: true
   adv_epsilon: 0.03   # L∞ perturbation budget (normalised pixel space)

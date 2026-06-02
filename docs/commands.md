@@ -104,6 +104,20 @@ python src/train.py experiment=train_audio
 
 Checkpoints werden automatisch in `logs/train/runs/<timestamp>/checkpoints/` gespeichert.
 
+**Automatischer Export für die API/Frontend:** Nach jedem Training wird der beste
+Checkpoint (niedrigster `val/loss`) zusätzlich an einen stabilen Pfad kopiert –
+standardmäßig `checkpoints/<name>.ckpt` (`videomae`, `wav2vec2`, `multimodal`
+bzw. `videomae_adv`/`multimodal_adv` für die Adversarial-Varianten). Damit zeigen
+die API-Umgebungsvariablen (`VIDEOMAE_CKPT_PATH`, `WAV2VEC2_CKPT_PATH`,
+`MULTIMODAL_CKPT_PATH`) immer auf eine vorhersagbare Datei, ohne den
+zeitgestempelten Run-Ordner durchsuchen zu müssen.
+
+- Deaktivieren: `python src/train.py experiment=train_video export_ckpt=false`
+- Anderen Namen wählen: `... ckpt_export_name=mein_modell`
+- Zielordner ändern: Umgebungsvariable `DEEPFAKE_CKPT_DIR` (absolut) setzen –
+  wichtig für W&B-Launch-Läufe, die in einem temporären Klon laufen (siehe
+  `docs/launch.md`).
+
 ---
 
 ## 5. Evaluation auf dem Test-Set

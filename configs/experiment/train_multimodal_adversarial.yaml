@@ -11,6 +11,8 @@ defaults:
   - override /logger: wandb
   - override /trainer: gpu
 
+ckpt_export_name: multimodal_adv
+
 model:
   adv_train: true
   adv_epsilon: 0.03        # L∞ budget for the video modality

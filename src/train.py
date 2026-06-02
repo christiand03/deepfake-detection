@@ -46,6 +46,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from src.utils import (  # noqa: E402
     RankedLogger,
+    export_best_checkpoint,
     extras,
     get_metric_value,
     instantiate_callbacks,
@@ -118,6 +119,9 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             ckpt_path = None
         trainer.test(model=model, datamodule=datamodule, ckpt_path=ckpt_path)
         log.info("Best ckpt path: %s", ckpt_path)
+
+    # promote the best checkpoint to a stable path for API/frontend reuse
+    export_best_checkpoint(cfg, trainer)
 
     test_metrics = trainer.callback_metrics
 

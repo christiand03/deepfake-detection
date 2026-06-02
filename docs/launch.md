@@ -57,19 +57,37 @@ Alternativ ueber die Web-UI: **wandb.ai → Entity
 
 Zuerst die absoluten Pfade des Desktop-PCs als Umgebungsvariablen setzen. Diese
 werden von `configs/paths/default.yaml` ausgewertet (`DEEPFAKE_DATA_DIR`,
-`DEEPFAKE_LOG_DIR`) und vom Trainingsprozess geerbt – damit findet jeder Job die
-echten Daten, obwohl er im temporaeren Klon laeuft:
+`DEEPFAKE_LOG_DIR`, `DEEPFAKE_CKPT_DIR`) und vom Trainingsprozess geerbt – damit
+findet jeder Job die echten Daten und legt den exportierten besten Checkpoint an
+einem dauerhaften Ort ab, obwohl er im temporaeren Klon laeuft. `DEEPFAKE_CKPT_DIR`
+ist hier besonders wichtig: ohne ihn landet der Export im temporaeren Klon und
+geht mit dem Job verloren.
 
 ```powershell
 $env:DEEPFAKE_DATA_DIR = "D:/DeepfakeProjekt/Belegarbeit/deepfake-detection/data/"
 $env:DEEPFAKE_LOG_DIR  = "D:/DeepfakeProjekt/Belegarbeit/deepfake-detection/logs/"
+$env:DEEPFAKE_CKPT_DIR = "D:/DeepfakeProjekt/Belegarbeit/deepfake-detection/checkpoints/"
 
-wandb launch-agent -e christian-debbertin-deepfake-detection -q Desktop_PC -c launch/launch-config.yaml
+# Windows: NICHT `wandb launch-agent` verwenden (siehe Hinweis unten), sondern:
+python launch/agent_windows.py -e christian-debbertin-deepfake-detection -q Desktop_PC -c launch/launch-config.yaml
 ```
 
 Sind die Variablen nicht gesetzt, faellt die Konfiguration auf
 `${paths.root_dir}/data/` bzw. `/logs/` zurueck – lokale Laeufe (`python
 src/train.py ...`) bleiben also unveraendert.
+
+> **Windows-Hinweis (wichtig):** Der eingebaute Befehl
+> `wandb launch-agent` funktioniert auf nativem Windows **nicht** mit der
+> `local-process`-Resource. wandb baut das Run-Kommando mit vorangestellten
+> Env-Variablen im POSIX-Stil (`WANDB_API_KEY=... python src/train.py ...`) und
+> fuehrt es ueber `cmd /C` aus – `cmd.exe` kann diese Syntax nicht parsen und
+> bricht mit `Der Befehl "WANDB_BASE_URL" ... konnte nicht gefunden werden` ab;
+> der Job endet sofort als „finished“ (faktisch fehlgeschlagen). Das Skript
+> [`launch/agent_windows.py`](../launch/agent_windows.py) startet denselben
+> Agenten, patcht aber `LocalProcessRunner.run` so, dass die Env-Variablen in
+> `os.environ` gesetzt werden (der Trainings-Subprozess erbt sie via
+> `os.environ.copy()`) und nur das blanke Kommando ausgefuehrt wird. Unter
+> Linux/WSL kann weiterhin direkt `wandb launch-agent ...` genutzt werden.
 
 - `-c launch/launch-config.yaml` setzt u. a. `max_jobs: 1`, damit Trainings auf
   der einzelnen GPU strikt nacheinander laufen.
