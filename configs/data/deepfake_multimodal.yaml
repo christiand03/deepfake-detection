@@ -1,6 +1,6 @@
 _target_: src.data.multimodal_datamodule.MultimodalDataModule
 data_dir: ${paths.data_dir}/processed
-batch_size: 4       # Video + Audio zusammen: klein starten, beide Backbones brauchen VRAM
-num_workers: 4
+batch_size: 2       # Eager-Backbones + Phase-2-End-to-End: klein; trainer accumulate_grad_batches=3 → effektiv 6
+num_workers: 2
 pin_memory: True
 label_type: "label"

@@ -92,6 +92,13 @@ Unter Windows (WDDM) erlaubt der NVIDIA-Treiber die **Überbelegung des GPU-Spei
 
 > **Mess-Hinweis:** `nvidia-smi` / Task-Manager zeigen den *reservierten* Cache des PyTorch-Caching-Allocators (kriecht Richtung Kapazität, da freigegebene Blöcke gecacht werden) — **nicht** den echten Bedarf. Ein Screenshot mit "3,6 / 8,0 GB" bedeutet nicht, dass 4 GB frei nutzbar sind. Für belastbare Zahlen `torch.cuda.max_memory_allocated()` verwenden, nicht `nvidia-smi`.
 
+### 6.6 Multimodal: Eager-Attention & Phase-2-Speicher
+
+Das `MultimodalDeepfakeModule` lädt **beide** Backbones (`VideoMAEModel`, `Wav2Vec2Model`) bewusst mit `attn_implementation="eager"` — genau wie die unimodalen Module. Grund ist **nicht** der Speicher, sondern **AttnLRP**: `explain()` patcht `eager_attention_forward` über `lxt.monkey_patch`, und dieser Pfad ist nur bei Eager-Attention differenzierbar (SDPAs fusionierte Kernel sind nicht patchbar). Mit dem HuggingFace-Default (SDPA) wären die multimodalen Erklärungen falsch. `explain()` wendet die Patches jetzt einmalig auf beide Backbones **und** den Fusion-Head an (geschützt durch `_MULTIMODAL_LRP_PATCHED`).
+
+- **Phase 1 (`freeze_backbones=True`):** Die Backbones laufen eingefroren im eval-Modus → kein Autograd-Graph, Aktivierungen werden sofort verworfen. Eager kostet hier nur etwas mehr transienten Speicher pro Layer (sofort wieder freigegeben), passt aber problemlos.
+- **Phase 2 (`freeze_backbones=False`, end-to-end):** Beide Backbones werden trainierbar → Aktivierungen werden für den Backward gehalten, und Eager bringt die `O(N²)`-Attention zurück. Deshalb hat das Modul jetzt — wie `VideoMAEModule` — ein `gradient_checkpointing`-Flag (Default `true`, nur im train-Modus aktiv) und einen kleineren Default-Batch (`configs/data/deepfake_multimodal.yaml`: `batch_size: 2`), der über `accumulate_grad_batches=3` (trainer/gpu) effektiv 6 ergibt.
+
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"
 - "Cross-Modal Attention Networks for Lip-Sync Detection"

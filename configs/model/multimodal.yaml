@@ -13,6 +13,8 @@ num_classes: 2
 # Phase 2: auf False setzen und mit niedrigerer LR end-to-end fine-tunen
 freeze_backbones: True
 
+gradient_checkpointing: true  # nur in Phase 2 aktiv (unfrozen Backbones); spart VRAM
+
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true

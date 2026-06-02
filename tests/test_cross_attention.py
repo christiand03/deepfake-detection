@@ -39,9 +39,9 @@ print(f"{'=' * 60}\n")
 # ── Hilfsfunktionen ────────────────────────────────────────────────────────────
 
 
-def make_video_hidden(batch=BATCH_SIZE, t_v=1569, d=VIDEO_DIM):
+def make_video_hidden(batch=BATCH_SIZE, t_v=1568, d=VIDEO_DIM):
     """Dummy VideoMAE hidden states (B, T_v, D_v).
-    T_v = 1568 Patch-Tokens + 1 CLS-Token für VideoMAE-base mit 16 Frames."""
+    T_v = 1568 Patch-Tokens für VideoMAE-base mit 16 Frames (kein CLS-Token)."""
     return torch.randn(batch, t_v, d, device=DEVICE)
 
 
@@ -157,9 +157,17 @@ def test_freeze_backbones():
     assert len(frozen_audio) == 0, f"{len(frozen_audio)} Audio-Backbone-Parameter sind NICHT eingefroren!"
     assert len(fusion_trainable) > 0, "Fusion-Head hat keine trainierbaren Parameter!"
 
+    # Frozen backbones must stay in eval() even after model.train() — sonst
+    # laufen Dropout/Stochastic-Depth bei der Feature-Extraktion (Train/Eval-Mismatch).
+    model.train()
+    assert model.video_backbone.training is False, "Video-Backbone ist nach train() NICHT im eval-Modus!"
+    assert model.audio_backbone.training is False, "Audio-Backbone ist nach train() NICHT im eval-Modus!"
+    assert model.fusion.training is True, "Fusion-Head sollte nach train() im Trainings-Modus sein!"
+
     print(f"  ✓ Video-Backbone eingefroren  ({sum(p.numel() for p in model.video_backbone.parameters()):,} params)")
     print(f"  ✓ Audio-Backbone eingefroren  ({sum(p.numel() for p in model.audio_backbone.parameters()):,} params)")
     print(f"  ✓ Fusion-Head trainierbar     ({sum(p.numel() for p in model.fusion.parameters()):,} params)")
+    print("  ✓ Backbones bleiben nach model.train() im eval-Modus")
 
 
 # ── Test 5: Voller Forward-Pass mit echten Backbones ──────────────────────────

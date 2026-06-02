@@ -4,10 +4,14 @@
 root_dir: ${oc.env:PROJECT_ROOT}
 
 # path to data directory
-data_dir: ${paths.root_dir}/data/
+# Honours DEEPFAKE_DATA_DIR if set, else falls back to <root>/data/. The env var
+# lets W&B Launch jobs (which run in a temporary repo clone) point at the real,
+# absolute data location on the host without per-launch overrides. Normal local
+# runs are unaffected as long as the env var is unset.
+data_dir: ${oc.env:DEEPFAKE_DATA_DIR,${paths.root_dir}/data/}
 
-# path to logging directory
-log_dir: ${paths.root_dir}/logs/
+# path to logging directory (same env-var override mechanism as data_dir)
+log_dir: ${oc.env:DEEPFAKE_LOG_DIR,${paths.root_dir}/logs/}
 
 # path to output directory, created dynamically by hydra
 # path generation pattern is specified in `configs/hydra/default.yaml`

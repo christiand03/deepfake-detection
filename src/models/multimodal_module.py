@@ -40,6 +40,8 @@ from transformers import VideoMAEModel, Wav2Vec2Model
 
 from .base_module import BaseDeepfakeModule
 
+_MULTIMODAL_LRP_PATCHED: bool = False
+
 # Cross-Attention Fusion block
 
 
@@ -169,10 +171,13 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
     fusion head is trained by default (``freeze_backbones=True``), which
     makes the initial training much cheaper.
 
-    A typical two-phase training schedule:
+    A typical two-phase training schedule (run as TWO separate trainings — the
+    optimizer is built once per ``fit`` over the then-trainable parameters, so
+    unfreezing mid-run would not add the backbones to the live optimizer):
       1. ``freeze_backbones=True``  — train only the fusion head for ~5 epochs.
-      2. ``freeze_backbones=False`` — unfreeze everything and fine-tune end-to-end
-         with a lower learning rate.
+      2. ``freeze_backbones=False`` + ``ckpt_path=<phase1.ckpt>`` — resume and
+         fine-tune end-to-end with a lower learning rate; the fresh optimizer
+         now covers both backbones and the fusion head.
 
     Args:
         video_model_name: HuggingFace model ID for the video backbone.
@@ -207,6 +212,7 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         dropout: float = 0.1,
         num_classes: int = 2,
         freeze_backbones: bool = True,
+        gradient_checkpointing: bool = True,
         optimizer: Any = None,
         scheduler: Any = None,
         adv_train: bool = False,
@@ -227,12 +233,31 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
 
         # Backbones
         # Use the base models (no classification head) to get hidden-state sequences.
-        self.video_backbone = VideoMAEModel.from_pretrained(video_model_name)
-        self.audio_backbone = Wav2Vec2Model.from_pretrained(audio_model_name)
+        # attn_implementation="eager" is required so explain() can monkey-patch the
+        # attention for AttnLRP (SDPA's fused kernels are not patchable) — matches the
+        # unimodal VideoMAEModule / Wav2Vec2DeepfakeModule.
+        self.video_backbone = VideoMAEModel.from_pretrained(video_model_name, attn_implementation="eager")
+        self.audio_backbone = Wav2Vec2Model.from_pretrained(audio_model_name, attn_implementation="eager")
 
         # Freeze the Wav2Vec2 CNN feature extractor (always — it has no useful gradient signal for deepfake detection).
         self.audio_backbone.feature_extractor._freeze_parameters()
 
+        # Gradient checkpointing for Phase 2 (end-to-end fine-tuning). HF only applies
+        # it when a backbone is in train mode, so it is INERT in Phase 1 (frozen ->
+        # eval, see train()) and during eval-mode explain() — only the unfrozen
+        # backbones of Phase 2 benefit. use_reentrant=False is the recommended variant.
+        if self.hparams.gradient_checkpointing:
+            self.video_backbone.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
+            self.audio_backbone.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
+
+        # Runtime flag (not just the hparam) so that unfreeze_backbones() can flip it.
+        # While True, the backbones are forced into eval() mode inside train() so that
+        # their dropout / stochastic-depth stay off during feature extraction.
+        self._backbones_frozen = freeze_backbones
         if freeze_backbones:
             self._set_backbone_grad(requires_grad=False)
 
@@ -258,14 +283,35 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         for p in self.audio_backbone.parameters():
             p.requires_grad = requires_grad
 
+    def train(self, mode: bool = True) -> "MultimodalDeepfakeModule":
+        """Set training mode, but keep frozen backbones in eval mode.
+
+        Lightning calls ``model.train()`` at the start of ``fit``.  When the
+        backbones are frozen we do NOT want their dropout / stochastic-depth to
+        run during feature extraction — that would make the extracted features
+        noisy in training but deterministic at eval (a train/eval mismatch).
+        """
+        super().train(mode)
+        if self._backbones_frozen:
+            self.video_backbone.eval()
+            self.audio_backbone.eval()
+        return self
+
     def unfreeze_backbones(self) -> None:
         """Unfreeze both backbones for end-to-end fine-tuning.
 
-        Call this from a ``Callback.on_epoch_start`` or manually after the
-        first training phase to enable full back-propagation through both
-        transformer stacks.
+        NOTE: This only enables ``requires_grad``.  The optimizer built by
+        ``configure_optimizers`` is created once at the start of ``fit`` over the
+        then-trainable parameters, so a bare mid-run call does NOT add the
+        backbone parameters to the live optimizer and they will not actually be
+        trained.  To fine-tune the backbones, either (a) run a second training
+        with ``freeze_backbones=False`` and ``ckpt_path=<phase1.ckpt>`` so a fresh
+        optimizer covers all parameters, or (b) use a Lightning fine-tuning
+        callback that rebuilds the optimizer when unfreezing.
         """
         self._set_backbone_grad(requires_grad=True)
+        # Backbones now follow the module's train/eval mode.
+        self._backbones_frozen = False
         # Re-freeze the CNN front-end: it never needs gradients.
         self.audio_backbone.feature_extractor._freeze_parameters()
 
@@ -288,7 +334,8 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
             ``(B, T_v, D_v)`` and ``(B, T_a, D_a)``.
         """
         video_out = self.video_backbone(pixel_values=pixel_values)
-        # last_hidden_state includes the CLS token at position 0.
+        # VideoMAE has no CLS token: last_hidden_state is the 1568 patch-token
+        # sequence (8 temporal x 14 x 14 patches for 16 frames @ 224x224).
         video_hidden = video_out.last_hidden_state  # (B, T_v, D_v)
 
         audio_out = self.audio_backbone(input_values=input_values)
@@ -480,6 +527,24 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
             resolved_target: ``(B,)`` long tensor of explained class indices.
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
+
+        # Apply the lxt monkey_patch once to ALL differentiable sub-graphs so that
+        # AttnLRP relevance propagates correctly: both eager backbones (attention +
+        # LayerNorm/GELU/Dropout) and the fusion head (LayerNorm/GELU/Dropout).
+        global _MULTIMODAL_LRP_PATCHED
+        if not _MULTIMODAL_LRP_PATCHED:
+            from lxt.efficient import monkey_patch
+
+            from src.utils.attnlrp import (
+                build_common_patch_map,
+                patch_videomae_for_attnlrp,
+                patch_wav2vec2_for_attnlrp,
+            )
+
+            patch_videomae_for_attnlrp(self.video_backbone)
+            patch_wav2vec2_for_attnlrp(self.audio_backbone)
+            monkey_patch(self.fusion, patch_map=build_common_patch_map())
+            _MULTIMODAL_LRP_PATCHED = True
 
         import torch.nn.functional as F_nn
         from einops import rearrange, reduce

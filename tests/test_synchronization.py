@@ -83,7 +83,7 @@ def test_audio_sensitivity():
         .eval()
     )
 
-    video_h = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
+    video_h = torch.randn(BATCH, 1568, VIDEO_DIM, device=DEVICE)
     audio_a = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)
     audio_b = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)  # komplett anderes Audio
 
@@ -118,8 +118,8 @@ def test_video_sensitivity():
     )
 
     audio_h = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)
-    video_a = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
-    video_b = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
+    video_a = torch.randn(BATCH, 1568, VIDEO_DIM, device=DEVICE)
+    video_b = torch.randn(BATCH, 1568, VIDEO_DIM, device=DEVICE)
 
     with torch.no_grad():
         logits_a = fusion(video_a, audio_h)
@@ -191,7 +191,7 @@ def test_attention_weights_not_uniform():
         .eval()
     )
 
-    video_h = torch.randn(BATCH, 1569, VIDEO_DIM, device=DEVICE)
+    video_h = torch.randn(BATCH, 1568, VIDEO_DIM, device=DEVICE)
     audio_h = torch.randn(BATCH, 32, AUDIO_DIM, device=DEVICE)
 
     with torch.no_grad():
@@ -243,7 +243,7 @@ def test_document_token_level_behavior():
     """
     print("\nTest 5: Token-Level-Attention — Verhalten dokumentieren")
 
-    t_v = 1569  # VideoMAE-base Tokens (inkl. CLS)
+    t_v = 1568  # VideoMAE-base Patch-Tokens (kein CLS)
     t_a = 32  # Wav2Vec2-base Tokens für 10240 Samples
 
     video_duration_s = NUM_FRAMES / TARGET_FPS  # 0.64s
@@ -254,7 +254,7 @@ def test_document_token_level_behavior():
     # → nicht sinnvoll einen Token einem Frame zuzuordnen
     audio_token_duration_ms = (audio_duration_s / t_a) * 1000
 
-    print(f"  Video-Tokens:          {t_v} (inkl. CLS, über {video_duration_s:.2f}s)")
+    print(f"  Video-Tokens:          {t_v} (Patch-Tokens, kein CLS, über {video_duration_s:.2f}s)")
     print(f"  Audio-Tokens:          {t_a} (je ~{audio_token_duration_ms:.1f}ms)")
     print("  Attention-Typ:         global (jeder Token → jeden Token)")
     print(f"  Chunk-Alignment:       ✓ (beide Fenster = {video_duration_s:.2f}s)")
