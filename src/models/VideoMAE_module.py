@@ -17,6 +17,7 @@ class VideoMAEModule(BaseDeepfakeModule):
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         model_name_or_path: str = "MCG-NJU/videomae-base",
         num_labels: int = 2,
+        gradient_checkpointing: bool = True,
         adv_train: bool = False,
         adv_epsilon: float = 0.03,
         adv_steps: int = 7,
@@ -38,6 +39,15 @@ class VideoMAEModule(BaseDeepfakeModule):
             use_mean_pooling=True,
             attn_implementation="eager",
         )
+
+        # Gradient checkpointing trades ~10% step time (measured) for a large
+        # drop in activation memory — required to fit full fine-tuning on small GPUs.
+        # HF only applies it when self.training is True, so the eval-mode
+        # explain() / AttnLRP path is unaffected.
+        if self.hparams.gradient_checkpointing:
+            self.net.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
 
     def forward(self, pixel_values: torch.Tensor):
         return self.net(pixel_values=pixel_values)
