@@ -1,6 +1,6 @@
 _target_: src.data.videomae_datamodule.VideoMAEDataModule
 data_dir: ${paths.data_dir}/processed
-batch_size: 2  # VideoMAE ist hungrig nach VRAM; mit accumulate_grad_batches=3 effektiv 6
+batch_size: 16  # Phase-1-Wert (Backbone eingefroren, ~5,3 GB). Phase 2 heruntersetzen (z. B. 2)!
 num_workers: 2
 pin_memory: True
 label_type: "label_video"  # Video-only-Modell: balanciertes, beobachtbares Ziel (nicht das kombinierte "label")

@@ -1,6 +1,6 @@
 _target_: src.data.multimodal_datamodule.MultimodalDataModule
 data_dir: ${paths.data_dir}/processed
-batch_size: 2       # Eager-Backbones + Phase-2-End-to-End: klein; trainer accumulate_grad_batches=3 → effektiv 6
+batch_size: 16      # Phase-1-Wert (beide Backbones eingefroren, ~5,7 GB). Phase 2 heruntersetzen (z. B. 1)!
 num_workers: 2
 pin_memory: True
 label_type: "label"

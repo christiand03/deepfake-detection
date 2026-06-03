@@ -13,6 +13,12 @@ defaults:
 
 ckpt_export_name: multimodal_adv
 
+# Schwerster Pfad: beide Backbones trainierbar + PGD. bs 2 ist host-RAM-knapp (s. §6.6) → bs 1.
+data:
+  batch_size: 1
+trainer:
+  accumulate_grad_batches: 6  # 1 × 6 = effektiv 6
+
 model:
   adv_train: true
   freeze_backbone: false   # Phase 2: Backbones trainierbar, sonst härtet das

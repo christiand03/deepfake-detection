@@ -99,7 +99,9 @@ Unter Windows (WDDM) erlaubt der NVIDIA-Treiber die **Überbelegung des GPU-Spei
 Das `MultimodalDeepfakeModule` lädt **beide** Backbones (`VideoMAEModel`, `Wav2Vec2Model`) bewusst mit `attn_implementation="eager"` — genau wie die unimodalen Module. Grund ist **nicht** der Speicher, sondern **AttnLRP**: `explain()` patcht `eager_attention_forward` über `lxt.monkey_patch`, und dieser Pfad ist nur bei Eager-Attention differenzierbar (SDPAs fusionierte Kernel sind nicht patchbar). Mit dem HuggingFace-Default (SDPA) wären die multimodalen Erklärungen falsch. `explain()` wendet die Patches jetzt einmalig auf beide Backbones **und** den Fusion-Head an (geschützt durch `_MULTIMODAL_LRP_PATCHED`).
 
 - **Phase 1 (`freeze_backbone=True`):** Die Backbones laufen eingefroren im eval-Modus → kein Autograd-Graph, Aktivierungen werden sofort verworfen. Eager kostet hier nur etwas mehr transienten Speicher pro Layer (sofort wieder freigegeben), passt aber problemlos.
-- **Phase 2 (`freeze_backbone=False`, end-to-end):** Beide Backbones werden trainierbar → Aktivierungen werden für den Backward gehalten, und Eager bringt die `O(N²)`-Attention zurück. Deshalb hat das Modul jetzt — wie `VideoMAEModule` — ein `gradient_checkpointing`-Flag (Default `true`, nur im train-Modus aktiv) und einen kleineren Default-Batch (`configs/data/deepfake_multimodal.yaml`: `batch_size: 2`), der über `accumulate_grad_batches=3` (trainer/gpu) effektiv 6 ergibt.
+- **Phase 2 (`freeze_backbone=False`, end-to-end):** Beide Backbones werden trainierbar → Aktivierungen werden für den Backward gehalten, und Eager bringt die `O(N²)`-Attention zurück. Deshalb hat das Modul jetzt — wie `VideoMAEModule` — ein `gradient_checkpointing`-Flag (Default `true`, nur im train-Modus aktiv). Der Daten-Default `batch_size: 16` ist ein **Phase-1-Wert** (s. §7.7) und muss für Phase 2 heruntergesetzt werden (`data.batch_size=1`, s. u.).
+
+> **Hinweis:** Die Speicheranalyse in §6.1–6.5 (Batch-Obergrenze ≈ 2, Eager-Spill ab Batch 4) beschreibt das **Full-Finetune-/Phase-2-Regime**. In **Phase 1** (eingefrorener Backbone, der neue Default) ist der Speicherbedarf weit geringer und große Batches passen — siehe §7.7.
 
 **Phase 2 starten (Warm-Start vom Phase-1-Checkpoint).** Der korrekte Weg ist
 **`warmstart_ckpt`** (lädt nur die Gewichte, frischer Optimizer/LR/Epoch) — **nicht** `ckpt_path`
@@ -251,6 +253,34 @@ Das Backbone-Freeze-Muster ist jetzt für **alle drei Modelle einheitlich** und 
 > **Vorbehalt VideoMAE:** Phase 1 = Linear-/Head-Probe auf eingefrorenen Kinetics-Features.
 > Für Video-Deepfake-Erkennung ist Backbone-Finetuning meist nötig — die starke Video-Leistung
 > kommt voraussichtlich erst in Phase 2.
+
+### 7.7 Batch-Größen: groß in Phase 1, klein in Phase 2
+
+Da Phase 1 den Backbone einfriert (kein Backward, keine Aktivierungs-Retention), passen viel
+größere Batches als die früheren Full-Finetune-Werte. Gemessen (echtes
+`torch.cuda.max_memory_allocated`, bf16, Forward+Backward, eingefrorener Backbone):
+
+| Modell | Default (Phase 1) | Peak | Durchsatz vs. alt | Obergrenze |
+| --- | --- | --- | --- | --- |
+| VideoMAE | **16** (vorher 2) | 5,3 GB | ~10 % schneller (compute-bound) | bs=24 **spillt** (Eager-Attention) |
+| Wav2Vec2 | **128** (vorher 32) | 1,7 GB | **~3,4× schneller** (504→1715 Samples/s) | viel Reserve |
+| Multimodal | **16** (vorher 2) | 5,7 GB | ~23 % schneller | bs=24 **spillt** |
+
+- **Wichtig:** Diese Werte gelten **nur in Phase 1**. In Phase 2 / Adversarial
+  (`freeze_backbone=false`) wird der Backbone trainiert → diese Batches würden OOM/spillen.
+  Daher Daten-Default = Phase-1-Wert, und die **Phase-2-Pfade setzen den Batch herunter**:
+  - `train_video_adversarial`: `data.batch_size=2` (+ `accumulate_grad_batches=3`).
+  - `train_multimodal_adversarial`: `data.batch_size=1` (+ `accumulate_grad_batches=6`).
+  - Nicht-adversariale Phase 2 (CLI-Warm-Start): `data.batch_size=2` (Video) bzw. `=1` (Multimodal)
+    selbst mitgeben.
+- **Accumulation:** `accumulate_grad_batches` ist jetzt `1` (vorher 3) — bei großem Per-Step-Batch
+  ist die effektive Batch-Größe = Per-Step-Batch.
+- **VideoMAE/Multimodal sind compute-bound** (GPU bereits bei 100 %): größerer Batch beschleunigt
+  kaum, nutzt aber die Reserve und liefert eine größere effektive Batch-Größe. **Wav2Vec2** ist
+  der echte Gewinn (Audio ist klein, nicht compute-bound).
+- **LR-Hinweis:** Die effektive Batch-Größe ist deutlich gewachsen (vorher 6) — die per-Modell-LRs
+  könnten nach der Linear-Scaling-Regel höher gesetzt werden (Tuning-Follow-up, hier nicht blind
+  geändert).
 
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"

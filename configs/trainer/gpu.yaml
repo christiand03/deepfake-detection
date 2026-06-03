@@ -7,4 +7,4 @@ devices: 1
 #Transformeroptimierung
 
 precision: "bf16-mixed"
-accumulate_grad_batches: 3  # batch_size 2 x 3 = effektiv 6
+accumulate_grad_batches: 1  # Phase-1-Batches sind jetzt groß → effektiv = per-step Batch

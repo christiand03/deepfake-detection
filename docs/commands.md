@@ -109,9 +109,13 @@ python src/train.py experiment=train_audio
 
 **Video/Audio – Phase 2 (End-to-End-Finetuning, Warm-Start):**
 
+> Phase 2 trainiert den Backbone → der große Phase-1-Default-Batch muss heruntergesetzt werden
+> (`data.batch_size=2` für Video; Audio ist klein und verträgt mehr).
+
 ```bash
 python src/train.py experiment=train_video \
-    model.freeze_backbone=false warmstart_ckpt=checkpoints/videomae.ckpt
+    model.freeze_backbone=false warmstart_ckpt=checkpoints/videomae.ckpt \
+    data.batch_size=2
 # analog: experiment=train_audio ... warmstart_ckpt=checkpoints/wav2vec2.ckpt
 ```
 
