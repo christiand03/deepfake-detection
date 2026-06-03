@@ -1,0 +1,32 @@
+# W&B Launch – Agent-Konfiguration für die Queue "Desktop_PC"
+#
+# Diese Datei steuert das Verhalten des lokalen Launch-Agenten. Sie wird dem
+# Agenten entweder per `-c launch/launch-config.yaml` mitgegeben oder an den
+# Standardpfad kopiert, an dem wandb sie automatisch liest:
+#   Windows: C:\Users\<user>\.config\wandb\launch-config.yaml
+#
+# Ziel-Resource ist "local-process": Der Agent fuehrt jeden Job direkt in
+# seinem eigenen, bereits aktivierten Python-Environment aus (das vorhandene
+# conda/venv mit CUDA, ffmpeg, decord, mediapipe ...). Es wird kein
+# Docker-Image gebaut – daher builder.type = noop.
+
+# Maximale Anzahl parallel laufender Jobs. Ein Desktop mit einer GPU sollte
+# Trainings strikt sequenziell abarbeiten, daher 1.
+max_jobs: 1
+
+# Queue(s), die der Agent pollt. Mehrere moeglich (eine pro Zeile).
+queues:
+  - Desktop_PC
+
+# Team/Entity, unter der die Queue liegt.
+entity: christian-debbertin-deepfake-detection
+
+# local-process baut kein Image – Builder deaktivieren.
+builder:
+  type: noop
+
+# Hinweis: Jobs laufen in einem temporaeren Repo-Klon. Vor dem Agentenstart die
+# absoluten Datenpfade des Hosts setzen, damit das Training die echten Daten
+# findet (vom Prozess via os.environ geerbt). Siehe docs/launch.md, Abschnitt 2:
+#   $env:DEEPFAKE_DATA_DIR = "D:/DeepfakeProjekt/Belegarbeit/deepfake-detection/data/"
+#   $env:DEEPFAKE_LOG_DIR  = "D:/DeepfakeProjekt/Belegarbeit/deepfake-detection/logs/"

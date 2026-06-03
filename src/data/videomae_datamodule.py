@@ -13,6 +13,7 @@ class VideoMAEDataModule(BaseDeepfakeDataModule):
         batch_size: int = 8,
         num_workers: int = 4,
         pin_memory: bool = True,
+        label_type: str = "label_video",
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -22,4 +23,7 @@ class VideoMAEDataModule(BaseDeepfakeDataModule):
         self.test_dataset: DeepfakeHDF5Dataset | None = None
 
     def _make_dataset(self, split: str) -> DeepfakeHDF5Dataset:
-        return DeepfakeHDF5Dataset(h5_path=str(Path(self.hparams.data_dir) / f"{split}.h5"))
+        return DeepfakeHDF5Dataset(
+            h5_path=str(Path(self.hparams.data_dir) / f"{split}.h5"),
+            label_type=self.hparams.label_type,
+        )

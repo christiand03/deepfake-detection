@@ -7,16 +7,16 @@ defaults:
 
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
-  filename: "epoch_{epoch:03d}-val_loss_{val/loss:.3f}" # Name angepasst
-  monitor: "val/loss" #angepasst auf loss
-  mode: "min" # auf min geändert
+  filename: "epoch_{epoch:03d}-val_auc_{val/auc:.3f}" # nach val/auc benannt
+  monitor: "val/auc" # Ranking-Qualität statt Loss (wichtig bei Klassen-Imbalance)
+  mode: "max" # höhere AUC ist besser
   save_last: True
   auto_insert_metric_name: False
 
 early_stopping:
-  monitor: "val/loss" #angepasst auf loss
+  monitor: "val/auc" # Ranking-Qualität statt Loss (wichtig bei Klassen-Imbalance)
   patience: 15 # number of epochs with no improvement after which training will be stopped
-  mode: "min" #auf min geändert
+  mode: "max" # höhere AUC ist besser
 
 model_summary:
   max_depth: -1
