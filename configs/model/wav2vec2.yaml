@@ -3,16 +3,21 @@ _target_: src.models.wav2vec2_module.Wav2Vec2DeepfakeModule
 # Modellselection
 model_name_or_path: "facebook/wav2vec2-base"
 freeze_feature_extractor: True
+# Phase 1 (Default): Backbone komplett einfrieren, nur den Kopf (projector + classifier)
+# trainieren. Cold-Full-Finetuning des Encoders konvergiert hier nicht (Loss bleibt bei ln2,
+# AUC bei Zufall). Frozen-Backbone ist die robuste Baseline (siehe docs/model.md §7).
+# Phase 2: false + warmstart_ckpt für End-to-End-Finetuning.
+freeze_backbone: True
 
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
-  lr: 0.00005
+  lr: 0.0005   # höhere LR für Head-only-Training (vorher 5e-5 fürs – nicht konvergierende – Full-Finetuning)
   weight_decay: 0.01
 
 scheduler:
   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
   _partial_: true
-  mode: min
+  mode: max   # überwacht val/auc (höher = besser)
   factor: 0.5
   patience: 3

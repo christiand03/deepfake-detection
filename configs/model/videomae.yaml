@@ -2,7 +2,10 @@ _target_: src.models.VideoMAE_module.VideoMAEModule
 
 model_name_or_path: "MCG-NJU/videomae-base"
 num_labels: 2
-gradient_checkpointing: true  # spart VRAM (Recompute im Backward); für 8-GB-GPUs nötig
+# Phase 1 (Default): Backbone einfrieren, nur den Klassifikator-Kopf trainieren.
+# Phase 2: false + warmstart_ckpt für End-to-End-Finetuning (siehe docs/model.md §6.6/§7).
+freeze_backbone: true
+gradient_checkpointing: true  # spart VRAM (Recompute im Backward); v. a. in Phase 2 relevant
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -13,6 +16,6 @@ optimizer:
 scheduler:
   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
   _partial_: true
-  mode: min
+  mode: max   # überwacht val/auc (höher = besser)
   factor: 0.5
   patience: 3

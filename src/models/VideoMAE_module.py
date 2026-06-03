@@ -17,6 +17,7 @@ class VideoMAEModule(BaseDeepfakeModule):
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         model_name_or_path: str = "MCG-NJU/videomae-base",
         num_labels: int = 2,
+        freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
         adv_train: bool = False,
         adv_epsilon: float = 0.03,
@@ -49,6 +50,15 @@ class VideoMAEModule(BaseDeepfakeModule):
                 gradient_checkpointing_kwargs={"use_reentrant": False}
             )
 
+        # Phase 1 (default): freeze the VideoMAE backbone, train only the head
+        # (fc_norm + classifier). Phase 2: freeze_backbone=False fine-tunes
+        # end-to-end (typically warm-started from a Phase 1 checkpoint).
+        self._apply_backbone_freeze(self.hparams.freeze_backbone)
+
+    def _backbone_modules(self):
+        # The pretrained encoder; self.net.fc_norm + self.net.classifier are the head.
+        return [self.net.videomae]
+
     def forward(self, pixel_values: torch.Tensor):
         return self.net(pixel_values=pixel_values)
 
@@ -73,8 +83,10 @@ class VideoMAEModule(BaseDeepfakeModule):
         from src.utils.adversarial import untargeted_pgd
 
         step_size = self.hparams.adv_epsilon / self.hparams.adv_steps * 2.5
-        was_training = self.net.training
-        self.net.eval()
+        # Toggle via the module (self), not self.net, so the BaseDeepfakeModule
+        # train() override re-applies the frozen-backbone eval invariant on restore.
+        was_training = self.training
+        self.eval()
         try:
             (adv,) = untargeted_pgd(
                 forward_fn=lambda pv: self.net(pixel_values=pv).logits,
@@ -85,7 +97,7 @@ class VideoMAEModule(BaseDeepfakeModule):
                 step_sizes=(step_size,),
             )
         finally:
-            self.net.train(was_training)
+            self.train(was_training)
         return adv
 
     def _adversarial_mix(self, batch: Any) -> dict[str, torch.Tensor]:
@@ -127,10 +139,12 @@ class VideoMAEModule(BaseDeepfakeModule):
         self.val_acc(preds, labels)
         self.val_f1(preds, labels)
         self.val_auc(positive_probs, labels)
+        self.val_ap(positive_probs, labels)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/ap", self.val_ap, on_step=False, on_epoch=True, prog_bar=True)
 
     def test_step(self, batch: Any, batch_idx: int):
         loss, preds, labels, logits = self.model_step(batch)
@@ -140,10 +154,12 @@ class VideoMAEModule(BaseDeepfakeModule):
         self.test_acc(preds, labels)
         self.test_f1(preds, labels)
         self.test_auc(positive_probs, labels)
+        self.test_ap(positive_probs, labels)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/auc", self.test_auc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/ap", self.test_ap, on_step=False, on_epoch=True, prog_bar=True)
 
     def explain(
         self,

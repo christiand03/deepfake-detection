@@ -14,6 +14,8 @@ ckpt_export_name: videomae_adv
 
 model:
   adv_train: true
+  freeze_backbone: false  # Phase 2: Backbone muss trainierbar sein, sonst härtet das
+                          # adversariale Training nur den Kopf auf eingefrorenen Features
   adv_epsilon: 0.03   # L∞ perturbation budget (normalised pixel space)
   adv_steps: 7        # PGD iterations per step
 

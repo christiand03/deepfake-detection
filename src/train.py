@@ -79,6 +79,35 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info("Instantiating model <%s>", cfg.model._target_)
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
+    # Warm-start: load ONLY the weights from a prior checkpoint into this freshly
+    # built model, leaving the optimizer/LR/epoch fresh. This is the correct path
+    # for multimodal Phase 2 (vs. ckpt_path, which is a full Lightning resume that
+    # restores the old optimizer/LR and continues the epoch counter).
+    warmstart_ckpt = cfg.get("warmstart_ckpt")
+    if warmstart_ckpt:
+        if cfg.get("ckpt_path"):
+            raise ValueError(
+                "Set either warmstart_ckpt (load weights, fresh optimizer) or "
+                "ckpt_path (full resume) — not both."
+            )
+        log.info("Warm-starting weights from <%s> (fresh optimizer/LR, no resume)", warmstart_ckpt)
+        state = torch.load(warmstart_ckpt, map_location="cpu", weights_only=False)["state_dict"]
+        result = model.load_state_dict(state, strict=False)
+        if result.missing_keys:
+            log.warning(
+                "Warm-start: %d weight(s) absent from checkpoint, kept as freshly initialised "
+                "(e.g. %s) — expected for params/metrics added after the checkpoint was saved.",
+                len(result.missing_keys),
+                result.missing_keys[:3],
+            )
+        if result.unexpected_keys:
+            log.warning(
+                "Warm-start: %d checkpoint key(s) had no match in the current model, ignored "
+                "(e.g. %s).",
+                len(result.unexpected_keys),
+                result.unexpected_keys[:3],
+            )
+
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
 

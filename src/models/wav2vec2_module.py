@@ -21,6 +21,7 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         optimizer: Any = None,
         scheduler: Any = None,
         freeze_feature_extractor: bool = True,
+        freeze_backbone: bool = True,
     ) -> None:
         super().__init__()
 
@@ -31,8 +32,21 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
             model_name_or_path, num_labels=2, attn_implementation="eager"
         )
 
-        # frozen feature extractor
-        if freeze_feature_extractor:
+        # Phase 1 (default): freeze the whole Wav2Vec2 backbone, train only the
+        # projector + classifier head. Cold full fine-tuning of the encoder does
+        # not converge here (loss stays at ln2, AUC at chance — see docs/model.md);
+        # Phase 2 (freeze_backbone=False) fine-tunes the transformer while the CNN
+        # feature extractor stays frozen (see _enforce_backbone_invariants).
+        self._apply_backbone_freeze(self.hparams.freeze_backbone)
+
+    def _backbone_modules(self):
+        # self.net.projector + self.net.classifier form the trainable head.
+        return [self.net.wav2vec2]
+
+    def _enforce_backbone_invariants(self) -> None:
+        # The CNN feature extractor never has useful gradient signal for deepfake
+        # detection — keep it frozen in both phases.
+        if self.hparams.freeze_feature_extractor:
             self.net.freeze_feature_encoder()
 
     @beartype
@@ -94,11 +108,13 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         self.val_acc(preds, targets)
         self.val_f1(preds, targets)
         self.val_auc(positive_probs, targets)
+        self.val_ap(positive_probs, targets)
 
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/ap", self.val_ap, on_step=False, on_epoch=True, prog_bar=True)
 
     @beartype
     def test_step(self, batch: Any, batch_idx: int) -> None:
@@ -111,11 +127,13 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         self.test_acc(preds, targets)
         self.test_f1(preds, targets)
         self.test_auc(positive_probs, targets)
+        self.test_ap(positive_probs, targets)
 
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/auc", self.test_auc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/ap", self.test_ap, on_step=False, on_epoch=True, prog_bar=True)
 
     @beartype
     def explain(

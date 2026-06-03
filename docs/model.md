@@ -59,7 +59,9 @@ Bewusst die **"contained"-Variante**: Eager bleibt überall erhalten, der Speich
 | Gradient Checkpointing aktiviert (`use_reentrant=False`) | `src/models/VideoMAE_module.py` (Flag `gradient_checkpointing: bool = True`) | an |
 | Per-Step-Batch verkleinert | `configs/data/deepfake_video.yaml` | `batch_size: 6 → 2` |
 | Gradient-Accumulation erhöht | `configs/trainer/gpu.yaml` | `accumulate_grad_batches: 1 → 3` |
-| Allokator-Fragmentierung reduziert | `src/train.py` | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` |
+| Allokator-Fragmentierung reduziert | `src/train.py` | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (**nur Linux**) |
+
+> **Plattform-Hinweis:** `expandable_segments` ist **Linux-only**. Auf Windows (der Entwicklungs-GPU) gibt PyTorch `UserWarning: expandable_segments not supported on this platform` aus und ignoriert die Option — entdeckt im Code-Review. Der Setter ist daher mit `if sys.platform != "win32"` abgesichert; die eigentliche OOM-Entlastung leisten ohnehin Gradient Checkpointing + Batch-Größe.
 
 `2 × 3 = 6` → identische Gradienten-Statistik wie zuvor, aber ~1/3 des Per-Step-Aktivierungsspeichers. Gradient Checkpointing greift nur, wenn `self.training == True`; der eval-mode-`explain()`-Pfad ist damit **nicht** betroffen (keine Recompute-Pässe während LRP).
 
@@ -96,8 +98,159 @@ Unter Windows (WDDM) erlaubt der NVIDIA-Treiber die **Überbelegung des GPU-Spei
 
 Das `MultimodalDeepfakeModule` lädt **beide** Backbones (`VideoMAEModel`, `Wav2Vec2Model`) bewusst mit `attn_implementation="eager"` — genau wie die unimodalen Module. Grund ist **nicht** der Speicher, sondern **AttnLRP**: `explain()` patcht `eager_attention_forward` über `lxt.monkey_patch`, und dieser Pfad ist nur bei Eager-Attention differenzierbar (SDPAs fusionierte Kernel sind nicht patchbar). Mit dem HuggingFace-Default (SDPA) wären die multimodalen Erklärungen falsch. `explain()` wendet die Patches jetzt einmalig auf beide Backbones **und** den Fusion-Head an (geschützt durch `_MULTIMODAL_LRP_PATCHED`).
 
-- **Phase 1 (`freeze_backbones=True`):** Die Backbones laufen eingefroren im eval-Modus → kein Autograd-Graph, Aktivierungen werden sofort verworfen. Eager kostet hier nur etwas mehr transienten Speicher pro Layer (sofort wieder freigegeben), passt aber problemlos.
-- **Phase 2 (`freeze_backbones=False`, end-to-end):** Beide Backbones werden trainierbar → Aktivierungen werden für den Backward gehalten, und Eager bringt die `O(N²)`-Attention zurück. Deshalb hat das Modul jetzt — wie `VideoMAEModule` — ein `gradient_checkpointing`-Flag (Default `true`, nur im train-Modus aktiv) und einen kleineren Default-Batch (`configs/data/deepfake_multimodal.yaml`: `batch_size: 2`), der über `accumulate_grad_batches=3` (trainer/gpu) effektiv 6 ergibt.
+- **Phase 1 (`freeze_backbone=True`):** Die Backbones laufen eingefroren im eval-Modus → kein Autograd-Graph, Aktivierungen werden sofort verworfen. Eager kostet hier nur etwas mehr transienten Speicher pro Layer (sofort wieder freigegeben), passt aber problemlos.
+- **Phase 2 (`freeze_backbone=False`, end-to-end):** Beide Backbones werden trainierbar → Aktivierungen werden für den Backward gehalten, und Eager bringt die `O(N²)`-Attention zurück. Deshalb hat das Modul jetzt — wie `VideoMAEModule` — ein `gradient_checkpointing`-Flag (Default `true`, nur im train-Modus aktiv) und einen kleineren Default-Batch (`configs/data/deepfake_multimodal.yaml`: `batch_size: 2`), der über `accumulate_grad_batches=3` (trainer/gpu) effektiv 6 ergibt.
+
+**Phase 2 starten (Warm-Start vom Phase-1-Checkpoint).** Der korrekte Weg ist
+**`warmstart_ckpt`** (lädt nur die Gewichte, frischer Optimizer/LR/Epoch) — **nicht** `ckpt_path`
+(volles Lightning-Resume, das den alten Optimizer/LR/Epoch-Zähler wiederherstellt und die
+LR-Override ignoriert). Beide sind gegenseitig ausschließend. Auf der 8-GB-GPU / 16-GB-RAM-Box
+zusätzlich `data.batch_size=1` (Host-RAM, s. u.):
+```
+python src/train.py experiment=train_multimodal \
+  model.freeze_backbone=false model.optimizer.lr=1e-5 \
+  data.batch_size=1 warmstart_ckpt=checkpoints/multimodal.ckpt
+```
+Fehlende Keys beim Laden (z. B. nach dem Checkpoint ergänzte Metriken wie `val/ap`) werden als
+Warnung geloggt und frisch initialisiert; der Backbone-/Fusion-Teil wird vollständig übernommen.
+
+> **Host-RAM-Hinweis (Phase 2 auf 8-GB-GPU / 16-GB-RAM):** Der Default `batch_size: 2` ist für Phase 1 komfortabel, lässt in Phase 2 aber kaum Host-RAM-Reserve. Gemessen (8 Train-Batches, end-to-end): bei `batch_size=2` sank der freie System-RAM auf ~0,13 GB (GPU-Peak ~7,9 GB), bei `batch_size=1` auf ~0,68 GB (GPU-Peak ~6,9 GB). Grund ist nicht die GPU (kein CUDA-OOM), sondern Host-RAM: Die fast volle GPU spillt unter Windows (WDDM) in den geteilten System-RAM, und beim Checkpoint-Speichern serialisiert Lightning das ~1,6-GB-Checkpoint in einen In-Memory-Puffer. Daher für **Phase-2-End-to-End-Läufe auf dieser Hardware `data.batch_size=1`** verwenden (effektiv 3 über die Accumulation) — der Phase-1-Default bei 2 belassen.
+
+## 7. Baselines — Erkenntnisse aus den ersten Läufen & abgeleitete Änderungen
+
+Dieser Abschnitt dokumentiert, **was** die ersten Trainingsläufe zeigten, **warum** das
+ein Problem war und **welche Änderung** daraus folgte. Kurzfassung: Accuracy/F1 spiegelten
+fast nur den Klassen-Prior; die **AUC** entlarvte schwache bis fehlende Diskriminierung.
+
+### 7.0 Evidenz: die ersten W&B-Läufe
+
+Erste Läufe (VideoMAE / Wav2Vec2 / Multimodal), Summary-Metriken:
+
+| Metrik        | VideoMAE | Wav2Vec2 | Multimodal |
+| ------------- | -------- | -------- | ---------- |
+| train/f1      | 0,856    | 0,523    | 0,890      |
+| train/loss    | 0,565    | 0,693    | 0,383      |
+| val/acc       | 0,722    | 0,504    | 0,710      |
+| val/acc_best  | 0,722    | 0,504    | **1,000** (Artefakt) |
+| **val/auc**   | **0,540**| **0,503**| **0,709**  |
+| val/f1        | 0,838    | 0,670    | 0,807      |
+| val/loss      | 0,595    | 0,693    | 0,755      |
+| test/acc      | 0,745    | 0,507    | 0,745      |
+| **test/auc**  | **0,519**| **0,518**| **0,586**  |
+| test/f1       | 0,854    | 0,673    | 0,854      |
+| global_step   | 73 370   | 4 590    | 73 370     |
+
+Drei Signale stechen heraus:
+1. **`test/acc 0,745` und `test/f1 0,854` sind bei VideoMAE und Multimodal identisch** — exakt
+   die Werte eines „immer-fake"-Prädiktors bei 74,5 % Fake-Anteil. Die Accuracy misst also den
+   Prior, nicht Können.
+2. **AUC nahe 0,5** (VideoMAE test 0,519; Wav2Vec2 überall ~0,50–0,52) = keine echte Trennung.
+3. **Wav2Vec2-Loss = `ln2 ≈ 0,693`** in train/val/test → das Modell hat nichts gelernt
+   (`f1 0,67` bei `acc 0,50` = „alles eine Klasse" auf balancierten Daten).
+
+**Ursache (Label-Inspektion `data/processed/*.h5`):**
+
+| Label         | Balance (test) | Bedeutung |
+| ------------- | -------------- | --------- |
+| `label`       | 25,5 % / 74,5 %| `label_audio ODER label_video` (real nur wenn beides real) |
+| `label_audio` | 49,3 % / 50,7 %| ist das **Audio** fake |
+| `label_video` | 51,1 % / 48,9 %| ist das **Video** fake |
+
+Der 74,5-%-Fake-Anteil ist exakt `1 − 0,5·0,5` → `label` ist das ODER beider Modalitäten.
+Das erklärt die Mehrheitsklassen-Kollapse der auf `label` trainierten Modelle.
+
+### 7.1 VideoMAE trainiert auf `label_video` (statt `label`)
+**Warum:** VideoMAE sieht nur Video, wurde aber auf `label` trainiert. Für die ~25 % Clips mit
+realem Video + fakem Audio (`label=fake`) gibt es **kein Signal im Video** → das Ziel ist teils
+unbeobachtbar, das Modell weicht auf die Mehrheitsklasse aus.
+**Evidenz:** `test/acc 0,745` = exakte Base-Rate; `test/auc 0,519` ≈ Zufall.
+**Änderung:** `DeepfakeHDF5Dataset` unterstützt jetzt `label_type` (Default **`label_video`**,
+balanciert/beobachtbar) wie die Audio-/Multimodal-Datasets; durchgereicht von
+`VideoMAEDataModule`, gesetzt in `configs/data/deepfake_video.yaml`. (Wav2Vec2 nutzte bereits
+korrekt `label_audio`; nur das Video-Dataset hatte `f["label"]` hartkodiert.)
+
+### 7.2 Wav2Vec2: Frozen-Encoder statt Full-Finetuning
+**Warum:** Audio war korrekt normalisiert (`normalize_audio`) und balanciert gelabelt
+(`label_audio`), trotzdem Zufalls-AUC. Eine gezielte Diagnose zeigte: **Cold-Full-Finetuning des
+Encoders konvergiert nicht.**
+**Evidenz (Diagnose-Experimente, val/auc auf 20–24 Val-Batches):**
+
+| Setup                                   | val/auc |
+| --------------------------------------- | ------- |
+| Init-Sanity: `logits.std≈0,03`, `batch_label_mean=0,500` | (Labels OK, fast konstante Logits) |
+| Full-Finetune lr 5e-5 / 1e-4 / 3e-4, 60 Schritte | 0,53 / 0,49 / 0,53 |
+| Full-Finetune lr 1e-4 + Warmup, 450 Schritte | 0,49 (Loss bleibt bei ln2) |
+| **Frozen-Encoder, nur Kopf, lr 1e-3, 450 Schritte** | **0,544 → 0,554 → 0,562 (steigend)** |
+
+**Änderung:** Die Option `freeze_backbone` (Default **`True`**) in `Wav2Vec2DeepfakeModule` friert
+den gesamten Backbone ein und trainiert nur `projector + classifier` (197 K statt 94 M Parameter);
+LR in `configs/model/wav2vec2.yaml` auf `5e-4` erhöht (Head-only). **Offen/Vorbehalt:** Das
+~0,64-s-Fenster (10240 Samples @ 16 kHz) ist vermutlich eine zusätzliche Obergrenze — falls die
+AUC niedrig bleibt, im Preprocessing ein längeres Audiofenster erwägen.
+
+### 7.3 Metriken & Modell-Selektion (Mess-Hygiene)
+**Warum:** Unter 75/25-Imbalance sind Accuracy/F1 fast deterministische Funktionen des Priors
+(s. 7.0); zudem verfälschte ein Sanity-Check-Fluke `val/acc_best` auf 1,0.
+**Änderungen:**
+- **PR-AUC** (`val/ap`, `test/ap`, torchmetrics `BinaryAveragePrecision`) ergänzt die AUROC in
+  `BaseDeepfakeModule` und wird in allen drei Modulen geloggt — die unter Imbalance
+  aussagekräftige Metrik. AUROC bleibt erhalten.
+- **Modell-Selektion auf `val/auc` (mode max)** statt `val/loss`: `model_checkpoint` und
+  `early_stopping` in `configs/callbacks/default.yaml`, der Scheduler-`monitor` in
+  `configure_optimizers` und der Scheduler-`mode` (min→max) in **allen drei** Modell-Configs.
+  Gilt global für alle Experimente (per Experiment überschreibbar).
+- **`val/acc_best`-Artefakt behoben:** `on_train_start`-Reset + `if self.trainer.sanity_checking`-
+  Guard in `BaseDeepfakeModule`. (Erklärt den `1,000`-Wert in 7.0.)
+- **Optionales `class_weights`** (Default `null`) im Multimodal-Modul gegen die `label`-Imbalance;
+  Inverse-Frequenz-Gewichte `[1.49, 0.67]` als kommentierte Option dokumentiert.
+
+### 7.4 Multimodal: Overfitting des Fusion-Heads
+**Warum / Evidenz:** `train/loss 0,383 ≪ val/loss 0,755` und der Sprung **`val/auc 0,709 →
+test/auc 0,586`** zeigen Overfitting (der Fusion-Head memoriert; nur er wird in Phase 1
+trainiert).
+**Änderung:** `dropout` 0,1 → 0,2 in `configs/model/multimodal.yaml`; Modell-Selektion über
+`val/auc` (s. 7.3). Weitergehende Regularisierung (weight_decay, frühere Stops) bei Bedarf.
+
+### 7.5 Änderungsübersicht (Change → Grund → auslösende Metrik)
+
+| Änderung | Datei(en) | Auslösende Metrik / Evidenz |
+| -------- | --------- | --------------------------- |
+| VideoMAE → `label_video` | `hdf5_dataset.py`, `videomae_datamodule.py`, `deepfake_video.yaml` | test/acc 0,745 = Base-Rate, test/auc 0,519 |
+| Wav2Vec2 `freeze_backbone=True`, LR 5e-5→5e-4 | `wav2vec2_module.py`, `wav2vec2.yaml` | Loss=ln2, AUC≈0,50; Diagnose: frozen-head 0,50→0,56 vs. full-finetune flat |
+| PR-AUC (`val/ap`,`test/ap`) | `base_module.py` + 3 Module | acc/f1 = Prior-Funktion bei 75/25 |
+| Selektion `val/loss` → `val/auc` (max) | `callbacks/default.yaml`, `base_module.py`, 3 Modell-Configs | Ziel ist Ranking-Qualität, nicht Loss |
+| `val/acc_best`-Reset/Guard | `base_module.py` | val/acc_best=1,000 (Sanity-Artefakt) |
+| Multimodal `dropout` 0,1→0,2; optional `class_weights` | `multimodal.yaml`, `multimodal_module.py` | train/loss 0,38 ≪ val/loss 0,76; val→test AUC 0,71→0,59 |
+
+> **Hinweis:** Die Änderungen sind verifiziert (114 schnelle Tests grün, alle drei
+> `debug=limit`-Läufe sauber), aber die **Wirkung auf die AUC** zeigt sich erst in vollständigen
+> Re-Baseline-Läufen (`python src/train.py experiment=train_video|train_audio|train_multimodal`).
+> Erwartung: VideoMAE-`val/auc` deutlich über 0,52; Wav2Vec2 über Zufall.
+
+### 7.6 Standardisierung: Phase 1 / Phase 2 für alle Modelle
+
+Das Backbone-Freeze-Muster ist jetzt für **alle drei Modelle einheitlich** und in
+`BaseDeepfakeModule` zentralisiert (Hooks `_backbone_modules()` und
+`_enforce_backbone_invariants()`, gemeinsame `_apply_backbone_freeze()` /
+`unfreeze_backbone()` / `train()`-Override):
+
+- **Ein Flag `freeze_backbone`** (vorher: VideoMAE keins, Wav2Vec2 `freeze_encoder`,
+  Multimodal `freeze_backbones`).
+- **Phase 1 (`freeze_backbone=true`) ist überall Default:** nur der Kopf wird trainiert
+  (VideoMAE: `fc_norm`+`classifier`; Wav2Vec2: `projector`+`classifier`; Multimodal: Fusion-Head).
+  Eingefrorene Backbones bleiben in `eval()`; der Wav2Vec2-CNN-Feature-Extractor bleibt in
+  **beiden** Phasen eingefroren.
+- **Phase 2 (`freeze_backbone=false`) ist optional und für jedes Modell identisch** — am besten
+  per Warm-Start vom Phase-1-Checkpoint:
+  ```
+  python src/train.py experiment=train_video \
+    model.freeze_backbone=false warmstart_ckpt=checkpoints/videomae.ckpt
+  ```
+  (analog `train_audio` / `train_multimodal`).
+
+> **Vorbehalt VideoMAE:** Phase 1 = Linear-/Head-Probe auf eingefrorenen Kinetics-Features.
+> Für Video-Deepfake-Erkennung ist Backbone-Finetuning meist nötig — die starke Video-Leistung
+> kommt voraussichtlich erst in Phase 2.
 
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"

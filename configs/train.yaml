@@ -42,8 +42,16 @@ train: True
 # lightning chooses best weights based on the metric specified in checkpoint callback
 test: True
 
-# simply provide checkpoint path to resume training
+# simply provide checkpoint path to resume training (full Lightning resume:
+# restores optimizer/scheduler/epoch — your optimizer/LR config is NOT re-applied)
 ckpt_path: null
+
+# warm-start: load ONLY the model weights from this checkpoint into a freshly-built
+# model, then train with a FRESH optimizer/LR/epoch counter. Use for multimodal
+# Phase 2 (end-to-end fine-tuning from a Phase 1 frozen-backbone checkpoint):
+#   model.freeze_backbone=false model.optimizer.lr=1e-5 warmstart_ckpt=<phase1.ckpt>
+# Mutually exclusive with ckpt_path (which is a full resume, not a warm-start).
+warmstart_ckpt: null
 
 # after training, copy the best checkpoint to a stable path (paths.export_dir) so
 # the API/frontend can reuse it via its *_CKPT_PATH env vars. Set False to disable.

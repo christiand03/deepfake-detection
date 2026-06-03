@@ -90,16 +90,64 @@ mkdir checkpoints
 
 ## 4. Training (optional – falls kein fertiger Checkpoint vorliegt)
 
-**Video-Modell (VideoMAE):**
+> **Phase 1 / Phase 2 (einheitlich für alle Modelle):** Alle Modelle starten standardmäßig in
+> **Phase 1** (`freeze_backbone=true`): Backbone eingefroren, nur der Kopf wird trainiert.
+> **Phase 2** (End-to-End-Finetuning) ist optional und für jedes Modell gleich:
+> `model.freeze_backbone=false` + `warmstart_ckpt=<phase1.ckpt>` (siehe unten und `docs/model.md` §7.6).
+
+**Video-Modell (VideoMAE) – Phase 1 (Backbone eingefroren, nur Kopf):**
 
 ```bash
 python src/train.py experiment=train_video
 ```
 
-**Audio-Modell (Wav2Vec2):**
+**Audio-Modell (Wav2Vec2) – Phase 1 (Backbone eingefroren, nur Kopf):**
 
 ```bash
 python src/train.py experiment=train_audio
+```
+
+**Video/Audio – Phase 2 (End-to-End-Finetuning, Warm-Start):**
+
+```bash
+python src/train.py experiment=train_video \
+    model.freeze_backbone=false warmstart_ckpt=checkpoints/videomae.ckpt
+# analog: experiment=train_audio ... warmstart_ckpt=checkpoints/wav2vec2.ckpt
+```
+
+**Multimodal-Modell – Phase 1 (Backbones eingefroren, nur Fusion-Head):**
+
+```bash
+python src/train.py experiment=train_multimodal
+```
+
+**Multimodal-Modell – Phase 2 (End-to-End-Finetuning, Warm-Start vom Phase-1-Checkpoint):**
+
+Phase 2 entfriert beide Backbones (`freeze_backbone=false`) und trainiert end-to-end mit
+niedrigerer LR, ausgehend von einem Phase-1-Checkpoint. **`warmstart_ckpt` lädt nur die
+Gewichte** (frischer Optimizer/LR/Epoch-Zähler) — im Gegensatz zu `ckpt_path`, das ein
+**volles Lightning-Resume** ist (stellt alten Optimizer/LR/Epoch wieder her und ignoriert die
+LR-Override). Beide schließen sich gegenseitig aus. Auf der 8-GB-GPU / 16-GB-RAM-Box zusätzlich
+`data.batch_size=1` (Host-RAM, siehe `docs/model.md` §6.6):
+
+```bash
+python src/train.py experiment=train_multimodal \
+    model.freeze_backbone=false model.optimizer.lr=1e-5 \
+    data.batch_size=1 warmstart_ckpt=checkpoints/multimodal.ckpt
+```
+
+**Adversariale Varianten (Phase 4.2 – PGD-augmentiertes Training):**
+
+```bash
+python src/train.py experiment=train_video_adversarial
+python src/train.py experiment=train_multimodal_adversarial
+```
+
+**Training fortsetzen (echtes Resume statt Warm-Start):**
+
+```bash
+# Stellt Gewichte + Optimizer + LR-Scheduler + Epoch-Zähler wieder her
+python src/train.py experiment=train_multimodal ckpt_path=logs/train/runs/<timestamp>/checkpoints/last.ckpt
 ```
 
 Checkpoints werden automatisch in `logs/train/runs/<timestamp>/checkpoints/` gespeichert.

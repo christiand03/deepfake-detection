@@ -5,7 +5,7 @@ Prüft, ob:
   2. MultimodalDeepfakeModule einen Forward-Pass übersteht
   3. Attention-Weights nicht degeneriert sind (keine NaN/Inf, nicht uniform)
   4. Gradienten durch den Fusion-Head fließen (Backprop funktioniert)
-  5. Backbones wirklich eingefroren sind wenn freeze_backbones=True
+  5. Backbones wirklich eingefroren sind wenn freeze_backbone=True
 
 Kein HDF5, kein Hydra, kein Training nötig.
 
@@ -143,9 +143,9 @@ def test_fusion_backprop():
 
 
 def test_freeze_backbones():
-    print("\nTest 4: MultimodalDeepfakeModule — freeze_backbones=True")
+    print("\nTest 4: MultimodalDeepfakeModule — freeze_backbone=True")
     model = MultimodalDeepfakeModule(
-        freeze_backbones=True,
+        freeze_backbone=True,
         optimizer=lambda params: torch.optim.AdamW(params, lr=1e-4),
     ).to(DEVICE)
 
@@ -177,7 +177,7 @@ def test_full_forward_pass():
     print("\nTest 5: MultimodalDeepfakeModule — Voller Forward-Pass")
     model = (
         MultimodalDeepfakeModule(
-            freeze_backbones=True,
+            freeze_backbone=True,
             optimizer=lambda params: torch.optim.AdamW(params, lr=1e-4),
         )
         .to(DEVICE)
@@ -202,17 +202,21 @@ def test_full_forward_pass():
 
 
 def test_unfreeze_backbones():
-    print("\nTest 6: MultimodalDeepfakeModule — unfreeze_backbones()")
+    print("\nTest 6: MultimodalDeepfakeModule — unfreeze_backbone()")
     model = MultimodalDeepfakeModule(
-        freeze_backbones=True,
+        freeze_backbone=True,
         optimizer=lambda params: torch.optim.AdamW(params, lr=1e-4),
     ).to(DEVICE)
 
-    model.unfreeze_backbones()
+    model.unfreeze_backbone()
 
     trainable_video = [p for p in model.video_backbone.parameters() if p.requires_grad]
     assert len(trainable_video) > 0, "Video-Backbone bleibt eingefroren nach unfreeze!"
+    # Audio CNN feature extractor must stay frozen even after unfreeze (invariant).
+    cnn_trainable = [p for p in model.audio_backbone.feature_extractor.parameters() if p.requires_grad]
+    assert len(cnn_trainable) == 0, "Audio-CNN-Feature-Extractor darf nach unfreeze NICHT trainierbar sein!"
     print(f"  ✓ Video-Backbone nach unfreeze: {len(trainable_video)} trainierbare Parameter")
+    print("  ✓ Audio-CNN bleibt eingefroren (Invariante)")
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────

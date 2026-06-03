@@ -15,6 +15,8 @@ ckpt_export_name: multimodal_adv
 
 model:
   adv_train: true
+  freeze_backbone: false   # Phase 2: Backbones trainierbar, sonst härtet das
+                           # adversariale Training nur den Fusion-Head auf eingefrorenen Features
   adv_epsilon: 0.03        # L∞ budget for the video modality
   adv_audio_epsilon: 0.03  # L∞ budget for the audio modality
   adv_steps: 7             # PGD iterations per step

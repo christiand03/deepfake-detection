@@ -24,7 +24,7 @@ Usage::
     model = MultimodalDeepfakeModule(
         video_model_name="MCG-NJU/videomae-base",
         audio_model_name="facebook/wav2vec2-base",
-        freeze_backbones=True,   # only train the fusion head initially
+        freeze_backbone=True,   # only train the fusion head initially
         optimizer=partial(torch.optim.AdamW, lr=1e-4),
     )
 """
@@ -168,16 +168,17 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
 
     Loads VideoMAEModel and Wav2Vec2Model as frozen (or trainable) feature
     extractors and adds a ``CrossAttentionFusion`` head on top.  Only the
-    fusion head is trained by default (``freeze_backbones=True``), which
+    fusion head is trained by default (``freeze_backbone=True``), which
     makes the initial training much cheaper.
 
     A typical two-phase training schedule (run as TWO separate trainings — the
     optimizer is built once per ``fit`` over the then-trainable parameters, so
     unfreezing mid-run would not add the backbones to the live optimizer):
-      1. ``freeze_backbones=True``  — train only the fusion head for ~5 epochs.
-      2. ``freeze_backbones=False`` + ``ckpt_path=<phase1.ckpt>`` — resume and
-         fine-tune end-to-end with a lower learning rate; the fresh optimizer
-         now covers both backbones and the fusion head.
+      1. ``freeze_backbone=True``  — train only the fusion head for ~5 epochs.
+      2. ``freeze_backbone=False`` + ``warmstart_ckpt=<phase1.ckpt>`` — load the
+         Phase 1 weights into a fresh optimizer and fine-tune end-to-end with a
+         lower learning rate (``warmstart_ckpt`` loads weights only; ``ckpt_path``
+         is a full resume that would restore the old optimizer/LR).
 
     Args:
         video_model_name: HuggingFace model ID for the video backbone.
@@ -188,8 +189,9 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         num_heads:        Attention heads in each cross-attention block.  Default: 8.
         dropout:          Dropout probability inside fusion and the MLP.  Default: 0.1.
         num_classes:      Output classes.  Default: 2.
-        freeze_backbones: If ``True``, both backbones are frozen and only the
-                          fusion head is trained.  Default: ``True``.
+        freeze_backbone:  If ``True`` (Phase 1, default), both backbones are frozen
+                          and only the fusion head is trained.  ``False`` (Phase 2)
+                          fine-tunes end-to-end.
         optimizer:        Partial / callable that returns an ``Optimizer`` when
                           called with ``params=self.parameters()``.
         scheduler:        Optional partial / callable that returns an LR scheduler
@@ -211,8 +213,9 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         num_heads: int = 8,
         dropout: float = 0.1,
         num_classes: int = 2,
-        freeze_backbones: bool = True,
+        freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
+        class_weights: list[float] | None = None,
         optimizer: Any = None,
         scheduler: Any = None,
         adv_train: bool = False,
@@ -239,13 +242,10 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         self.video_backbone = VideoMAEModel.from_pretrained(video_model_name, attn_implementation="eager")
         self.audio_backbone = Wav2Vec2Model.from_pretrained(audio_model_name, attn_implementation="eager")
 
-        # Freeze the Wav2Vec2 CNN feature extractor (always — it has no useful gradient signal for deepfake detection).
-        self.audio_backbone.feature_extractor._freeze_parameters()
-
         # Gradient checkpointing for Phase 2 (end-to-end fine-tuning). HF only applies
         # it when a backbone is in train mode, so it is INERT in Phase 1 (frozen ->
-        # eval, see train()) and during eval-mode explain() — only the unfrozen
-        # backbones of Phase 2 benefit. use_reentrant=False is the recommended variant.
+        # eval, see BaseDeepfakeModule.train()) and during eval-mode explain() — only
+        # the unfrozen backbones of Phase 2 benefit. use_reentrant=False is recommended.
         if self.hparams.gradient_checkpointing:
             self.video_backbone.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": False}
@@ -253,13 +253,6 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
             self.audio_backbone.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": False}
             )
-
-        # Runtime flag (not just the hparam) so that unfreeze_backbones() can flip it.
-        # While True, the backbones are forced into eval() mode inside train() so that
-        # their dropout / stochastic-depth stay off during feature extraction.
-        self._backbones_frozen = freeze_backbones
-        if freeze_backbones:
-            self._set_backbone_grad(requires_grad=False)
 
         # Fusion head
         video_dim = self.video_backbone.config.hidden_size  # 768 for base
@@ -274,45 +267,20 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
             num_classes=num_classes,
         )
 
-    # Helpers
+        # Phase 1 (default): freeze both backbones, train only the fusion head.
+        # Phase 2: freeze_backbone=False fine-tunes end-to-end (typically
+        # warm-started from a Phase 1 checkpoint). The base class also forces
+        # frozen backbones into eval() inside train().
+        self._apply_backbone_freeze(self.hparams.freeze_backbone)
 
-    def _set_backbone_grad(self, requires_grad: bool) -> None:
-        """Freeze or unfreeze both backbone parameter groups."""
-        for p in self.video_backbone.parameters():
-            p.requires_grad = requires_grad
-        for p in self.audio_backbone.parameters():
-            p.requires_grad = requires_grad
+    # Backbone freeze hooks (see BaseDeepfakeModule)
 
-    def train(self, mode: bool = True) -> "MultimodalDeepfakeModule":
-        """Set training mode, but keep frozen backbones in eval mode.
+    def _backbone_modules(self):
+        return [self.video_backbone, self.audio_backbone]
 
-        Lightning calls ``model.train()`` at the start of ``fit``.  When the
-        backbones are frozen we do NOT want their dropout / stochastic-depth to
-        run during feature extraction — that would make the extracted features
-        noisy in training but deterministic at eval (a train/eval mismatch).
-        """
-        super().train(mode)
-        if self._backbones_frozen:
-            self.video_backbone.eval()
-            self.audio_backbone.eval()
-        return self
-
-    def unfreeze_backbones(self) -> None:
-        """Unfreeze both backbones for end-to-end fine-tuning.
-
-        NOTE: This only enables ``requires_grad``.  The optimizer built by
-        ``configure_optimizers`` is created once at the start of ``fit`` over the
-        then-trainable parameters, so a bare mid-run call does NOT add the
-        backbone parameters to the live optimizer and they will not actually be
-        trained.  To fine-tune the backbones, either (a) run a second training
-        with ``freeze_backbones=False`` and ``ckpt_path=<phase1.ckpt>`` so a fresh
-        optimizer covers all parameters, or (b) use a Lightning fine-tuning
-        callback that rebuilds the optimizer when unfreezing.
-        """
-        self._set_backbone_grad(requires_grad=True)
-        # Backbones now follow the module's train/eval mode.
-        self._backbones_frozen = False
-        # Re-freeze the CNN front-end: it never needs gradients.
+    def _enforce_backbone_invariants(self) -> None:
+        # The Wav2Vec2 CNN feature extractor never has useful gradient signal —
+        # keep it frozen in both phases (also after a Phase 2 unfreeze).
         self.audio_backbone.feature_extractor._freeze_parameters()
 
     # Forward
@@ -380,7 +348,14 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         labels = batch["labels"]
 
         logits = self.forward(pixel_values, input_values)
-        loss = F.cross_entropy(logits, labels)
+        # Optional class weighting to counter the ~75/25 imbalance of the combined
+        # "label" (None = unweighted, the default).
+        weight = (
+            torch.tensor(self.hparams.class_weights, device=logits.device, dtype=logits.dtype)
+            if self.hparams.class_weights is not None
+            else None
+        )
+        loss = F.cross_entropy(logits, labels, weight=weight)
         preds = torch.argmax(logits, dim=1)
         return loss, preds, labels, logits
 
@@ -487,10 +462,12 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         self.val_acc(preds, labels)
         self.val_f1(preds, labels)
         self.val_auc(probs, labels)
+        self.val_ap(probs, labels)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/ap", self.val_ap, on_step=False, on_epoch=True, prog_bar=True)
 
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
         loss, preds, labels, logits = self._model_step(batch)
@@ -499,10 +476,12 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         self.test_acc(preds, labels)
         self.test_f1(preds, labels)
         self.test_auc(probs, labels)
+        self.test_ap(probs, labels)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/auc", self.test_auc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/ap", self.test_ap, on_step=False, on_epoch=True, prog_bar=True)
 
     def explain(
         self,
