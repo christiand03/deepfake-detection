@@ -42,6 +42,7 @@ outputs/
 logs/
 wandb/
 models/
+artifacts/
 
 # ============================================================
 # Datasets (tracked via DVC, not Git)
