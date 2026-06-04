@@ -33,8 +33,8 @@ Um SOTA-Forschung in der Belegarbeit glaubhaft zu dokumentieren, müssen die kom
   `weight_decay 0,05→0,1` und ein zusätzlicher Projektions-Dropout in der Fusion. Val/Test-Lücke ist
   Kalibrierung/Overfitting (ähnliche Label-Balance val 0,72 / test 0,75), kein Verteilungs-Bruch.
 
-> **Offen (Validität):** Identitäts-Leakage zwischen `train` und `val`/`test` (gleiche `identity_id`)
-> wäre ein eigenes Risiko für alle Metriken — separat prüfen (Metadaten enthalten `identity_id`).
+> **Identitäts-Leakage (geprüft & Code-Fix):** `id00012` lag in **allen drei** Splits (≈12,5 % der
+> Val-, ≈6 % der Test-Chunks); Video-Ebene ist sauber (0 % `video_id`-Überlapp). Ursache & Fix in §7.9.
 
 ## 5. Phase 4.2 — Adversarial Fine-Tuning (Verteidigung)
 
@@ -336,8 +336,39 @@ Schlagzeile**, nicht 0,914.
   16-GB-Box (verschärft durch den größeren Batch 128). **Fix:** `num_workers: 4` (verifiziert; bei
   wenig RAM auf 2). Video/Multimodal nutzen bereits 2.
 
-> **Offen (Validität):** Vor belastbaren Thesen-Aussagen **Identitäts-Leakage** prüfen — dieselbe
-> `identity_id` in `train` und `val`/`test` würde alle Metriken aufblähen (Metadaten enthalten das Feld).
+### 7.9 Identitäts-Leakage — Befund, Ursache & Fix
+
+**Befund (geprüft per `*_metadata.csv`):** Das Dataset hat sehr wenige Identitäten (train 10, val 2,
+test 2, VoxCeleb-Stil `id000XX`). **`id00012` lag in allen drei Splits** — 360 Videos in train, 14 in
+val, 19 in test (alle Videos disjunkt). ≈12,5 % der Val- und ≈6,0 % der Test-Chunks stammen also von
+einer *trainierten* Person. **Video-Ebene ist sauber** (0 % `video_id`-Überlapp) — derselbe Clip
+kreuzt keine Split-Grenze.
+
+**Ursache (kein „falsches Split-Kriterium", sondern ein Determinismus-Bug):** Der Split ist
+*absichtlich* identitätsbasiert (`src/data_processing/split_utils.assign_splits`). Die alte
+Implementierung **mischte aber die *aktuell vorhandenen* Identitäten und dimensionierte die Splits
+nach deren Anzahl** — angewendet auf `df.head(run.max_videos)` (`preprocess.py`). Bei
+**resumebarem/inkrementellem Preprocessing** (`run.skip_existing`, wachsendes `max_videos`) sah jeder
+Lauf eine andere Identitäts-Teilmenge → dieselbe Identität wurde unterschiedlich zugeordnet, und jeder
+Lauf schrieb *andere* Videos von `id00012` in den dann gültigen Split. Dass `id00012`s Videos über
+alle Splits verteilt (aber je disjunkt) sind, ist genau diese Signatur.
+
+**Fix (committet):** `assign_splits` ist jetzt eine **deterministische Per-Identität-Hash-Zuordnung**
+(`md5(f"{seed}:{identity}")` → Bucket in `[0,1)`), **unabhängig von der vorhandenen Teilmenge**.
+Dieselbe Identität landet damit immer im selben Split — inkrementelle Läufe können nicht mehr leaken.
+- Konfigurierbarer `run.split_seed` (`conf/preprocess.yaml`, Default **`11`**); bei wenigen
+  Identitäten Seed wählen, der nicht-leere Val/Test **und** einen train-lastigen Chunk-Split ergibt
+  (aktuelle 12 IDs: `seed=11` → 8/2/2 Identitäten ≈ 70/11/19 % Chunks; `seed=42` → Val nur 1 ID).
+  `preprocess.py` loggt die Split-Counts und **warnt bei leerem Split**.
+- **Hinweis:** Bei nur ~12 sehr ungleich großen Identitäten ist der Chunk-Split nie exakt 70/15/15 —
+  identitätsdisjunkt hat Vorrang vor exakten Quoten.
+- Neuer Test `test_stable_across_identity_subsets` sichert die Eigenschaft ab (würde unter dem alten
+  Shuffle-Ansatz fehlschlagen).
+
+> **Aktion vor Thesen-Zahlen:** Preprocessing **einmal komplett neu** laufen lassen (frisches
+> `data/processed/`, ohne inkrementelles `max_videos`) → identitätsdisjunkte Splits. Erst danach sind
+> die Metriken (inkl. der 0,775) belastbar. Mit nur ~12 Identitäten bleibt die Generalisierungs-Aussage
+> ohnehin begrenzt.
 
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"

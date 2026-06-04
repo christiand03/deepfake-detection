@@ -366,10 +366,22 @@ def preprocess(cfg: DictConfig) -> None:
         val_ratio=cfg.run.val_ratio,
         test_ratio=cfg.run.test_ratio,
         identity_col="identity_id",
-        seed=42,
+        seed=cfg.run.get("split_seed", 42),
     )
     split_counts = df["split"].value_counts().to_dict()
     log.info("Identity-based split: %s", split_counts)
+    # Deterministic per-identity hashing keeps splits stable across incremental runs
+    # but does not guarantee non-empty splits for few identities — warn so the user
+    # can pick a different run.split_seed.
+    empty = [s for s in ("train", "val", "test") if split_counts.get(s, 0) == 0]
+    if empty:
+        log.warning(
+            "Split(s) %s are EMPTY with split_seed=%s and %d identities. "
+            "Re-run with a different run.split_seed for a balanced split.",
+            empty,
+            cfg.run.get("split_seed", 42),
+            df["identity_id"].nunique(),
+        )
 
     done_video_ids: set[str] = set()
     if cfg.run.skip_existing:

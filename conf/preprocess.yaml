@@ -31,6 +31,11 @@ run:
   # Identity-based split ratios (applied after scanning; overrides JSON sidecar split field)
   val_ratio: 0.15
   test_ratio: 0.15
+  # Seed for the deterministic per-identity hash split. Stable across re-runs; with
+  # few identities pick a seed giving non-empty val/test AND a train-heavy chunk split
+  # (current 12 ids: seed=11 → 8/2/2 identities ≈ 70/11/19 % chunks; seed=42 → val nur 1 ID).
+  # The run logs split counts and warns on an empty split.
+  split_seed: 11
   # Skip videos whose video_id already appears in an existing output CSV
   skip_existing: true
   log_level: INFO

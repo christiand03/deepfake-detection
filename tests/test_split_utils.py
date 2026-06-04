@@ -17,9 +17,9 @@ if TYPE_CHECKING:
 
 @pytest.fixture()
 def sample_metadata() -> pd.DataFrame:
-    """Minimal metadata with 10 identities, 3 chunks each."""
+    """Metadata with 50 identities, 3 chunks each (enough for reliable hash ratios)."""
     rows = []
-    for identity in range(10):
+    for identity in range(50):
         for chunk in range(3):
             rows.append(
                 {
@@ -32,25 +32,6 @@ def sample_metadata() -> pd.DataFrame:
                     "h5_path": f"data/chunk_{identity}_{chunk}.h5",
                 }
             )
-    return pd.DataFrame(rows)
-
-
-@pytest.fixture()
-def small_metadata() -> pd.DataFrame:
-    """Metadata with only 3 identities (edge case for min-split sizes)."""
-    rows = []
-    for identity in range(3):
-        rows.append(
-            {
-                "chunk_id": f"id{identity}_chunk0",
-                "video_id": f"vid_{identity}",
-                "identity_id": f"person_{identity}",
-                "label": 0,
-                "label_video": 0,
-                "label_audio": 0,
-                "h5_path": f"data/chunk_{identity}.h5",
-            }
-        )
     return pd.DataFrame(rows)
 
 
@@ -95,17 +76,30 @@ class TestAssignSplits:
         n_test = (id_splits == "test").sum()
         n_val = (id_splits == "val").sum()
         n_train = (id_splits == "train").sum()
+        # 50 identities → hashing reliably yields all three splits, roughly 0.2/0.2/0.6.
         assert n_test >= 1
         assert n_val >= 1
         assert n_train >= 1
-        assert n_test + n_val + n_train == 10
+        assert n_test + n_val + n_train == 50
 
-    def test_small_dataset_at_least_one_per_split(self, small_metadata: pd.DataFrame) -> None:
-        result = assign_splits(small_metadata, val_ratio=0.15, test_ratio=0.15)
-        id_splits = result.groupby("identity_id")["split"].first()
-        assert (id_splits == "train").sum() >= 1
-        assert (id_splits == "val").sum() >= 1
-        assert (id_splits == "test").sum() >= 1
+    def test_stable_across_identity_subsets(self, sample_metadata: pd.DataFrame) -> None:
+        """The fix: an identity's split must NOT depend on which other identities are present.
+
+        This is exactly what broke under incremental preprocessing (different
+        ``max_videos`` subsets re-assigned identities and leaked them).
+        """
+        full = assign_splits(sample_metadata, seed=42)
+        # Simulate an earlier incremental run that saw only a subset of identities.
+        subset_ids = sorted(sample_metadata["identity_id"].unique())[:25]
+        subset = sample_metadata[sample_metadata["identity_id"].isin(subset_ids)]
+        partial = assign_splits(subset, seed=42)
+
+        full_map = full.groupby("identity_id")["split"].first()
+        partial_map = partial.groupby("identity_id")["split"].first()
+        for identity in partial_map.index:
+            assert partial_map[identity] == full_map[identity], (
+                f"Identity {identity} got a different split on a subset — would leak across runs."
+            )
 
     def test_missing_identity_column_raises(self, sample_metadata: pd.DataFrame) -> None:
         with pytest.raises(ValueError, match="missing from metadata"):
