@@ -1,0 +1,18 @@
+# @package _global_
+
+# Ablation: Fusion ohne Cross-Attention — Mean-Pool beider Modalitäten + Concat + MLP.
+# Zeigt, wie viel die Cross-Attention gegenüber simplem Concatenate beiträgt.
+# Run: python src/train.py experiment=train_multimodal_concat
+
+defaults:
+  - override /data: deepfake_multimodal
+  - override /model: multimodal
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: multimodal_concat
+
+model:
+  fusion_mode: concat
+
+tags: ["multimodal", "ablation", "concat", "fusion"]

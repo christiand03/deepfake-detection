@@ -1,0 +1,18 @@
+# @package _global_
+
+# Ablation: nur Video — der Audio-Pool-Vektor wird genullt, Klassifikator unverändert.
+# Zeigt die Leistung der Fusion-Architektur ohne Audio-Signal.
+# Run: python src/train.py experiment=train_multimodal_video_only
+
+defaults:
+  - override /data: deepfake_multimodal
+  - override /model: multimodal
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: multimodal_video_only
+
+model:
+  fusion_mode: video_only
+
+tags: ["multimodal", "ablation", "video_only", "fusion"]

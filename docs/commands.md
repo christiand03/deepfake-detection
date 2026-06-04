@@ -140,7 +140,22 @@ python src/train.py experiment=train_multimodal \
     data.batch_size=1 warmstart_ckpt=checkpoints/multimodal.ckpt
 ```
 
+**Fusions-Ablation (Multimodal — belegt, dass die Cross-Attention die Leistung treibt):**
+
+> Alle drei sind volle Phase-1-Läufe (~5,5 h). `test/auc` + `test/ap` gegen die Cross-Attention-
+> Baseline (`train_multimodal`, **test/auc 0,775**) vergleichen. Mechanismus: `model.fusion_mode`
+> (siehe `docs/model.md` §4). Per-CLI auch `experiment=train_multimodal model.fusion_mode=concat`.
+
+```bash
+python src/train.py experiment=train_multimodal_concat        # ohne Cross-Attention (nur Concat)
+python src/train.py experiment=train_multimodal_video_only    # Audio genullt
+python src/train.py experiment=train_multimodal_audio_only    # Video genullt
+```
+
 **Adversariale Varianten (Phase 4.2 – PGD-augmentiertes Training):**
+
+> Phase 2 (`freeze_backbone=false`) — die Configs setzen den Batch selbst herunter
+> (Video bs 2, Multimodal bs 1; siehe `docs/model.md` §7.7/§7.8).
 
 ```bash
 python src/train.py experiment=train_video_adversarial

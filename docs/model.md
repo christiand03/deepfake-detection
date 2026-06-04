@@ -19,10 +19,22 @@ Die Phasen 1 und 2 trennen Modalitäten und führen sie im Anschluss zusammen.
 
 ## 4. Analysen: Ablationsstudie (Ablation Studies)
 Um SOTA-Forschung in der Belegarbeit glaubhaft zu dokumentieren, müssen die komplexen Architekturerweiterungen (Phase 2) validiert werden.
-- *Umsetzung:* Führt systematisch Experimente ein, in denen Komponenten "amputiert" werden:
-  - Wie bricht die Accuracy ein, wenn die Fusion nicht via Cross-Attention, sondern simplem "Concatenate" passiert?
-  - Wie hoch ist die Accuracy rein auf Audio-Modellen basierend?
-  - Durch Ablationsstudien beweist das Team, dass der Fusionsansatz zwingend notwendig ist.
+- *Umsetzung:* Über den Schalter `model.fusion_mode` in `CrossAttentionFusion` — alle Modi teilen
+  denselben MLP-Klassifikator, damit die Ergebnisse vergleichbar sind:
+  - `cross_attention` (Default, Baseline): **test/auc 0,775** im 2. Lauf.
+  - `concat`: keine Cross-Attention, nur Mean-Pool beider Modalitäten + Concat → zeigt den Beitrag
+    der Cross-Attention gegenüber simplem Concatenate.
+  - `video_only` / `audio_only`: die jeweils andere Modalität wird genullt → Einzelmodalitäts-Beitrag.
+- *Experiment-Configs:* `train_multimodal_concat`, `train_multimodal_video_only`,
+  `train_multimodal_audio_only` (je ein voller Phase-1-Lauf ~5,5 h). `test/auc` + `test/ap` gegen
+  die Cross-Attention-Baseline (0,775) vergleichen — so wird belegt, dass der Fusionsmechanismus
+  (nicht nur "zwei Backbones") die Leistung treibt.
+- *Regularisierung (2. Lauf: Overfitting, train-loss 0,37 ≪ val-loss 1,03):* `dropout 0,2→0,3`,
+  `weight_decay 0,05→0,1` und ein zusätzlicher Projektions-Dropout in der Fusion. Val/Test-Lücke ist
+  Kalibrierung/Overfitting (ähnliche Label-Balance val 0,72 / test 0,75), kein Verteilungs-Bruch.
+
+> **Offen (Validität):** Identitäts-Leakage zwischen `train` und `val`/`test` (gleiche `identity_id`)
+> wäre ein eigenes Risiko für alle Metriken — separat prüfen (Metadaten enthalten `identity_id`).
 
 ## 5. Phase 4.2 — Adversarial Fine-Tuning (Verteidigung)
 
@@ -38,6 +50,8 @@ Der geforderte 1:1-Mix aus sauberen und adversarialen Daten wird durch **Batch-S
 Die naheliegende Alternative — *Loss-Averaging* (`loss = 0.5·CE(clean) + 0.5·CE(adv)`) — bräuchte **zwei volle Forward-Passes** pro Schritt und damit annähernd den doppelten VRAM. Da VideoMAE bereits am VRAM-Limit trainiert (siehe `configs/data/deepfake_video.yaml`: *"VideoMAE ist hungrig nach VRAM, starte klein!"*), wurde Batch-Splitting bewusst gewählt: Der Speicherbedarf pro Schritt bleibt identisch zum Baseline-Training, während Modell trotzdem zu gleichen Teilen sauberen und adversarialen Beispielen ausgesetzt wird. Dies ist eine direkte Folge der Hardware-Beschränkung (16 GB VRAM Mindestanforderung).
 
 ## 6. VRAM-Optimierung & Out-of-Memory (8-GB-GPUs)
+
+ACHTUNG DIE OPTIMIERUNGEN WURDEN VOR DER STANDARTISIERUNG DER MODELLE VORGENOMMEN
 
 VideoMAE-base wird als **vollständiges Fine-Tuning** (~86 Mio. trainierbare Parameter, Input `16×3×224×224`) trainiert. Auf einer **RTX 3060 Ti mit nur 8 GB VRAM** brach `python src/train.py experiment=train_video` zuverlässig mit `torch.OutOfMemoryError: CUDA out of memory` ab. Dieser Abschnitt dokumentiert die Ursache, den umgesetzten Fix und die empirisch vermessenen Grenzen.
 
@@ -281,6 +295,49 @@ größere Batches als die früheren Full-Finetune-Werte. Gemessen (echtes
 - **LR-Hinweis:** Die effektive Batch-Größe ist deutlich gewachsen (vorher 6) — die per-Modell-LRs
   könnten nach der Linear-Scaling-Regel höher gesetzt werden (Tuning-Follow-up, hier nicht blind
   geändert).
+
+### 7.8 Zweiter Lauf — Ergebnisse, Diagnose & Folgeänderungen
+
+Der zweite Lauf (alle Fixes aktiv: Phase-1-Freeze, korrekte Labels, AUC/PR-AUC-Metriken,
+`val/auc`-Selektion, große Phase-1-Batches). **AUC ist die belastbare Metrik:**
+
+| Modell | test/auc | test/ap* | test/acc | train/loss | val/loss | Laufzeit |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Multimodal** | **0,775** | 0,914 | 0,747 | 0,365 | **1,03** | ~5,5 h |
+| Wav2Vec2 | 0,573 | 0,632 | 0,551 | 0,670 | 0,665 | **14 min** |
+| VideoMAE | 0,573 | 0,573 | 0,549 | 0,687 (≈ln2) | 0,683 | ~5,2 h |
+
+\*PR-AUC ist durch die 74,5-%-Positiv-Rate aufgebläht (Zufall ≈ 0,745) — **AUC 0,775 ist die ehrliche
+Schlagzeile**, nicht 0,914.
+
+**Kernbefunde (und warum sie zu den Änderungen führten):**
+- **Fusion ≫ Einzelmodalität (0,775 vs. je 0,57).** Die Cross-Attention findet Audio-Video-
+  Inkonsistenzen, die keine Einzelmodalität allein sieht — **die Thesen-Hypothese ist gestützt.**
+  → Um das *zu beweisen* (statt „zwei Backbones helfen"), wurde die **Fusions-Ablation** gebaut
+  (`fusion_mode`, §4): `concat` / `video_only` / `audio_only` gegen die 0,775-Baseline.
+- **Beide Einzelmodelle unterfitten in Phase 1.** VideoMAE hat nur **3074 trainierbare Parameter**
+  (`fc_norm`+`classifier`) und bleibt sogar auf den *Trainingsdaten* bei Zufall (train/loss ≈ ln2):
+  die eingefrorenen Kinetics-Features sind nicht linear separierbar fürs Video-Forgery → **kein
+  LR-Sweep hilft, nur Phase 2.** Wav2Vec2 ist leicht über Zufall (vorher exakt Zufall) — der
+  Frozen-Head-Fix wirkt, aber das ~0,64-s-Fenster begrenzt.
+- **Multimodal überfittet:** `train/loss 0,37 ≪ val/loss 1,03` trotz Dropout 0,2.
+  → **Regularisierung erhöht** (§4): `dropout 0,2→0,3`, `weight_decay 0,05→0,1`, plus ein
+  zusätzlicher **Projektions-Dropout** in der Fusion. Die Val/Test-Lücke ist Kalibrierung/Overfitting,
+  **kein Verteilungs-Bruch** (Label-Balance val 0,72 / test 0,75 ähnlich; val ist nur kleiner/
+  verrauschter — 1530 vs. 4388).
+
+**Zwei dabei gefundene Bugs (und warum sie relevant waren):**
+- **Multimodal-Scheduler stand auf `mode: min`** (in `configs/model/multimodal.yaml`), während
+  `configure_optimizers` `val/auc` überwacht. Beim Umstieg auf `val/auc` (§7.3) wurde diese eine
+  Datei übersehen (videomae/wav2vec2 waren korrekt). Effekt: ReduceLROnPlateau senkte die LR in die
+  **falsche Richtung** (wenn die AUC *stieg*). **Fix:** `mode: max`.
+- **Audio `num_workers: 8` → Host-`MemoryError`.** Unter Windows nutzt der DataLoader *spawn*, jeder
+  Worker ist ein voller Python-Prozess (~1,5 GB, lädt torch/transformers neu) → 8 Worker sprengen die
+  16-GB-Box (verschärft durch den größeren Batch 128). **Fix:** `num_workers: 4` (verifiziert; bei
+  wenig RAM auf 2). Video/Multimodal nutzen bereits 2.
+
+> **Offen (Validität):** Vor belastbaren Thesen-Aussagen **Identitäts-Leakage** prüfen — dieselbe
+> `identity_id` in `train` und `val`/`test` würde alle Metriken aufblähen (Metadaten enthalten das Feld).
 
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"

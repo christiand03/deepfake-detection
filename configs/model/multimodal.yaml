@@ -6,7 +6,7 @@ audio_model_name: "facebook/wav2vec2-base"
 # Cross-Attention Fusion Parameter
 fusion_dim: 512     # Gemeinsame Dimension der Cross-Attention-Blöcke
 num_heads: 8        # Muss fusion_dim teilen (512 / 8 = 64 pro Head)
-dropout: 0.2        # erhöht (0.1→0.2) gegen Fusion-Head-Overfitting (train-loss << val-loss)
+dropout: 0.3        # gegen Fusion-Head-Overfitting (train-loss 0.37 << val-loss 1.03 im 2. Lauf)
 num_classes: 2
 
 # Phase 1 (Default): Backbones einfrieren → nur Fusion-Head trainieren
@@ -24,11 +24,11 @@ optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
   lr: 1e-4          # Für Phase 2 (unfreeze) auf 1e-5 reduzieren
-  weight_decay: 0.05
+  weight_decay: 0.1   # erhöht (0.05→0.1) gegen Overfitting
 
 scheduler:
   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
   _partial_: true
-  mode: min
+  mode: max   # überwacht val/auc (höher = besser) — Bugfix: war fälschlich min
   factor: 0.5
   patience: 3

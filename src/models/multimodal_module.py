@@ -65,10 +65,16 @@ class CrossAttentionFusion(nn.Module):
                      linearly projected to this size.  Default: 512.
         num_heads:   Number of attention heads in each cross-attention block.
                      Must divide ``fusion_dim`` evenly.  Default: 8.
-        dropout:     Dropout probability applied inside attention and the MLP.
+        dropout:     Dropout probability applied to projections, attention and the MLP.
                      Default: 0.1.
         num_classes: Output classes.  Default: 2 (real / fake).
+        fusion_mode: ``"cross_attention"`` (default) | ``"concat"`` | ``"video_only"`` |
+                     ``"audio_only"``.  Ablation switch — all modes share the MLP classifier;
+                     non-cross modes skip the attention blocks (mean-pool the projections),
+                     and the ``*_only`` modes zero the dropped modality.
     """
+
+    _FUSION_MODES = ("cross_attention", "concat", "video_only", "audio_only")
 
     def __init__(
         self,
@@ -78,15 +84,22 @@ class CrossAttentionFusion(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.1,
         num_classes: int = 2,
+        fusion_mode: str = "cross_attention",
     ) -> None:
         super().__init__()
 
         if fusion_dim % num_heads != 0:
             raise ValueError(f"fusion_dim ({fusion_dim}) must be divisible by num_heads ({num_heads}).")
+        if fusion_mode not in self._FUSION_MODES:
+            raise ValueError(f"fusion_mode must be one of {self._FUSION_MODES}, got {fusion_mode!r}.")
+        self.fusion_mode = fusion_mode
 
         # Project both modalities into the shared fusion space.
         self.video_proj = nn.Linear(video_dim, fusion_dim)
         self.audio_proj = nn.Linear(audio_dim, fusion_dim)
+
+        # Dropout on the projected features (regularizes all fusion modes, incl. concat).
+        self.proj_dropout = nn.Dropout(dropout)
 
         # Pre-norm LayerNorms — applied to the projected inputs BEFORE each attention
         # block.  Pre-norm is more training-stable than post-norm and is the standard
@@ -132,9 +145,9 @@ class CrossAttentionFusion(nn.Module):
         Returns:
             ``(B, num_classes)`` logit tensor.
         """
-        # Project to shared space.
-        v = self.video_proj(video_hidden)  # (B, T_v, fusion_dim)
-        a = self.audio_proj(audio_hidden)  # (B, T_a, fusion_dim)
+        # Project to shared space (+ dropout, all modes).
+        v = self.proj_dropout(self.video_proj(video_hidden))  # (B, T_v, fusion_dim)
+        a = self.proj_dropout(self.audio_proj(audio_hidden))  # (B, T_a, fusion_dim)
 
         # Pre-norm: normalize ONCE before both attention blocks so that each
         # direction attends to the original, unmodified representation of the
@@ -144,17 +157,22 @@ class CrossAttentionFusion(nn.Module):
         v_n = self.v_norm(v)  # (B, T_v, fusion_dim)
         a_n = self.a_norm(a)  # (B, T_a, fusion_dim)
 
-        # Block 1: video attends to audio.
-        v_cross, _ = self.v_to_a_attn(query=v_n, key=a_n, value=a_n)
-        v = v + v_cross  # (B, T_v, fusion_dim)
-
-        # Block 2: audio attends to ORIGINAL video (v_n, not the updated v).
-        a_cross, _ = self.a_to_v_attn(query=a_n, key=v_n, value=v_n)
-        a = a + a_cross  # (B, T_a, fusion_dim)
-
-        # Mean-pool over the sequence dimension, then fuse.
-        v_pool = v.mean(dim=1)  # (B, fusion_dim)
-        a_pool = a.mean(dim=1)  # (B, fusion_dim)
+        if self.fusion_mode == "cross_attention":
+            # Block 1: video attends to audio.
+            v_cross, _ = self.v_to_a_attn(query=v_n, key=a_n, value=a_n)
+            v = v + v_cross  # (B, T_v, fusion_dim)
+            # Block 2: audio attends to ORIGINAL video (v_n, not the updated v).
+            a_cross, _ = self.a_to_v_attn(query=a_n, key=v_n, value=v_n)
+            a = a + a_cross  # (B, T_a, fusion_dim)
+            v_pool, a_pool = v.mean(dim=1), a.mean(dim=1)
+        else:
+            # Ablations: no cross-attention. Mean-pool the (normalized) projections.
+            v_pool, a_pool = v_n.mean(dim=1), a_n.mean(dim=1)
+            if self.fusion_mode == "video_only":
+                a_pool = torch.zeros_like(a_pool)  # drop audio
+            elif self.fusion_mode == "audio_only":
+                v_pool = torch.zeros_like(v_pool)  # drop video
+            # "concat": keep both pooled projections as-is.
 
         fused = torch.cat([v_pool, a_pool], dim=1)  # (B, fusion_dim * 2)
         return self.classifier(fused)  # (B, num_classes)
@@ -189,6 +207,10 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         num_heads:        Attention heads in each cross-attention block.  Default: 8.
         dropout:          Dropout probability inside fusion and the MLP.  Default: 0.1.
         num_classes:      Output classes.  Default: 2.
+        fusion_mode:      Fusion ablation switch: ``"cross_attention"`` (default),
+                          ``"concat"`` (no attention), ``"video_only"`` / ``"audio_only"``
+                          (one modality zeroed). Same classifier across modes for
+                          comparable ablations.
         freeze_backbone:  If ``True`` (Phase 1, default), both backbones are frozen
                           and only the fusion head is trained.  ``False`` (Phase 2)
                           fine-tunes end-to-end.
@@ -213,6 +235,7 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         num_heads: int = 8,
         dropout: float = 0.1,
         num_classes: int = 2,
+        fusion_mode: str = "cross_attention",
         freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
         class_weights: list[float] | None = None,
@@ -265,6 +288,7 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
             num_heads=num_heads,
             dropout=dropout,
             num_classes=num_classes,
+            fusion_mode=fusion_mode,
         )
 
         # Phase 1 (default): freeze both backbones, train only the fusion head.
