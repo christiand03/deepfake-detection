@@ -157,6 +157,34 @@ wandb launch `
 Der laufende Agent (Abschnitt 2) nimmt den Job auf und startet das Training in
 seinem Environment.
 
+### 4.1 Konkret: Phase 2 + Adversarial einreihen
+
+Diese Experimente sind **Phase 2** (`freeze_backbone=false`) und **warm-starten** vom
+sauberen Phase-1-Checkpoint — der Pfad steht bereits in der jeweiligen Experiment-Config als
+`warmstart_ckpt: ${paths.export_dir}/<name>.ckpt`, löst also über `DEEPFAKE_CKPT_DIR`
+(Abschnitt 2) auf. **Voraussetzung:** Der Agent läuft mit gesetztem `DEEPFAKE_CKPT_DIR`, und die
+sauberen Phase-1-Checkpoints (`videomae.ckpt`, `multimodal.ckpt` aus dem 3. Lauf) liegen dort.
+Batch/Accumulation/LR sind ebenfalls in den Configs hinterlegt — die Launch-Args bleiben minimal.
+
+```powershell
+# Den bereits existierenden train.py-Job verwenden (Projekt → Jobs):
+$JOB = "christian-debbertin-deepfake-detection/Deepfake Detection/<dein-train.py-job>:latest"
+$Q   = "-q Desktop_PC -e christian-debbertin-deepfake-detection -p `"Deepfake Detection`""
+
+# Phase 2 — Multimodal End-to-End (Cross-Attention, warm-gestartet)
+wandb launch -j $JOB $Q --config '{\"overrides\": {\"args\": [\"experiment=train_multimodal_phase2\"]}}'
+
+# Phase 2 — Ablations-Arm Concat (der eigentliche Cross-Attention-vs-Concat-Test, §7.10)
+wandb launch -j $JOB $Q --config '{\"overrides\": {\"args\": [\"experiment=train_multimodal_phase2\", \"model.fusion_mode=concat\"]}}'
+
+# Adversarial (Phase 4.2) — Video & Multimodal (warmstart steckt in der Config)
+wandb launch -j $JOB $Q --config '{\"overrides\": {\"args\": [\"experiment=train_video_adversarial\"]}}'
+wandb launch -j $JOB $Q --config '{\"overrides\": {\"args\": [\"experiment=train_multimodal_adversarial\"]}}'
+```
+
+Die vier Jobs werden vom Agenten (`max_jobs: 1`) strikt **nacheinander** abgearbeitet. `train.py`
+testet nach jedem Training automatisch auf dem aktuellen Test-Split.
+
 ---
 
 ## 5. Ueberwachen

@@ -12,6 +12,10 @@ defaults:
 
 ckpt_export_name: videomae_adv
 
+# Warm-Start vom sauberen Phase-1-VideoMAE (adversariales Finetuning eines trainierten
+# Detektors). ${paths.export_dir} = DEEPFAKE_CKPT_DIR (W&B-Launch) bzw. ./checkpoints/ (lokal).
+warmstart_ckpt: ${paths.export_dir}/videomae.ckpt
+
 # Phase 2 (Backbone trainierbar) ist speicherhungrig → kleinen Batch erzwingen
 # (Full-Finetune VideoMAE passt bei bs 2 mit Checkpointing; bs 4 spillt — s. docs/model.md §6.3).
 data:
@@ -23,6 +27,8 @@ model:
   adv_train: true
   freeze_backbone: false  # Phase 2: Backbone muss trainierbar sein, sonst härtet das
                           # adversariale Training nur den Kopf auf eingefrorenen Features
+  optimizer:
+    lr: 1e-5            # niedriger fürs Phase-2-Finetuning (entfrorener Backbone)
   adv_epsilon: 0.03   # L∞ perturbation budget (normalised pixel space)
   adv_steps: 7        # PGD iterations per step
 
