@@ -1,0 +1,32 @@
+# @package _global_
+
+# Phase 2 — End-to-End-Finetuning des Multimodal-Modells (Backbones ENTFROREN),
+# warm-gestartet vom sauberen Phase-1-Checkpoint. Der eigentliche Test der
+# Cross-Modal-Sync-Hypothese (Phase 1: Cross-Attention ≈ Concat, s. docs/model.md §7.10).
+# Run/Launch:                 experiment=train_multimodal_phase2
+# Ablations-Arm (Concat):     experiment=train_multimodal_phase2 model.fusion_mode=concat
+
+defaults:
+  - override /data: deepfake_multimodal
+  - override /model: multimodal
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: multimodal_phase2
+
+# Warm-Start vom Phase-1-Checkpoint (lädt nur Gewichte, frischer Optimizer/LR/Epoch).
+# ${paths.export_dir} = DEEPFAKE_CKPT_DIR (W&B-Launch) bzw. ./checkpoints/ (lokal).
+warmstart_ckpt: ${paths.export_dir}/multimodal.ckpt
+
+# Schwerster Pfad: beide Backbones trainierbar → bs 1 (Host-RAM, s. docs/model.md §6.6/§7.7).
+data:
+  batch_size: 1
+trainer:
+  accumulate_grad_batches: 6  # 1 × 6 = effektiv 6
+
+model:
+  freeze_backbone: false
+  optimizer:
+    lr: 1e-5   # niedriger fürs End-to-End-Finetuning (vorher 1e-4 in Phase 1)
+
+tags: ["multimodal", "phase2", "end-to-end", "fusion"]
