@@ -20,18 +20,17 @@ Die Phasen 1 und 2 trennen Modalitäten und führen sie im Anschluss zusammen.
 ## 4. Analysen: Ablationsstudie (Ablation Studies)
 Um SOTA-Forschung in der Belegarbeit glaubhaft zu dokumentieren, müssen die komplexen Architekturerweiterungen (Phase 2) validiert werden.
 - *Umsetzung:* Über den Schalter `model.fusion_mode` in `CrossAttentionFusion` — alle Modi teilen
-  denselben MLP-Klassifikator, damit die Ergebnisse vergleichbar sind:
-  - `cross_attention` (Default, Baseline): **test/auc 0,775** im 2. Lauf.
-  - `concat`: keine Cross-Attention, nur Mean-Pool beider Modalitäten + Concat → zeigt den Beitrag
-    der Cross-Attention gegenüber simplem Concatenate.
-  - `video_only` / `audio_only`: die jeweils andere Modalität wird genullt → Einzelmodalitäts-Beitrag.
+  denselben MLP-Klassifikator, damit die Ergebnisse vergleichbar sind: `cross_attention` (Default),
+  `concat` (keine Attention), `video_only` / `audio_only` (jeweils andere Modalität genullt).
 - *Experiment-Configs:* `train_multimodal_concat`, `train_multimodal_video_only`,
-  `train_multimodal_audio_only` (je ein voller Phase-1-Lauf ~5,5 h). `test/auc` + `test/ap` gegen
-  die Cross-Attention-Baseline (0,775) vergleichen — so wird belegt, dass der Fusionsmechanismus
-  (nicht nur "zwei Backbones") die Leistung treibt.
-- *Regularisierung (2. Lauf: Overfitting, train-loss 0,37 ≪ val-loss 1,03):* `dropout 0,2→0,3`,
-  `weight_decay 0,05→0,1` und ein zusätzlicher Projektions-Dropout in der Fusion. Val/Test-Lücke ist
-  Kalibrierung/Overfitting (ähnliche Label-Balance val 0,72 / test 0,75), kein Verteilungs-Bruch.
+  `train_multimodal_audio_only` (je ein voller Phase-1-Lauf). `test/auc` + `test/ap` vergleichen.
+- *Ergebnis (3. Lauf, leakage-bereinigt — Details & Tabelle §7.10):* **Fusion schlägt
+  Einzelmodalität** (≈0,65 vs. 0,58–0,61), **aber Cross-Attention ≈ Concat** (0,651 vs. 0,654) — der
+  Cross-Attention-*Mechanismus* bringt in **Phase 1** keinen Mehrwert. Die zentrale Thesen-Aussage
+  („Cross-Modal-Synchronisation ist notwendig") ist damit **in Phase 1 nicht belegt** und muss in
+  **Phase 2** (entfrorene Backbones, die Alignment *lernen* können) geprüft werden.
+- *Regularisierung (Overfitting, train-loss ≪ val-loss):* `dropout 0,2→0,3`, `weight_decay 0,05→0,1`
+  und ein zusätzlicher Projektions-Dropout in der Fusion.
 
 > **Identitäts-Leakage (geprüft & Code-Fix):** `id00012` lag in **allen drei** Splits (≈12,5 % der
 > Val-, ≈6 % der Test-Chunks); Video-Ebene ist sauber (0 % `video_id`-Überlapp). Ursache & Fix in §7.9.
@@ -369,6 +368,52 @@ Dieselbe Identität landet damit immer im selben Split — inkrementelle Läufe 
 > `data/processed/`, ohne inkrementelles `max_videos`) → identitätsdisjunkte Splits. Erst danach sind
 > die Metriken (inkl. der 0,775) belastbar. Mit nur ~12 Identitäten bleibt die Generalisierungs-Aussage
 > ohnehin begrenzt.
+
+### 7.10 Dritter Lauf — leakage-bereinigt + Fusions-Ablation
+
+Alle Modelle auf dem **neu prozessierten, identitätsdisjunkten** 4000-Video-Subset (Phase 1, alle
+Fixes aktiv). Die Ablation lief unter identischen Bedingungen (nur `fusion_mode` variiert).
+
+**Unimodal (Phase-1-Baselines, leakage-bereinigt):**
+
+| Modell | test/auc | test/ap | train/loss | Befund |
+| --- | --- | --- | --- | --- |
+| Wav2Vec2 | 0,576 | 0,627 | 0,671 | ≈ unverändert ggü. Leak-Lauf (0,573) |
+| VideoMAE | 0,558 | 0,559 | 0,687 (≈ln2) | ≈ unverändert (0,573); fittet Train nicht |
+
+→ Die **Unimodalen sind leakage-robust, weil sie unterfitten** (können `id00012` gar nicht
+memorieren). Das Leak betraf nur das Modell, das *gut fittet* — das Multimodal.
+
+**Multimodal + Ablation (identische Bedingungen):**
+
+| `fusion_mode` | test/auc | test/ap | val/auc | train/loss | test/loss |
+| --- | --- | --- | --- | --- | --- |
+| **cross_attention** | 0,651 | 0,862 | 0,681 | **0,395** | **1,04** |
+| **concat** | **0,654** | 0,858 | 0,661 | 0,502 | 0,564 |
+| video_only | 0,608 | 0,816 | 0,617 | 0,517 | 0,588 |
+| audio_only | 0,576 | 0,825 | 0,572 | 0,545 | 0,537 |
+
+**Schlussfolgerungen:**
+1. **Leakage war real & relevant:** Cross-Attention fiel **0,775 (geleakt) → 0,651 (bereinigt)**
+   (≈ −0,12 AUC). Genau das vorhergesagte Muster: nur das gut-fittende Multimodal war aufgebläht.
+   Die ehrliche Multimodal-Zahl ist **~0,65**, nicht 0,775.
+2. **Fusion hilft:** beide Fusions-Arme (~0,65) schlagen `video_only` (0,61) und `audio_only` (0,58)
+   in AUC *und* AP — beide Modalitäten tragen bei.
+3. **Cross-Attention ≈ Concat (0,651 vs. 0,654):** der Cross-Attention-*Mechanismus* bringt **keinen**
+   Mehrwert gegenüber simplem Concat und **overfittet stärker** (train-loss 0,40 vs. 0,50; test-loss
+   1,04 vs. 0,56 — schlecht kalibriert). Die Thesen-Kernaussage (Cross-Modal-Sync ist notwendig) ist
+   **in Phase 1 nicht belegt**.
+
+**Wahrscheinliche Ursache:** Phase 1 friert die Backbones ein → Cross-Attention arbeitet auf *fixen*
+Features und kann das Lippen-Phonem-Alignment, das die These beschreibt, gar nicht *lernen*.
+
+**Vorbehalte:** nur ~2 Test-Identitäten / 4000 Videos → 0,651 vs. 0,654 liegt im Rauschen; auch der
+Fusion-vs-Unimodal-Abstand ist nur *suggestiv*. Mehr Identitäten würden das absichern.
+
+> **Nächstes Schlüssel-Experiment (Phase 2):** dieselbe Ablation mit `model.freeze_backbone=false`
+> (warm-gestartet). Schlägt Cross-Attention dort Concat, verdient der Mechanismus seinen Platz;
+> bleibt es ein Gleichstand, muss die Thesen-Aussage umformuliert werden. Das ist der eigentliche
+> Test der zentralen Hypothese.
 
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"

@@ -142,9 +142,10 @@ python src/train.py experiment=train_multimodal \
 
 **Fusions-Ablation (Multimodal — belegt, dass die Cross-Attention die Leistung treibt):**
 
-> Alle drei sind volle Phase-1-Läufe (~5,5 h). `test/auc` + `test/ap` gegen die Cross-Attention-
-> Baseline (`train_multimodal`, **test/auc 0,775**) vergleichen. Mechanismus: `model.fusion_mode`
-> (siehe `docs/model.md` §4). Per-CLI auch `experiment=train_multimodal model.fusion_mode=concat`.
+> Alle drei sind volle Phase-1-Läufe. `test/auc` + `test/ap` gegen die Cross-Attention-Baseline
+> (`train_multimodal`) vergleichen. Mechanismus: `model.fusion_mode` (siehe `docs/model.md` §4/§7.10;
+> 3. Lauf: Cross-Attention ≈ Concat in Phase 1 — eigentlicher Test in Phase 2). Per-CLI auch
+> `experiment=train_multimodal model.fusion_mode=concat`.
 
 ```bash
 python src/train.py experiment=train_multimodal_concat        # ohne Cross-Attention (nur Concat)
@@ -154,12 +155,30 @@ python src/train.py experiment=train_multimodal_audio_only    # Video genullt
 
 **Adversariale Varianten (Phase 4.2 – PGD-augmentiertes Training):**
 
-> Phase 2 (`freeze_backbone=false`) — die Configs setzen den Batch selbst herunter
-> (Video bs 2, Multimodal bs 1; siehe `docs/model.md` §7.7/§7.8).
+> **Diese Experimente sind Phase 2** (`freeze_backbone=false`) — adversariales Finetuning auf einem
+> *eingefrorenen* Backbone würde nur den Kopf härten. Daher **vom sauberen Phase-1-Checkpoint
+> warm-starten** (`warmstart_ckpt`), nicht bei null beginnen. Die Configs setzen den Batch selbst
+> herunter (Video bs 2, Multimodal bs 1; siehe `docs/model.md` §7.7). `train.py` testet nach dem
+> Training automatisch auf dem aktuellen Test-Split.
 
 ```bash
-python src/train.py experiment=train_video_adversarial
-python src/train.py experiment=train_multimodal_adversarial
+# Warm-Start von den sauberen Phase-1-Baselines (3. Lauf); NICHT die alten *_adv.ckpt wiederverwenden.
+python src/train.py experiment=train_video_adversarial `
+    warmstart_ckpt=checkpoints/videomae.ckpt
+python src/train.py experiment=train_multimodal_adversarial `
+    warmstart_ckpt=checkpoints/multimodal.ckpt
+```
+
+> **Checkpoints prüfen:** `checkpoints/videomae.ckpt` / `multimodal.ckpt` müssen die aktuellen,
+> leakage-bereinigten Phase-1-Modelle sein (Datei-Datum prüfen) — sonst auf den konkreten
+> `logs/train/runs/<timestamp>/checkpoints/*.ckpt` zeigen.
+
+**Robustheit messen (der eigentliche Phase-4.2-„Test"):** Nach dem adversarialen Training die
+Fooling-Rate eines Baselines gegen das gehärtete Modell vergleichen — Adversarial-Sweep (§7.2):
+
+```powershell
+$env:VIDEOMAE_CKPT_PATH = "checkpoints/videomae_adv.ckpt"
+python scripts/eval_adversarial_sweep.py
 ```
 
 **Training fortsetzen (echtes Resume statt Warm-Start):**
