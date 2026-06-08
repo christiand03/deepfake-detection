@@ -1,0 +1,31 @@
+# @package _global_
+
+# Phase 2 — VideoMAE End-to-End-Finetuning (Backbone ENTFROREN), warm-gestartet vom
+# sauberen Phase-1-Checkpoint. Hier kann der Backbone forgery-spezifische Features lernen
+# (Phase 1 = nur Linear-Probe auf Kinetics-Features, ~0,56 AUC).
+# Run/Launch: experiment=train_video_phase2
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: videomae_phase2
+
+# Warm-Start vom Phase-1-Checkpoint (nur Gewichte, frischer Optimizer/LR).
+# ${paths.export_dir} = DEEPFAKE_CKPT_DIR (W&B-Launch) bzw. ./checkpoints/ (lokal).
+warmstart_ckpt: ${paths.export_dir}/videomae.ckpt
+
+# Full-Finetune (eager VideoMAE): bs 2 mit Gradient Checkpointing; bs 4 spillt (s. docs/model.md §6.3).
+data:
+  batch_size: 2
+trainer:
+  accumulate_grad_batches: 3  # 2 × 3 = effektiv 6
+
+model:
+  freeze_backbone: false
+  optimizer:
+    lr: 1e-5   # niedriger fürs End-to-End-Finetuning (vorher 1e-4 in Phase 1)
+
+tags: ["videomae", "video", "phase2", "end-to-end"]

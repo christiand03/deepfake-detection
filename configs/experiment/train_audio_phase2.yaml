@@ -1,0 +1,31 @@
+# @package _global_
+
+# Phase 2 — Wav2Vec2 End-to-End-Finetuning (Transformer-Encoder ENTFROREN; der CNN-
+# Feature-Extractor bleibt per Invariante frozen), warm-gestartet vom Phase-1-Checkpoint.
+# HINWEIS: Cold-Full-Finetuning kollabierte früher (Loss=ln2, §7.2); Warm-Start + niedrige LR
+# sind der Versuch, das stabil zu machen — val/auc genau beobachten.
+# Run/Launch: experiment=train_audio_phase2
+
+defaults:
+  - override /data: deepfake_audio
+  - override /model: wav2vec2
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: wav2vec2_phase2
+
+# Warm-Start vom Phase-1-Checkpoint. ${paths.export_dir} = DEEPFAKE_CKPT_DIR (Launch) bzw. ./checkpoints/.
+warmstart_ckpt: ${paths.export_dir}/wav2vec2.ckpt
+
+# Encoder entfroren → kleinerer Batch als Phase 1 (128). 32 ist konservativ; bei freiem VRAM erhöhbar.
+data:
+  batch_size: 32
+trainer:
+  accumulate_grad_batches: 1
+
+model:
+  freeze_backbone: false   # entfriert den Transformer-Encoder; CNN-Feature-Extractor bleibt frozen
+  optimizer:
+    lr: 1e-5   # niedriger fürs End-to-End-Finetuning (vorher 5e-4 fürs Head-only)
+
+tags: ["wav2vec2", "audio", "phase2", "end-to-end"]
