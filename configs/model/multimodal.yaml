@@ -8,6 +8,7 @@ fusion_dim: 512     # Gemeinsame Dimension der Cross-Attention-Blöcke
 num_heads: 8        # Muss fusion_dim teilen (512 / 8 = 64 pro Head)
 dropout: 0.3        # gegen Fusion-Head-Overfitting (train-loss 0.37 << val-loss 1.03 im 2. Lauf)
 num_classes: 2
+fusion_mode: cross_attention  # cross_attention | concat | video_only | audio_only (Ablation, §4/§7.10)
 
 # Phase 1 (Default): Backbones einfrieren → nur Fusion-Head trainieren
 # Phase 2: false + warmstart_ckpt, mit niedrigerer LR end-to-end fine-tunen
