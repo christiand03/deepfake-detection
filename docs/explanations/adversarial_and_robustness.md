@@ -28,7 +28,7 @@ Die Fooling Rate ist der Anteil korrekt klassifizierter Clips, die nach einem Ad
 
 ### Confidence Drop
 
-Der Confidence Drop ist die durchschnittliche Abnahme der vom Modell vorhergesagten Wahrscheinlichkeit für die ursprüngliche Klasse nach einem Angriff oder einer Degradierung. Er ist eine weichere Metrik als die Fooling Rate, da er misst, wie stark ein Angriff das Modell destabilisiert – auch wenn er die Vorhersage nicht vollständig umkehrt. Beide Metriken zusammen beschreiben die Form der adversarialen Robustheitskurve.
+Der Confidence Drop ist die durchschnittliche Abnahme der vom Modell vorhergesagten Wahrscheinlichkeit für die ursprüngliche Klasse nach einem Angriff oder einer Degradierung. Er ist eine weichere Metrik als die Fooling Rate, da es misst, wie stark ein Angriff das Modell destabilisiert – auch wenn er die Vorhersage nicht vollständig umkehrt. Beide Metriken zusammen beschreiben die Form der adversarialen Robustheitskurve.
 
 ### Universal Adversarial Perturbation (UAP)
 

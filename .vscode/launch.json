@@ -1,0 +1,65 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run API Backend (FastAPI)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "src.api.app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload"
+      ],
+      "jinja": true,
+      "justMyCode": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "VIDEOMAE_CKPT_PATH": "checkpoints/epoch_000-val_loss_0.591_video.ckpt",
+        "WAV2VEC2_CKPT_PATH": "checkpoints/epoch_003-val_loss_0.693_audio.ckpt"
+      }
+    },
+    {
+      "name": "Run PyTorch Training (Phase 1 Video)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/train.py",
+      "args": [
+        "experiment=train_video",
+        "data.batch_size=2"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "CUDA_LAUNCH_BLOCKING": "1"
+      }
+    },
+    {
+      "name": "Run Frontend (Vite)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/frontend"
+    },
+    {
+      "name": "Debug Frontend in Chrome",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/frontend/src",
+      "sourceMapPathOverrides": {
+        "webpack:///src/*": "${webRoot}/*"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Launch Full Stack (API + Frontend)",
+      "configurations": ["Run API Backend (FastAPI)", "Run Frontend (Vite)"]
+    }
+  ]
+}
