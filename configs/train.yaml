@@ -62,5 +62,8 @@ export_ckpt: True
 # configs set this explicitly so adversarial runs don't overwrite the baselines.
 ckpt_export_name: null
 
-# seed for random number generators in pytorch, numpy and python.random
-seed: null
+# seed for random number generators in pytorch, numpy and python.random.
+# Fixed at 42 so all runs are reproducible and ablation arms differ ONLY in their
+# config (not in random init / data order). Override per run for multi-seed studies,
+# e.g. seed=43. (For full determinism also set trainer.deterministic=true — langsamer.)
+seed: 42

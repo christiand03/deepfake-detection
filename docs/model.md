@@ -415,6 +415,42 @@ Fusion-vs-Unimodal-Abstand ist nur *suggestiv*. Mehr Identitäten würden das ab
 > bleibt es ein Gleichstand, muss die Thesen-Aussage umformuliert werden. Das ist der eigentliche
 > Test der zentralen Hypothese.
 
+### 7.11 Phase 2 — End-to-End-Multimodal + Ablation (warm-gestartet)
+
+Multimodal mit **entfrorenen Backbones** (`freeze_backbone=false`, warm-gestartet vom Phase-1-
+Checkpoint, lr 1e-5, bs 1 × acc 6). Trainierbare Parameter: **179,8 Mio.** (vs. 3,4 Mio. in Phase 1).
+
+| `fusion_mode` | test/auc | val/auc | test/ap | val/ap | train/loss |
+| --- | --- | --- | --- | --- | --- |
+| **cross_attention** | **0,767** | 0,741 | **0,901** | 0,890 | 0,114 |
+| **concat** | 0,727 | **0,757** | 0,892 | **0,904** | 0,151 |
+
+**1. Phase 2 wirkt — deutlicher Sprung.** Cross-Attention **0,651 (Phase 1) → 0,767 (Phase 2)**
+test/auc (+0,12). Entfrorene Backbones lernen forgery-spezifische Features, die eingefrorene
+Kinetics/Speech-Features nicht liefern. Das ist das validierte Haupt-Stellrad.
+
+**2. Cross-Attention vs. Concat: nicht unterscheidbar (kein robuster Sieg).** Cross-Attention
+gewinnt auf **Test** (+0,04 auc/+0,01 ap), Concat gewinnt auf **Val** (+0,016 auc/+0,014 ap) — der
+Val→Test-Rang **kippt**. Genau die Signatur von *Rauschen > Signal*: bei nur ~2 Test-/~2–3 Val-
+Identitäten sind 0,04 AUC nicht belastbar. **Die zentrale Thesen-Aussage (Cross-Attention ist
+notwendig) bleibt damit auch in Phase 2 unbelegt** — bestenfalls ein schwacher Test-Hinweis.
+
+**3. Starkes Overfitting → Daten sind der Engpass.** train-acc ~0,94–0,95 / train-loss ~0,11–0,15
+vs. test-auc ~0,73–0,77: 180 Mio. Parameter auf ~4000 Videos / ~8 Train-Identitäten memorieren.
+Kapazität ist nicht das Problem, Generalisierung schon — mehr Daten heben die Decke.
+
+> **Confound (Seed):** Beide Läufe liefen **ohne festen Seed** (`seed=null` → kein
+> `seed_everything`). Damit unterscheiden sich die Arme nicht nur im `fusion_mode`, sondern auch in
+> zufälliger Initialisierung (Fusion-Head) und Daten-Reihenfolge — der 0,04-Test-Abstand vermischt
+> Mechanismus- und Zufallseffekt und ist nicht kausal zuordenbar. **Für eine belastbare Ablation:
+> festen `seed` für alle Arme setzen und je 2–3 Seeds laufen lassen** (zusätzlich zu mehr
+> Identitäten für ein verrauschungsarmes Eval).
+
+**Fazit für die Belegarbeit:** ehrlich berichten — leakage-bereinigter Multimodal-Detektor bei
+~0,77 AUC; Fusion schlägt Einzelmodalität klar; **Cross-Attention ≈ Concat (innerhalb des
+Rauschens)**. Eine „Cross-Attention ist zwingend"-Aussage ist mit diesen Daten **nicht** haltbar;
+sie ließe sich nur mit deutlich mehr Identitäten + Seed-Kontrolle entscheiden.
+
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"
 - "Cross-Modal Attention Networks for Lip-Sync Detection"
