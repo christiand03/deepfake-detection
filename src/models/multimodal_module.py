@@ -239,6 +239,7 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
         class_weights: list[float] | None = None,
+        llrd_decay: float | None = None,
         optimizer: Any = None,
         scheduler: Any = None,
         adv_train: bool = False,
@@ -255,6 +256,8 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
             if adv_modalities not in ("video", "audio", "both"):
                 raise ValueError(f"adv_modalities must be 'video', 'audio', or 'both', got {adv_modalities!r}.")
 
+        # Plain list so checkpoints stay loadable with weights_only=True.
+        class_weights = self._plain_class_weights(class_weights)
         self.save_hyperparameters(logger=False)
 
         # Backbones
@@ -306,6 +309,16 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         # The Wav2Vec2 CNN feature extractor never has useful gradient signal —
         # keep it frozen in both phases (also after a Phase 2 unfreeze).
         self.audio_backbone.feature_extractor._freeze_parameters()
+
+    def _llrd_stacks(self):
+        # One shallow → deep stack per backbone for layer-wise LR decay
+        # (Phase 2); the fusion head stays at full lr.
+        audio_encoder = self.audio_backbone.encoder
+        return [
+            [self.video_backbone.embeddings, *self.video_backbone.encoder.layer],
+            [self.audio_backbone.feature_projection, audio_encoder.pos_conv_embed,
+             audio_encoder.layer_norm, *audio_encoder.layers],
+        ]
 
     # Forward
 
@@ -372,14 +385,9 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         labels = batch["labels"]
 
         logits = self.forward(pixel_values, input_values)
-        # Optional class weighting to counter the ~75/25 imbalance of the combined
-        # "label" (None = unweighted, the default).
-        weight = (
-            torch.tensor(self.hparams.class_weights, device=logits.device, dtype=logits.dtype)
-            if self.hparams.class_weights is not None
-            else None
-        )
-        loss = F.cross_entropy(logits, labels, weight=weight)
+        # Optional class weighting — with segment-accurate chunk labels the fake
+        # class is rare (~10 % of chunks), so unweighted CE collapses onto "real".
+        loss = F.cross_entropy(logits, labels, weight=self._loss_weight())
         preds = torch.argmax(logits, dim=1)
         return loss, preds, labels, logits
 
@@ -481,6 +489,7 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
 
         # Reuse logits from _model_step — no second forward pass needed.
         probs = F.softmax(logits, dim=1)[:, 1]
+        self._video_eval_update("val", batch, probs, labels)
 
         self.val_loss(loss)
         self.val_acc(preds, labels)
@@ -496,6 +505,7 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
         loss, preds, labels, logits = self._model_step(batch)
         probs = F.softmax(logits, dim=1)[:, 1]
+        self._video_eval_update("test", batch, probs, labels)
         self.test_loss(loss)
         self.test_acc(preds, labels)
         self.test_f1(preds, labels)

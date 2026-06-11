@@ -14,7 +14,13 @@ from __future__ import annotations
 import h5py
 import torch
 
-from .base_hdf5_dataset import BaseHDF5Dataset, normalize_audio, normalize_video_frames
+from .base_hdf5_dataset import (
+    BaseHDF5Dataset,
+    augment_audio,
+    augment_video_frames,
+    normalize_audio,
+    normalize_video_frames,
+)
 
 
 class MultimodalHDF5Dataset(BaseHDF5Dataset):
@@ -24,11 +30,14 @@ class MultimodalHDF5Dataset(BaseHDF5Dataset):
         h5_path:    Path to a ``*.h5`` file produced by the preprocessing pipeline.
         label_type: Which label column to use.  One of ``"label"`` (combined),
                     ``"label_video"``, or ``"label_audio"``.  Default: ``"label"``.
+        augment:    Apply random train-time augmentation to both modalities.
+                    Enable for the train split only.
     """
 
-    def __init__(self, h5_path: str, label_type: str = "label") -> None:
+    def __init__(self, h5_path: str, label_type: str = "label", augment: bool = False) -> None:
         super().__init__(h5_path)
         self.label_type = label_type
+        self.augment = augment
 
         with h5py.File(self.h5_path, "r") as f:
             if "video" not in f or "audio" not in f:
@@ -43,15 +52,18 @@ class MultimodalHDF5Dataset(BaseHDF5Dataset):
                     f"Video ({n_video}) and audio ({n_audio}) datasets have different lengths in '{h5_path}'."
                 )
             self.length = n_video
+        self._load_eval_metadata()
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         f = self._open_h5()
 
         # Video: (16, 3, 224, 224) uint8 → normalised float32
-        pixel_values = normalize_video_frames(f["video"][idx])
+        pixel_values = normalize_video_frames(
+            f["video"][idx], augment_fn=augment_video_frames if self.augment else None
+        )
 
         # Audio: (10240,) float32 → zero-mean / unit-var
-        input_values = normalize_audio(f["audio"][idx])
+        input_values = normalize_audio(f["audio"][idx], augment_fn=augment_audio if self.augment else None)
 
         # Label
         label = int(f[self.label_type][idx])
@@ -61,4 +73,5 @@ class MultimodalHDF5Dataset(BaseHDF5Dataset):
             "pixel_values": pixel_values,  # (16, 3, 224, 224) float32
             "input_values": input_values,  # (10240,) float32
             "labels": labels,  # scalar long
+            **self._eval_metadata(idx),  # video_idx / modify_idx for video-level eval
         }

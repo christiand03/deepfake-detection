@@ -4,3 +4,4 @@ batch_size: 16      # Phase-1-Wert (beide Backbones eingefroren, ~5,7 GB). Phase
 num_workers: 2
 pin_memory: True
 label_type: "label"
+augment: true  # Train-only-Augmentation in beiden Modalitäten gegen Identitäts-Memorierung

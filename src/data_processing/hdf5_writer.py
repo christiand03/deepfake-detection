@@ -67,6 +67,7 @@ _CSV_FIELDNAMES: list[str] = [
     "label",
     "label_video",
     "label_audio",
+    "modify_type",
     "split",
     "h5_path",
     "h5_index",
@@ -90,9 +91,12 @@ class ChunkMetadata:
         chunk_id:    Unique identifier for this chunk (e.g. ``"id00012_clip_0"``).
         video_id:    Identifier of the source video segment (e.g. ``"21Uxsk56VDQ/00001"``).
         identity_id: Speaker identity (e.g. ``"id00012"``).
-        label:       Combined real/fake label (0 = Real, 1 = Fake).
-        label_video: Video-stream label (0 = Real, 1 = Fake).
-        label_audio: Audio-stream label (0 = Real, 1 = Fake).
+        label:       Combined real/fake label for THIS chunk (0 = Real, 1 = Fake).
+        label_video: Video-stream label for this chunk (0 = Real, 1 = Fake).
+        label_audio: Audio-stream label for this chunk (0 = Real, 1 = Fake).
+        modify_type: Video-level AV-Deepfake1M category (``"real"``,
+                     ``"visual_modified"``, ``"audio_modified"``,
+                     ``"both_modified"``) — for per-category eval breakdowns.
         split:       Dataset split (``"train"``, ``"val"``, or ``"test"``).
         crop_x1:     Left edge of the temporally-smoothed, scale-expanded face crop
                      in the normalised-video pixel space.
@@ -109,6 +113,7 @@ class ChunkMetadata:
     label: int
     label_video: int
     label_audio: int
+    modify_type: str
     split: str
     crop_x1: int
     crop_y1: int
@@ -160,6 +165,18 @@ class H5Writer:
         self._audio_enabled: bool | None = self._detect_audio_mode()
 
         self._csv_is_new: bool = mode == "w" or not self._csv_path.exists()
+        if not self._csv_is_new:
+            # Guard against appending new-schema rows to an old-schema CSV
+            # (e.g. one written before the modify_type column existed).
+            with self._csv_path.open(encoding="utf-8", newline="") as fh:
+                header = fh.readline().strip().split(",")
+            if header != _CSV_FIELDNAMES:
+                msg = (
+                    f"CSV schema mismatch in {self._csv_path}: existing header {header} != "
+                    f"expected {_CSV_FIELDNAMES}. Migrate it first "
+                    "(scripts/relabel_chunks.py) or delete the processed outputs."
+                )
+                raise ValueError(msg)
         self._csv_file = self._csv_path.open("a", newline="", encoding="utf-8")
         self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=_CSV_FIELDNAMES)
         if self._csv_is_new:
@@ -289,6 +306,7 @@ class H5Writer:
                 "label": metadata.label,
                 "label_video": metadata.label_video,
                 "label_audio": metadata.label_audio,
+                "modify_type": metadata.modify_type,
                 "split": metadata.split,
                 "h5_path": self._h5_path.as_posix(),
                 "h5_index": idx,

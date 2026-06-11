@@ -14,6 +14,7 @@ class VideoMAEDataModule(BaseDeepfakeDataModule):
         num_workers: int = 4,
         pin_memory: bool = True,
         label_type: str = "label_video",
+        augment: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -26,4 +27,6 @@ class VideoMAEDataModule(BaseDeepfakeDataModule):
         return DeepfakeHDF5Dataset(
             h5_path=str(Path(self.hparams.data_dir) / f"{split}.h5"),
             label_type=self.hparams.label_type,
+            # Augmentation is train-only; val/test stay deterministic.
+            augment=self.hparams.augment and split == "train",
         )

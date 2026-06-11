@@ -34,8 +34,13 @@ Outputs
 
 ``data/processed/train_metadata.csv``, ``val_metadata.csv``, ``test_metadata.csv``
     One row per stored chunk with columns:
-    ``chunk_id, video_id, identity_id, label, label_video, label_audio, split,
-    h5_path, h5_index``.
+    ``chunk_id, video_id, identity_id, label, label_video, label_audio,
+    modify_type, split, h5_path, h5_index``.
+
+Labels are **per chunk**: a chunk is fake in a modality only if its time window
+overlaps a fake segment from the JSON sidecar (see :func:`labels_for_chunk`).
+The video-level "is anything in this video fake" label is recovered at
+evaluation time by aggregating chunks per ``video_id``.
 """
 
 from __future__ import annotations
@@ -74,7 +79,12 @@ _MODIFY_TYPE_TO_LABELS: dict[str, tuple[int, int, int]] = {
 
 
 def _labels_from_modify_type(modify_type: str) -> tuple[int, int, int]:
-    """Map an AV-Deepfake1M ``modify_type`` string to ``(label, label_video, label_audio)``.
+    """Map an AV-Deepfake1M ``modify_type`` string to *video-level* labels.
+
+    These are whole-video labels ("does this video contain ANY manipulation?").
+    Per-chunk labels are computed separately via :func:`labels_for_chunk` —
+    AV-Deepfake1M manipulations are word-level (~0.2–0.5 s), so most 16-frame
+    chunks of a "fake" video contain no manipulated content at all.
 
     Args:
         modify_type: Value of the ``modify_type`` field from the JSON sidecar.
@@ -93,6 +103,42 @@ def _labels_from_modify_type(modify_type: str) -> tuple[int, int, int]:
         msg = f"Unknown modify_type {modify_type!r}. Expected one of: {known}"
         raise ValueError(msg)
     return _MODIFY_TYPE_TO_LABELS[modify_type]
+
+
+def labels_for_chunk(
+    chunk_idx: int,
+    chunk_duration: float,
+    visual_fake_segments: list[list[float]],
+    audio_fake_segments: list[list[float]],
+) -> tuple[int, int, int]:
+    """Compute per-chunk labels from temporal overlap with the fake segments.
+
+    AV-Deepfake1M manipulations are word-level — typically a fraction of a
+    second inside a multi-second clip.  Labelling every chunk of a fake video
+    as fake therefore produces mostly-wrong labels (and pixel-identical chunks
+    with opposite labels across the real/fake variants of the same source
+    clip).  A chunk is fake in a modality iff its time window overlaps at
+    least one fake segment of that modality.
+
+    Args:
+        chunk_idx:            Zero-based temporal index of the chunk in the video.
+        chunk_duration:       Chunk length in seconds (``num_frames / target_fps``).
+        visual_fake_segments: ``[[start_s, end_s], ...]`` from the JSON sidecar.
+        audio_fake_segments:  ``[[start_s, end_s], ...]`` from the JSON sidecar.
+
+    Returns:
+        ``(label, label_video, label_audio)`` for this chunk; ``label`` is the
+        OR of the two modality labels.
+    """
+    start = chunk_idx * chunk_duration
+    end = start + chunk_duration
+
+    def _overlaps(segments: list[list[float]]) -> int:
+        return int(any(seg_start < end and start < seg_end for seg_start, seg_end in segments))
+
+    label_video = _overlaps(visual_fake_segments)
+    label_audio = _overlaps(audio_fake_segments)
+    return (int(label_video or label_audio), label_video, label_audio)
 
 
 # ── Dataset scanning ───────────────────────────────────────────────────────────
@@ -167,9 +213,14 @@ def _scan_dataset(data_root: Path, metadata_root: Path) -> pd.DataFrame:
                 "segment_id": segment_id,
                 "variant": variant,
                 "modify_type": modify_type,
+                # Video-level labels (any manipulation anywhere in the video).
                 "label": label,
                 "label_video": label_video,
                 "label_audio": label_audio,
+                # Per-modality fake intervals in seconds — the source of truth
+                # for the per-chunk labels written by _process_video.
+                "visual_fake_segments": meta.get("visual_fake_segments") or [],
+                "audio_fake_segments": meta.get("audio_fake_segments") or [],
                 "split": split,
             }
         )
@@ -265,6 +316,7 @@ def _process_video(
         n_written = 0
         n_skipped_noface = 0
         num_frames: int = cfg.preprocessing.num_frames
+        chunk_duration = num_frames / cfg.preprocessing.target_fps
 
         for chunk_idx, frames in enumerate(iter_video_chunks(normalized_path, num_frames=num_frames)):
             if chunk_idx >= n_audio_chunks:
@@ -281,14 +333,25 @@ def _process_video(
             audio_start = chunk_idx * audio_samples_per_chunk
             audio_chunk = audio[audio_start : audio_start + audio_samples_per_chunk].astype(np.float32)
 
+            # Per-chunk labels: a chunk is fake only if its time window overlaps
+            # a fake segment (AV-Deepfake1M manipulations are word-level — most
+            # chunks of a "fake" video are pristine).
+            label, label_video, label_audio = labels_for_chunk(
+                chunk_idx=chunk_idx,
+                chunk_duration=chunk_duration,
+                visual_fake_segments=row.visual_fake_segments,  # type: ignore[attr-defined]
+                audio_fake_segments=row.audio_fake_segments,  # type: ignore[attr-defined]
+            )
+
             chunk_id = f"{video_id}__chunk{chunk_idx:05d}"
             metadata = ChunkMetadata(
                 chunk_id=chunk_id,
                 video_id=video_id,
                 identity_id=row.identity_id,  # type: ignore[attr-defined]
-                label=int(row.label),  # type: ignore[attr-defined]
-                label_video=int(row.label_video),  # type: ignore[attr-defined]
-                label_audio=int(row.label_audio),  # type: ignore[attr-defined]
+                label=label,
+                label_video=label_video,
+                label_audio=label_audio,
+                modify_type=row.modify_type,  # type: ignore[attr-defined]
                 split=split,
                 crop_x1=cx1,
                 crop_y1=cy1,

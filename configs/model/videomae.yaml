@@ -7,15 +7,25 @@ num_labels: 2
 freeze_backbone: true
 gradient_checkpointing: true  # spart VRAM (Recompute im Backward); v. a. in Phase 2 relevant
 
+# CE-Klassengewichte [real, fake]. Mit segment-genauen Chunk-Labels ist die
+# Fake-Klasse selten (label_video ~7 % der Chunks) — Inverse-Frequenz-Gewichte
+# aus dem Train-Split (scripts/relabel_chunks.py gibt sie aus). null = ungewichtet.
+class_weights: [0.536, 7.361]
+
+# Layer-wise LR-Decay für Phase 2 (z. B. 0.75): Encoder-Block i trainiert mit
+# lr * decay^(Tiefe - i), der Kopf mit voller lr. null = einheitliche LR.
+# Wirkt nur bei freeze_backbone=false.
+llrd_decay: null
+
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
   lr: 1e-4
   weight_decay: 0.05
 
+# Linearer Warmup (5 % der Steps) + Cosine-Decay, pro Optimizer-Step.
+# ReduceLROnPlateau war über 10 Epochen mit patience 3 praktisch wirkungslos.
 scheduler:
-  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  _target_: src.utils.lr_schedulers.linear_warmup_cosine
   _partial_: true
-  mode: max   # überwacht val/auc (höher = besser)
-  factor: 0.5
-  patience: 3
+  warmup_ratio: 0.05

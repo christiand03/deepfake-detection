@@ -22,9 +22,14 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         scheduler: Any = None,
         freeze_feature_extractor: bool = True,
         freeze_backbone: bool = True,
+        # Any (not list[float]) because Hydra passes an OmegaConf ListConfig.
+        class_weights: Any = None,
+        llrd_decay: float | None = None,
     ) -> None:
         super().__init__()
 
+        # Plain list so checkpoints stay loadable with weights_only=True.
+        class_weights = self._plain_class_weights(class_weights)
         self.save_hyperparameters(logger=False)
 
         # Load the pre-trained Wav2Vec2 model for sequence classification (2 Klassen: Echt vs. Fake)
@@ -42,6 +47,13 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
     def _backbone_modules(self):
         # self.net.projector + self.net.classifier form the trainable head.
         return [self.net.wav2vec2]
+
+    def _llrd_stacks(self):
+        # Shallow → deep for layer-wise LR decay (Phase 2). The CNN feature
+        # extractor is always frozen (no params end up in the groups);
+        # projector + classifier stay at full lr.
+        encoder = self.net.wav2vec2.encoder
+        return [[self.net.wav2vec2.feature_projection, encoder.pos_conv_embed, encoder.layer_norm, *encoder.layers]]
 
     def _enforce_backbone_invariants(self) -> None:
         # The CNN feature extractor never has useful gradient signal for deepfake
@@ -76,7 +88,7 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         y = batch["labels"]
 
         logits = self.forward(x)
-        loss = F.cross_entropy(logits, y)
+        loss = F.cross_entropy(logits, y, weight=self._loss_weight())
         preds = torch.argmax(logits, dim=1)
 
         return loss, preds, y, logits
@@ -103,6 +115,7 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
 
         probs = F.softmax(logits, dim=1)
         positive_probs = probs[:, 1]
+        self._video_eval_update("val", batch, positive_probs, targets)
 
         self.val_loss(loss)
         self.val_acc(preds, targets)
@@ -122,6 +135,7 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
 
         probs = F.softmax(logits, dim=1)
         positive_probs = probs[:, 1]
+        self._video_eval_update("test", batch, positive_probs, targets)
 
         self.test_loss(loss)
         self.test_acc(preds, targets)

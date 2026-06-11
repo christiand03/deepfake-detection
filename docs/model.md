@@ -451,6 +451,44 @@ Kapazität ist nicht das Problem, Generalisierung schon — mehr Daten heben die
 Rauschens)**. Eine „Cross-Attention ist zwingend"-Aussage ist mit diesen Daten **nicht** haltbar;
 sie ließe sich nur mit deutlich mehr Identitäten + Seed-Kontrolle entscheiden.
 
+### 7.12 Chunk-Label-Rauschen — Befund, Fix & Pipeline-Überholung
+
+**Befund (der dominante Pipeline-Bug):** AV-Deepfake1M-Manipulationen sind **wortweise**
+(~0,2–0,5 s), aber das Preprocessing vergab das Video-Level-Label an **jeden** 16-Frame-Chunk.
+Verifiziertes Beispiel `id00012/21Uxsk56VDQ/00002`: ~15 s Video, Fake-Segmente insgesamt 0,34 s
+→ nur 2 von 23 Chunks enthalten Manipulation, alle 23 waren als fake gelabelt. Über den ganzen
+Datensatz waren **~64 % aller Chunk-Labels falsch** (train: „label" 74,4 % fake → korrekt 10,2 %).
+Dazu kamen **pixel-identische Chunks mit gegensätzlichen Labels** (real.mp4 vs. Fake-Varianten
+außerhalb des Fake-Segments) — widersprüchliche Supervision. Das erklärt die nahe-Zufall-AUCs der
+Unimodalen (Signal ≈ Rauschen) und warum „gut fitten" = Identitäts-Memorierung war (§7.11).
+
+**Fix (committet):**
+1. **Segment-genaue Chunk-Labels:** `preprocess.labels_for_chunk()` — ein Chunk ist pro Modalität
+   nur fake, wenn sein Zeitfenster ein `visual_/audio_fake_segments`-Intervall überlappt.
+   `scripts/relabel_chunks.py` hat die bestehenden HDF5/CSVs **in place** umgelabelt (kein
+   erneutes Face-Cropping nötig) und die `modify_type`-Spalte ergänzt.
+2. **Video-Level-Evaluation:** Chunk-Scores werden pro `video_id` max-gepoolt →
+   `val/test/auc_video` (+ acc/f1/ap, Test zusätzlich pro Kategorie real-vs-visual/audio/both).
+   Checkpointing, Early Stopping und Plateau-Scheduler monitoren jetzt `val/auc_video` — die
+   eigentliche Task ist „ist dieses VIDEO fake"; ein Fake-Video besteht korrekt überwiegend aus
+   echten Chunks.
+3. **Class-Weighting:** Nach dem Relabel ist fake selten (~7–10 % der Chunks) → Inverse-Frequenz-
+   `class_weights` in allen drei Model-Configs (Werte gibt `relabel_chunks.py` aus).
+4. **Trainings-Hygiene:** Early-Stopping patience 15→5 bei max_epochs 10→30 (vorher feuerte es
+   nie); ReduceLROnPlateau → `linear_warmup_cosine` (5 % Warmup, per Step); Train-only-Augmentation
+   (Video: Flip/Color-Jitter/Random-Crop; Audio: Rauschen/Polaritäts-Flip); Layer-wise LR-Decay
+   0,75 in den Phase-2-Configs; wav2vec2 weight_decay 0,01→0,05 (Angleichung).
+5. **Checkpoint-Exporte repariert:** `videomae/wav2vec2/multimodal*.ckpt` unter `checkpoints/`
+   waren teils von Smoke-Runs überschrieben (z. B. `videomae.ckpt` = 33-s-Run mit val/auc 0,000!)
+   — die unimodalen Phase-2-Läufe warm-starteten also von quasi-untrainierten Köpfen. Alle
+   Exporte wurden aus den echten Phase-1-Best-Checkpoints der Logs wiederhergestellt;
+   `debug=*` setzt jetzt `export_ckpt: false`.
+
+> **Konsequenz:** Alle bisherigen Zahlen (§7.10/§7.11) sind auf den alten, verrauschten Labels
+> gemessen und **nicht mit künftigen Läufen vergleichbar**. Phase 1 + Phase 2 + Ablation müssen
+> auf den relabelten Daten neu laufen (fester Seed, 2–3 Seeds pro Arm); primäre Metrik ist
+> `auc_video`.
+
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"
 - "Cross-Modal Attention Networks for Lip-Sync Detection"

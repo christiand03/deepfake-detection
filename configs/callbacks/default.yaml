@@ -7,15 +7,20 @@ defaults:
 
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
-  filename: "epoch_{epoch:03d}-val_auc_{val/auc:.3f}" # nach val/auc benannt
-  monitor: "val/auc" # Ranking-Qualität statt Loss (wichtig bei Klassen-Imbalance)
+  filename: "epoch_{epoch:03d}-val_auc_video_{val/auc_video:.3f}"
+  # Video-Level-AUC: Chunk-Scores werden pro Quellvideo max-gepoolt — die
+  # eigentliche Task ist "ist dieses VIDEO fake" (Chunk-Labels sind
+  # segment-genau, ein Fake-Video besteht überwiegend aus echten Chunks).
+  monitor: "val/auc_video"
   mode: "max" # höhere AUC ist besser
   save_last: True
   auto_insert_metric_name: False
 
 early_stopping:
-  monitor: "val/auc" # Ranking-Qualität statt Loss (wichtig bei Klassen-Imbalance)
-  patience: 15 # number of epochs with no improvement after which training will be stopped
+  monitor: "val/auc_video" # gleiche Metrik wie das Checkpointing
+  # Muss < trainer.max_epochs sein, sonst feuert Early Stopping nie
+  # (vorher: patience 15 bei max_epochs 10 → Callback war wirkungslos).
+  patience: 5
   mode: "max" # höhere AUC ist besser
 
 model_summary:

@@ -236,11 +236,28 @@ def _make_row(
     label_video: int = 0,
     label_audio: int = 0,
     video_path: str = "dummy.mp4",
+    modify_type: str = "real",
+    visual_fake_segments: list | None = None,
+    audio_fake_segments: list | None = None,
 ) -> object:
     """Build a minimal named-tuple-like row as pandas itertuples() would return."""
     from collections import namedtuple
 
-    Row = namedtuple("Row", ["video_id", "split", "label", "label_video", "label_audio", "video_path", "identity_id"])
+    Row = namedtuple(
+        "Row",
+        [
+            "video_id",
+            "split",
+            "label",
+            "label_video",
+            "label_audio",
+            "video_path",
+            "identity_id",
+            "modify_type",
+            "visual_fake_segments",
+            "audio_fake_segments",
+        ],
+    )
     return Row(
         video_id=video_id,
         split=split,
@@ -249,6 +266,9 @@ def _make_row(
         label_audio=label_audio,
         video_path=video_path,
         identity_id="id001",
+        modify_type=modify_type,
+        visual_fake_segments=visual_fake_segments if visual_fake_segments is not None else [],
+        audio_fake_segments=audio_fake_segments if audio_fake_segments is not None else [],
     )
 
 
@@ -374,6 +394,47 @@ class TestProcessVideo:
         written_metadata = mock_writer.write_chunk.call_args[0][2]
         assert written_metadata.chunk_id == "id001__c1__s1__real__chunk00000"
 
+    def test_per_chunk_labels_from_fake_segments(self, tmp_path: Path) -> None:
+        """Only chunks overlapping a fake segment are labelled fake."""
+        n_chunks = 3
+        num_frames = 16
+        audio_samples_per_chunk = 10240  # chunk duration 0.64 s @ 25 fps
+
+        cfg = _make_cfg(tmp_path, num_frames=num_frames, audio_samples_per_chunk=audio_samples_per_chunk)
+        # Visual fake only inside chunk 1 = [0.64 s, 1.28 s).
+        row = _make_row(
+            video_path=str(tmp_path / "video.mp4"),
+            modify_type="visual_modified",
+            visual_fake_segments=[[0.7, 0.9]],
+        )
+
+        fake_audio = np.zeros(n_chunks * audio_samples_per_chunk, dtype=np.float32)
+        fake_frames = [np.zeros((num_frames, 64, 64, 3), dtype=np.uint8)] * n_chunks
+        fake_cropped = np.zeros((num_frames, 3, 224, 224), dtype=np.uint8)
+        fake_bbox = (0, 0, 224, 224, 224, 224)
+
+        mock_extractor = MagicMock(return_value=(fake_cropped, fake_bbox))
+        mock_writer = MagicMock()
+
+        with (
+            patch("src.data_processing.preprocess.normalize_av"),
+            patch("src.data_processing.preprocess.extract_audio"),
+            patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
+            patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter(fake_frames)),
+        ):
+            _process_video(
+                row=row,
+                cfg=cfg,
+                extractor=mock_extractor,
+                writers={"train": mock_writer},
+                done_video_ids=set(),
+            )
+
+        labels = [call.args[2].label_video for call in mock_writer.write_chunk.call_args_list]
+        assert labels == [0, 1, 0]
+        assert all(call.args[2].label_audio == 0 for call in mock_writer.write_chunk.call_args_list)
+        assert all(call.args[2].modify_type == "visual_modified" for call in mock_writer.write_chunk.call_args_list)
+
     def test_unrecoverable_error_returns_zeros(self, tmp_path: Path) -> None:
         """If normalize_av raises, _process_video logs and returns (0, 0)."""
         cfg = _make_cfg(tmp_path)
@@ -453,6 +514,8 @@ def test_preprocess_smoke(tmp_path: Path) -> None:
             "label": 0,
             "label_video": 0,
             "label_audio": 0,
+            "visual_fake_segments": [],
+            "audio_fake_segments": [],
             "split": "train",
         }
     ]

@@ -25,6 +25,8 @@ class MultimodalDataModule(BaseDeepfakeDataModule):
         pin_memory:  Enable pinned memory for GPU transfer.  Default: ``True``.
         label_type:  Which HDF5 label to use.  One of ``"label"`` (combined),
                      ``"label_video"``, or ``"label_audio"``.  Default: ``"label"``.
+        augment:     Apply random train-time augmentation to both modalities
+                     (train split only).  Default: ``False``.
     """
 
     def __init__(
@@ -34,6 +36,7 @@ class MultimodalDataModule(BaseDeepfakeDataModule):
         num_workers: int = 4,
         pin_memory: bool = True,
         label_type: str = "label",
+        augment: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -46,4 +49,6 @@ class MultimodalDataModule(BaseDeepfakeDataModule):
         return MultimodalHDF5Dataset(
             h5_path=str(Path(self.hparams.data_dir) / f"{split}.h5"),
             label_type=self.hparams.label_type,
+            # Augmentation is train-only; val/test stay deterministic.
+            augment=self.hparams.augment and split == "train",
         )

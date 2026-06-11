@@ -10,6 +10,10 @@ task_name: "debug"
 callbacks: null
 logger: null
 
+# NEVER export debug checkpoints: the export copies to the stable
+# <export_dir>/<name>.ckpt paths and would overwrite the real trained models.
+export_ckpt: false
+
 extras:
   ignore_warnings: False
   enforce_tags: False

@@ -26,6 +26,9 @@ trainer:
 
 model:
   freeze_backbone: false
+  # Layer-wise LR-Decay: tiefe Blöcke nahe der Head-LR, frühe Blöcke deutlich
+  # niedriger — Standard fürs Transformer-Finetuning, schützt die pretrained Features.
+  llrd_decay: 0.75
   optimizer:
     lr: 1e-5   # niedriger fürs End-to-End-Finetuning (vorher 1e-4 in Phase 1)
 

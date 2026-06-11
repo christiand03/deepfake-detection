@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import torch
+import torch.nn.functional as F
 from transformers import VideoMAEForVideoClassification
 
 from .base_module import BaseDeepfakeModule
@@ -19,6 +20,8 @@ class VideoMAEModule(BaseDeepfakeModule):
         num_labels: int = 2,
         freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
+        class_weights: Any = None,
+        llrd_decay: float | None = None,
         adv_train: bool = False,
         adv_epsilon: float = 0.03,
         adv_steps: int = 7,
@@ -28,6 +31,8 @@ class VideoMAEModule(BaseDeepfakeModule):
         if adv_train and adv_steps < 1:
             raise ValueError(f"adv_steps must be >= 1 when adv_train is True, got {adv_steps}.")
 
+        # Plain list so checkpoints stay loadable with weights_only=True.
+        class_weights = self._plain_class_weights(class_weights)
         self.save_hyperparameters(logger=False)
 
         # Load the pre-trained VideoMAE model with a classification head.
@@ -59,6 +64,11 @@ class VideoMAEModule(BaseDeepfakeModule):
         # The pretrained encoder; self.net.fc_norm + self.net.classifier are the head.
         return [self.net.videomae]
 
+    def _llrd_stacks(self):
+        # Shallow → deep for layer-wise LR decay (Phase 2): patch embeddings,
+        # then the 12 encoder blocks. fc_norm + classifier stay at full lr.
+        return [[self.net.videomae.embeddings, *self.net.videomae.encoder.layer]]
+
     def forward(self, pixel_values: torch.Tensor):
         return self.net(pixel_values=pixel_values)
 
@@ -66,10 +76,11 @@ class VideoMAEModule(BaseDeepfakeModule):
         pixel_values = batch["pixel_values"]
         labels = batch["labels"]
 
-        outputs = self.net(pixel_values=pixel_values, labels=labels)
-
-        loss = outputs.loss
+        # Loss computed here (not via HF's internal CE) so class_weights apply —
+        # with segment-accurate chunk labels the fake class is rare (~7 %).
+        outputs = self.net(pixel_values=pixel_values)
         logits = outputs.logits
+        loss = F.cross_entropy(logits, labels, weight=self._loss_weight())
         preds = torch.argmax(logits, dim=1)
 
         return loss, preds, labels, logits
@@ -135,6 +146,7 @@ class VideoMAEModule(BaseDeepfakeModule):
         loss, preds, labels, logits = self.model_step(batch)
         probs = torch.softmax(logits, dim=1)
         positive_probs = probs[:, 1]
+        self._video_eval_update("val", batch, positive_probs, labels)
         self.val_loss(loss)
         self.val_acc(preds, labels)
         self.val_f1(preds, labels)
@@ -150,6 +162,7 @@ class VideoMAEModule(BaseDeepfakeModule):
         loss, preds, labels, logits = self.model_step(batch)
         probs = torch.softmax(logits, dim=1)
         positive_probs = probs[:, 1]
+        self._video_eval_update("test", batch, positive_probs, labels)
         self.test_loss(loss)
         self.test_acc(preds, labels)
         self.test_f1(preds, labels)

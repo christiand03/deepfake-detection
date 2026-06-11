@@ -3,11 +3,11 @@ from __future__ import annotations
 import h5py
 import torch
 
-from .base_hdf5_dataset import BaseHDF5Dataset, normalize_audio
+from .base_hdf5_dataset import BaseHDF5Dataset, augment_audio, normalize_audio
 
 
 class DeepfakeAudioHDF5Dataset(BaseHDF5Dataset):
-    def __init__(self, h5_path: str, label_type: str = "label_audio") -> None:
+    def __init__(self, h5_path: str, label_type: str = "label_audio", augment: bool = False) -> None:
         """
         Args:
             h5_path:    Path to an HDF5 file produced by the preprocessing pipeline.
@@ -15,9 +15,12 @@ class DeepfakeAudioHDF5Dataset(BaseHDF5Dataset):
                         real/fake), ``"label_audio"``, or ``"label_video"``.
                         Using ``"label_audio"`` ignores visual fakes and trains the
                         audio backbone on audio manipulation only.
+            augment:    Apply random train-time augmentation (noise / polarity).
+                        Enable for the train split only.
         """
         super().__init__(h5_path)
         self.label_type = label_type
+        self.augment = augment
 
         with h5py.File(self.h5_path, "r") as f:
             if "audio" not in f:
@@ -31,6 +34,7 @@ class DeepfakeAudioHDF5Dataset(BaseHDF5Dataset):
                     f"label_type '{self.label_type}' not found in '{h5_path}'. Available label keys: {valid}"
                 )
             self.length = len(f["audio"])
+        self._load_eval_metadata()
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         f = self._open_h5()
@@ -42,8 +46,8 @@ class DeepfakeAudioHDF5Dataset(BaseHDF5Dataset):
         # Per-sample zero-mean / unit-variance normalization — matches Wav2Vec2's
         # expected input distribution. Epsilon inside sqrt avoids division by zero
         # for silent (zero-variance) audio segments.
-        input_values = normalize_audio(audio_chunk)
+        input_values = normalize_audio(audio_chunk, augment_fn=augment_audio if self.augment else None)
 
         labels = torch.tensor(label, dtype=torch.long)
 
-        return {"input_values": input_values, "labels": labels}
+        return {"input_values": input_values, "labels": labels, **self._eval_metadata(idx)}

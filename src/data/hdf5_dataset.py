@@ -3,11 +3,11 @@ from __future__ import annotations
 import h5py
 import torch
 
-from .base_hdf5_dataset import BaseHDF5Dataset, normalize_video_frames
+from .base_hdf5_dataset import BaseHDF5Dataset, augment_video_frames, normalize_video_frames
 
 
 class DeepfakeHDF5Dataset(BaseHDF5Dataset):
-    def __init__(self, h5_path: str, label_type: str = "label_video") -> None:
+    def __init__(self, h5_path: str, label_type: str = "label_video", augment: bool = False) -> None:
         """
         Args:
             h5_path:    Path to an HDF5 file produced by the preprocessing pipeline.
@@ -18,9 +18,12 @@ class DeepfakeHDF5Dataset(BaseHDF5Dataset):
                         (= audio OR video fake) is partly unlearnable from video and
                         collapses to the majority class. ``"label_video"`` is the
                         balanced, observable target for the video backbone.
+            augment:    Apply random train-time augmentation (flip / color jitter /
+                        random resized crop). Enable for the train split only.
         """
         super().__init__(h5_path)
         self.label_type = label_type
+        self.augment = augment
         # Open briefly to read the dataset length; closed immediately.
         with h5py.File(self.h5_path, "r") as f:
             if self.label_type not in f:
@@ -29,6 +32,7 @@ class DeepfakeHDF5Dataset(BaseHDF5Dataset):
                     f"label_type '{self.label_type}' not found in '{h5_path}'. Available label keys: {valid}"
                 )
             self.length = len(f["video"])
+        self._load_eval_metadata()
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         f = self._open_h5()
@@ -37,10 +41,10 @@ class DeepfakeHDF5Dataset(BaseHDF5Dataset):
         video_chunk = f["video"][idx]
         label = f[self.label_type][idx]
 
-        # Scale to [0, 1] and apply ImageNet normalization.
-        pixel_values = normalize_video_frames(video_chunk)
+        # Scale to [0, 1], optionally augment, apply ImageNet normalization.
+        pixel_values = normalize_video_frames(video_chunk, augment_fn=augment_video_frames if self.augment else None)
 
         # HuggingFace VideoMAE expects torch.long labels.
         labels = torch.tensor(label, dtype=torch.long)
 
-        return {"pixel_values": pixel_values, "labels": labels}
+        return {"pixel_values": pixel_values, "labels": labels, **self._eval_metadata(idx)}

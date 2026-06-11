@@ -3,4 +3,5 @@ data_dir: ${paths.data_dir}/processed
 batch_size: 16  # Phase-1-Wert (Backbone eingefroren, ~5,3 GB). Phase 2 heruntersetzen (z. B. 2)!
 num_workers: 2
 pin_memory: True
-label_type: "label_video"  # Video-only-Modell: balanciertes, beobachtbares Ziel (nicht das kombinierte "label")
+label_type: "label_video"  # Video-only-Modell: beobachtbares Ziel (nicht das kombinierte "label")
+augment: true  # Train-only-Augmentation (Flip / Color-Jitter / Random-Crop) gegen Identitäts-Memorierung

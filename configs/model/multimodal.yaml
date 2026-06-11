@@ -16,10 +16,15 @@ freeze_backbone: True
 
 gradient_checkpointing: true  # nur in Phase 2 aktiv (unfrozen Backbones); spart VRAM
 
-# Optionales Class-Weighting gegen die ~75/25-Imbalance des kombinierten "label".
-# null = ungewichtet (Default). Inverse-Frequenz-Gewichte für [real, fake]:
-# class_weights: [1.49, 0.67]   # 0.5/0.252 (real), 0.5/0.748 (fake) — bessere Minority-Recall, weicht aber vom realen Prior ab
-class_weights: null
+# CE-Klassengewichte [real, fake]. Mit segment-genauen Chunk-Labels ist die
+# Fake-Klasse selten (kombiniertes "label" ~10 % der Chunks) — Inverse-Frequenz-
+# Gewichte aus dem Train-Split (scripts/relabel_chunks.py gibt sie aus).
+class_weights: [0.557, 4.905]
+
+# Layer-wise LR-Decay für Phase 2 (z. B. 0.75): Backbone-Block i trainiert mit
+# lr * decay^(Tiefe - i), der Fusion-Head mit voller lr. null = einheitliche LR.
+# Wirkt nur bei freeze_backbone=false.
+llrd_decay: null
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -27,9 +32,9 @@ optimizer:
   lr: 1e-4          # Für Phase 2 (unfreeze) auf 1e-5 reduzieren
   weight_decay: 0.1   # erhöht (0.05→0.1) gegen Overfitting
 
+# Linearer Warmup (5 % der Steps) + Cosine-Decay, pro Optimizer-Step.
+# ReduceLROnPlateau war über 10 Epochen mit patience 3 praktisch wirkungslos.
 scheduler:
-  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  _target_: src.utils.lr_schedulers.linear_warmup_cosine
   _partial_: true
-  mode: max   # überwacht val/auc (höher = besser) — Bugfix: war fälschlich min
-  factor: 0.5
-  patience: 3
+  warmup_ratio: 0.05

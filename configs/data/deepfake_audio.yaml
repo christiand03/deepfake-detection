@@ -8,3 +8,4 @@ batch_size: 128  # Phase-1-Wert (Backbone eingefroren, ~1,7 GB, ~3,4× schneller
 num_workers: 4   # von 8 reduziert: Windows-Spawn-Worker brauchen je ~1,5 GB Host-RAM; 8 sprengt die 16-GB-Box. Bei wenig RAM auf 2.
 pin_memory: True
 label_type: "label_audio"
+augment: true  # Train-only-Augmentation (Rauschen / Polaritäts-Flip) gegen Sprecher-Memorierung
