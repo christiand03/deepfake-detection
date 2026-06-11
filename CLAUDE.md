@@ -94,4 +94,4 @@ cd frontend && npm run dev                                  # Frontend
 
 # Extended Context Links:
 If you need deeper context on specific domains, read the corresponding markdown files:
-Docs (docs/): project.md, datasets.md, tech.md, model.md, xai.md, mlops.md, code_quality.md, frontend.md, adversarial.md.
+Docs (docs/): project.md, datasets.md, tech.md, model.md, xai.md, mlops.md, code_quality.md, frontend.md, adversarial.md, audit_2026-06.md (Silent-Failure-Audit: Pipeline-Fixes, Daten-Regenerierung, UND die geprüften False Alarms — diese nicht "fixen").

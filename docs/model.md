@@ -489,6 +489,39 @@ Unimodalen (Signal ≈ Rauschen) und warum „gut fitten" = Identitäts-Memorier
 > auf den relabelten Daten neu laufen (fester Seed, 2–3 Seeds pro Arm); primäre Metrik ist
 > `auc_video`.
 
+### 7.13 Audit Juni 2026 — Silent-Failure-Review & zweite Pipeline-Überholung
+
+Systematisches Review des Gesamtprojekts auf Fehler, die nicht crashen, sondern still
+Modellqualität kosten. **Vollständige Dokumentation: [`docs/audit_2026-06.md`](audit_2026-06.md)**
+(inkl. der geprüften und *entkräfteten* Verdachtsfälle — wichtig, damit korrekter Code nicht
+versehentlich "gefixt" wird). Kurzfassung der Änderungen:
+
+| Änderung | Grund (Silent Failure) |
+|---|---|
+| `gradient_clip_val: 1.0` (Trainer-Default) | Phase-2-bf16-Finetuning mit effektiver Batchgröße 6 hatte keinerlei Spike-Schutz — ein Gradienten-Ausreißer konnte einen Lauf still entgleisen. |
+| `horizon_epochs: 15` (Scheduler, alle Model-Configs) | Cosine-Decay spannte sich über `max_epochs=30`, Early Stopping (patience 5) stoppte aber bei ~8–12 — die Low-LR-Refinement-Phase fand **nie** statt. |
+| `class_weights: auto` (alle Model-Configs) | Hartkodierte Gewichte veralteten still bei `label_type`-Wechsel oder Relabeling; jetzt zur Fit-Zeit aus der tatsächlich servierten Train-Label-Spalte berechnet. |
+| `drop_last=True` (Train-Loader) | Rest-Batches der Größe 1 unter Gradient Accumulation → hochvariante Effektiv-Batches. |
+| `*_only`-Fusionsmodi überspringen den ungenutzten Backbone | Vorher voller Forward der genullten Modalität — reine Rechenverschwendung (~2× langsamere Ablationen), Gradientenpfad war ohnehin gekappt. |
+| Min-Overlap-Chunk-Labels (≥ 0,1 s oder ≥ 50 % des Segments) | Any-Overlap labelte Boundary-Chunks mit Millisekunden-Überlappung als fake — Labelrauschen auf den schweren Beispielen (Fake-Rate ~7 % → ~5 %). |
+| Kein Re-Encode für 25-fps-Quellen; sonst CRF 18 statt 23 | Doppelte H.264-Kompression glättete genau das Hochfrequenzband, in dem Forgery-Artefakte leben — über den gesamten Datensatz. |
+| Quadratische Face-Crops | Rechteck→224×224 streckte Gesichter pro Video verschieden (Störvarianz, Shortcut-Risiko). |
+| Preprocessing-Accounting (Fehlerquote, per-`modify_type`-Skip-Raten) | Gecrashte Videos waren von gesichtslosen ununterscheidbar; klassenschiefe Face-Detection-Ausfälle wären unsichtbar geblieben. |
+| `scripts/validate_processed.py` (neu) | Pflicht-Integritätscheck nach jedem Preprocessing (CSV↔H5, Splits, Labels, Crop-Geometrie, Pixel/Audio-Statistik). |
+
+**Daten-Regenerierung 2026-06-11:** alte `data/processed`+`data/normalized` gelöscht, Neuaufbau
+mit korrigierter Pipeline und `run.max_videos=12000` (~30 Identitäten; Split seed 11 →
+**9.959/861/1.180** train/val/test-Videos). Val wächst von 489 Videos / 2 Identitäten auf 861
+Videos — adressiert die hochvariante Checkpoint-Selektion. Volle 29.247 Videos passten nicht
+auf die Platte (~650 GB nötig, 429 GB frei).
+
+> **Konsequenz (erneut):** Alle vor 2026-06-11 trainierten Checkpoints stammen von Daten mit
+> verzerrten Crops, doppelter Kompression und Boundary-Labelrauschen — Phase 1 + Phase 2 +
+> Ablationen müssen auf den regenerierten Daten neu laufen. **Bekannte offene Limitation:**
+> Der API-Upload-Pfad (`src/api/inference.py::_preprocess_video`) hat Train/Serve-Skew
+> (kein Face-Crop, gleichverteiltes statt konsekutives Frame-Sampling) — bewusst aus dem
+> Scope genommen, Details in `docs/audit_2026-06.md` §1.9; für Demos den H5-Registry-Pfad nutzen.
+
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"
 - "Cross-Modal Attention Networks for Lip-Sync Detection"

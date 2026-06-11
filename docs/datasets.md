@@ -40,6 +40,13 @@ Die vollständigen 404 GB von AV-Deepfake1M können im Rahmen dieses Projekts ni
 - Repräsentative Identitätsverteilung (keine Überrepräsentation einzelner Personen)
 - Auswahl erfolgt auf Identitätsebene vor dem Split
 
+**Aktueller prozessierter Stand (Regenerierung 2026-06-11, s. `audit_2026-06.md` §3):**
+`run.max_videos=12000` von 29.247 lokal vorhandenen Videos (~30 von 75 Identitäten);
+Identity-Hash-Split (seed 11) → **9.959 / 861 / 1.180** Videos train/val/test. Vorher waren
+nur 3.976 Videos (12 Identitäten, val = 2 Identitäten) prozessiert — die dünne Validierung
+machte Checkpoint-Selektion über `val/auc_video` hochvariant. Die vollen 29.247 Videos
+würden ~650 GB HDF5 benötigen und passen nicht auf die Platte.
+
 ## 2. Kritische Fehlerquellen & Checkliste (Vermeidung von "Silent Bugs")
 
 ### A: Identity Leakage (Der Noten-Killer)
@@ -57,13 +64,38 @@ Die vollständigen 404 GB von AV-Deepfake1M können im Rahmen dieses Projekts ni
 ### D: Face Cropping Dilemma (Tight vs. Context-Aware)
 - **Problem:** Zu enges Schneiden eliminiert Spuren im Hintergrund. Gar kein Cropping zerstört die Auflösung der Lippen auf dem 224x224 Tensor.
 - **Vermeidung (Context-Aware Cropping):** Statt nur das Gesicht extrem nah (Kinn bis Stirn) auszuschneiden, wird ein **Skalierungsfaktor von 1.3x - 1.5x** verwendet. Dies fängt die Blending-Kanten am Hals und Schulteransätze ein, an denen oft Artefakte von Lip-Sync-Algorithmen sichtbar werden.
+- **Zusatz (Audit Juni 2026):** Die Crop-Box muss **quadratisch** sein, bevor sie auf 224×224
+  resized wird. Eine rechteckige Landmark-Box streckt Gesichter sonst um einen per-Video
+  verschiedenen Faktor — Störvarianz, die mit Identität/Quelle korrelieren kann (Shortcut).
+
+### E: Doppelte Kompression (Re-Encode im Preprocessing)
+- **Problem:** Ein pauschaler FFmpeg-Re-Encode (libx264 Default CRF 23) legt eine zweite
+  verlustbehaftete Kompressionsgeneration über *jedes* Video — und glättet genau die
+  hochfrequenten Forgery-Artefakte, die das Modell erkennen soll. Still, ohne Crash.
+- **Vermeidung:** fps der Quelle erst proben; bei Treffer (AV-Deepfake1M ist durchgehend
+  25 fps) direkt aus der Quelle lesen, sonst mit CRF 18 (visuell verlustfrei) re-encodieren.
+  Kompression gehört kontrolliert in Phase 3 (Robustheit), nicht unkontrolliert ins Preprocessing.
+
+### F: Boundary-Overlap-Labelrauschen
+- **Problem:** Markiert man einen Chunk bei *jeder* zeitlichen Überlappung mit einem
+  Fake-Segment als fake, bekommen Chunks mit Millisekunden-Überlappung (~99 % echter Inhalt)
+  ein Fake-Label — Labelrauschen konzentriert auf genau die schweren Grenzfälle.
+- **Vermeidung (Min-Overlap-Kriterium):** fake nur bei Überlappung **≥ 0,1 s** ODER
+  **≥ 50 % der Segmentdauer** (hält Segmente < 0,1 s labelbar; Minimum im Datensatz 0,02 s).
+  Siehe `audit_2026-06.md` §1.2.
 
 ## 3. Der Offline-Preprocessing Workflow
 Die Dataloader (PyTorch) dürfen niemals rohe MP4s laden. Die CPU wäre der Bottleneck. Alle Videos werden *vorab* prozessiert.
 
-1. **Normierung (ffmpeg-python):**
-   - Video: Forcieren auf exakt 25 fps.
-   - Audio: Extrahieren zu `.wav`, Mono, 16.000 Hz Samplingrate (Pflicht für Wav2Vec 2.0).
+1. **Normierung (ffmpeg-python) — nur wenn nötig (Audit Juni 2026, s. `audit_2026-06.md` §1.1):**
+   - Quellen, die bereits exakt 25 fps haben (per `probe_video` geprüft — das sind *alle*
+     AV-Deepfake1M-Videos), werden **direkt gelesen, ohne Re-Encode**. Begründung: ein
+     Re-Encode ist eine zweite verlustbehaftete Kompressionsgeneration, die genau das
+     Hochfrequenzband glättet, in dem Forgery-Artefakte leben.
+   - Nur off-fps-Quellen werden auf 25 fps CFR re-encodiert — mit **CRF 18** (visuell
+     verlustfrei, `preprocessing.reencode_crf`) statt des libx264-Defaults 23.
+   - Audio: Extrahieren zu `.wav`, Mono, 16.000 Hz Samplingrate (Pflicht für Wav2Vec 2.0) —
+     immer direkt aus der **Quelle** (nie aus der re-encodierten Zwischendatei).
 2. **Chunking in konsekutive 16-Frame-Blöcke:**
    - Videos werden in aufeinanderfolgende Blöcke aufgeteilt: `[0:16]`, `[16:32]`, ... — *kein* gleichmäßiges Sampling über das gesamte Video.
    - Videos kürzer als 16 Frames werden übersprungen und geloggt.
@@ -78,8 +110,17 @@ Die Dataloader (PyTorch) dürfen niemals rohe MP4s laden. Die CPU wäre der Bott
      ```
    - Hintergrund: MediaPipe >= 0.10 entfernte die `solutions`-API. Die neue Tasks-API erfordert ein explizites Modell-Bundle statt eingebetteter Gewichte.
    - **Temporal Smoothing:** Bounding Box über den gesamten 16-Frame-Clip mitteln — verhindert Bounding-Box-Jitter (siehe Fehler B).
-   - Context-Aware Crop mit Faktor 1.4x, Resize auf 224×224 Pixel.
-   - Chunks ohne erkanntes Gesicht werden übersprungen und geloggt (kein Absturz).
+   - Context-Aware Crop mit Faktor 1.4x, danach **Erweiterung auf ein Quadrat**
+     (`_expand_to_square`, Audit Juni 2026): die kürzere Box-Seite wird zentriert auf die
+     längere erweitert (am Bildrand nach innen verschoben statt geclampt). Verhindert die
+     per-Video unterschiedliche Aspect-Ratio-Verzerrung beim Resize auf das quadratische
+     224×224-Modellinput (Störvarianz / Shortcut-Risiko, siehe Fehler D).
+   - Resize auf 224×224 Pixel.
+   - Chunks ohne erkanntes Gesicht werden übersprungen und geloggt (kein Absturz). Die
+     Skip-Rate wird **pro `modify_type`** reportet — eine klassenschiefe Detection-Ausfallrate
+     (MediaPipe scheitert öfter an manipulierten Gesichtern) würde die Fake-Klasse sonst
+     still unterrepräsentieren. Gecrashte Videos werden separat von gesichtslosen gezählt
+     (Fehlerquote > 5 % → ERROR-Log).
 4. **Metadaten-CSV:**
    - Für jeden gespeicherten Chunk eine Zeile: `chunk_id`, `video_id`, `identity_id`, `label_video` (0=Real, 1=Fake), `label_audio` (0=Real, 1=Fake), `label` (0=Real, 1=Fake – kombiniert, für Phase 1 Baseline), `split` (train/val/test), `h5_path`.
    - `label_video` und `label_audio` werden aus den AV-Deepfake1M-Metadaten abgeleitet, die explizit zwischen den drei Manipulationstypen unterscheiden.
@@ -107,13 +148,14 @@ Die Dataloader (PyTorch) dürfen niemals rohe MP4s laden. Die CPU wäre der Bott
 
 | Modul | Aufgabe |
 |---|---|
-| `preprocess.py` | Pipeline-Orchestrierung (Hydra Entry Point) |
-| `ffmpeg_utils.py` | FFmpeg-Normierung (fps, Audio-Extraktion) |
-| `face_extractor.py` | MediaPipe + Temporal Smoothing + Context-Aware Crop |
+| `preprocess.py` | Pipeline-Orchestrierung (Hydra Entry Point), fps-Probe + Re-Encode-Entscheidung, Min-Overlap-Labels, Fehler-/Skip-Accounting |
+| `ffmpeg_utils.py` | FFmpeg-Normierung (fps, CRF 18, Audio-Extraktion), `probe_video` |
+| `face_extractor.py` | MediaPipe + Temporal Smoothing + Context-Aware Crop + quadratische Box |
 | `hdf5_writer.py` | HDF5-Speicherung + Metadaten-CSV |
 | `split_utils.py` | Identity-basierter Train/Val/Test-Split |
 
-Sanity-Check-Skript: `scripts/sanity_check.py` (HDF5-Chunk → `.mp4`-Rekonstruktion).
+QA-Skripte: `scripts/validate_processed.py` (Pflicht-Integritätscheck nach jedem Lauf, s. §7)
+und `scripts/sanity_check.py` (HDF5-Chunk → `.mp4`-Rekonstruktion).
 
 ## 5. AV-Deepfake1M – JSON-Sidecar-Referenz
 
@@ -260,12 +302,34 @@ Die mediane Manipulation dauert nur **0,36 Sekunden (~9 Frames)**. Ein Trainings
 - Das Modell muss sehr subtile, lokale Artefakte erkennen, nicht "das ganze Gesicht ist gefälscht".
 - Für xAI-Analysen (Attention Maps) ist zu erwarten, dass Attention auf wenige Frames innerhalb eines Chunks konzentriert ist.
 
-**Implikation für Chunk-Level-Labeling (aktueller Ansatz):**
-Das Chunk-Label ist eine Obergrenze (`fake_segment` vorhanden = Chunk ist potenziell fake). Eine präzisere Alternative — Chunk-Label nur dann `fake` setzen, wenn der Fake-Anteil des Chunks einen Schwellenwert überschreitet (z.B. ≥ 4 von 16 Frames) — ist als Verbesserung für spätere Phasen notiert (`fake_segments`-Timestamps aus JSON nutzbar). Für Phase 1 wird das einfachere Video-Level-Label verwendet.
+**Implikation für Chunk-Level-Labeling:**
+~~Das Chunk-Label ist eine Obergrenze (`fake_segment` vorhanden = Chunk ist potenziell fake).
+Eine präzisere Alternative — Schwellenwert-basiertes Labeling — ist als Verbesserung für
+spätere Phasen notiert.~~ **Umgesetzt (Audit Juni 2026):** `labels_for_chunk()` vergibt das
+Fake-Label nur noch bei Überlappung **≥ 0,1 s** (≈ 2,5 Frames) ODER **≥ 50 % der
+Segmentdauer** (Bruchteil-Kriterium für Segmente kürzer als 0,1 s — Minimum im Datensatz
+0,02 s). Konfigurierbar über `preprocessing.min_label_overlap_s` /
+`min_label_overlap_frac` bzw. die gleichnamigen CLI-Flags von `scripts/relabel_chunks.py`.
+Effekt: `label_video`-Fake-Rate ~7 % → ~5 % — die Differenz sind exakt die grenzwertig
+überlappenden Boundary-Chunks. Details: `audit_2026-06.md` §1.2.
 
 ## 7. Quality Assurance (QA) Check
-- **Sanity-Check-Skript:** Nimm ein `.h5`-Paket, wandle den Video-Tensor zurück in ein Video, füge den Audio-Tensor hinzu, speichere es als `.mp4` ab und *schaue es dir an*.
-- *Check:* Sitzt das Cropping? Zittert das Bild? Ist es perfekt zeitsynchron?
+
+**Pflicht nach jedem Preprocessing/Relabeling (Audit Juni 2026):**
+```bash
+python -m scripts.validate_processed                       # Checks, Exit-Code != 0 bei Failure
+python -m scripts.validate_processed --export-samples out  # + PNG-Kontaktbögen & WAVs
+```
+Geprüft werden: Dataset-Struktur (Shapes/dtypes/Längen), CSV↔HDF5-Konsistenz
+(Zeilenzahl, `h5_index`-Permutation, byte-identische Labels), Label-Verteilung pro Spalte
+(leere Klasse im Train = Failure), **Identity-Disjunktheit über alle Splits** (Leakage-Check),
+Crop-Geometrie (positiv, im Frame, quadratisch ±1 px), Pixel-Statistik (nicht schwarz/konstant)
+und Audio-Statistik (finit, nicht still) auf Zufallsstichproben.
+
+**Manueller Auge/Ohr-Check:** `--export-samples` schreibt pro Split 4×4-Frame-Kontaktbögen
+(PNG) + das alignete Audio (WAV) einiger Zufalls-Chunks — *anschauen und anhören*:
+Sitzt das Cropping? Zittert das Bild? Ist es zeitsynchron?
+(Alternativ `scripts/sanity_check.py` für eine vollständige `.mp4`-Rekonstruktion.)
 
 ## 8. Weiterführende Recherche
 - AV-Deepfake1M Paper: arxiv:2311.15308
