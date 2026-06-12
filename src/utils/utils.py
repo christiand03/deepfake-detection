@@ -154,9 +154,7 @@ def export_best_checkpoint(cfg: DictConfig, trainer: "Trainer") -> None:
 
     callback = trainer.checkpoint_callback
     if callback is None or not getattr(callback, "best_model_path", ""):
-        log.warning(
-            "No best checkpoint to export (checkpointing disabled or no validation run)."
-        )
+        log.warning("No best checkpoint to export (checkpointing disabled or no validation run).")
         return
 
     name = cfg.get("ckpt_export_name")

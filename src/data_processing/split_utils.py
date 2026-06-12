@@ -81,9 +81,7 @@ def assign_splits(
         raise ValueError(msg)
 
     result = metadata.copy()
-    result["split"] = result[identity_col].map(
-        lambda identity: _identity_split(identity, val_ratio, test_ratio, seed)
-    )
+    result["split"] = result[identity_col].map(lambda identity: _identity_split(identity, val_ratio, test_ratio, seed))
     return result
 
 

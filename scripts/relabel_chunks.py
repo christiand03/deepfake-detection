@@ -101,6 +101,8 @@ def relabel_split(
     *,
     dry_run: bool,
     video_id_filter: str | None = None,
+    min_overlap_s: float = 0.1,
+    min_overlap_frac: float = 0.5,
 ) -> None:
     """Recompute labels for one split and (unless dry_run) rewrite CSV + HDF5."""
     df = pd.read_csv(csv_path)
@@ -117,6 +119,8 @@ def relabel_split(
             chunk_duration=chunk_duration,
             visual_fake_segments=meta["visual"],
             audio_fake_segments=meta["audio"],
+            min_overlap_s=min_overlap_s,
+            min_overlap_frac=min_overlap_frac,
         )
         new_labels["label"][i] = label
         new_labels["label_video"][i] = label_video
@@ -181,6 +185,18 @@ def main() -> None:
     parser.add_argument("--splits", nargs="+", default=["train", "val", "test"])
     parser.add_argument("--dry-run", action="store_true", help="Print stats without writing anything")
     parser.add_argument("--video-id", default=None, help="Print per-chunk detail for this video_id")
+    parser.add_argument(
+        "--min-overlap-s",
+        type=float,
+        default=0.1,
+        help="Absolute chunk/segment overlap (s) that counts as fake (conf/preprocess.yaml)",
+    )
+    parser.add_argument(
+        "--min-overlap-frac",
+        type=float,
+        default=0.5,
+        help="Fraction of a segment's duration that counts as fake even below --min-overlap-s",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -198,6 +214,8 @@ def main() -> None:
             chunk_duration,
             dry_run=args.dry_run,
             video_id_filter=args.video_id,
+            min_overlap_s=args.min_overlap_s,
+            min_overlap_frac=args.min_overlap_frac,
         )
 
     if args.dry_run:

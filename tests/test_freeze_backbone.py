@@ -12,10 +12,13 @@ Ausführen: ``pytest tests/test_freeze_backbone.py``
 
 from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
 
 from src.models.VideoMAE_module import VideoMAEModule
 from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule
+
+if TYPE_CHECKING:
+    import torch
 
 
 def _trainable(module: torch.nn.Module) -> int:

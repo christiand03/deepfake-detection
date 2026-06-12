@@ -11,6 +11,11 @@ max_epochs: 30
 accelerator: gpu # geändert auf gpu
 devices: 1
 
+# Standard fürs Transformer-Finetuning: kappt seltene Gradienten-Spikes, die
+# das Phase-2-End-to-End-Training (bf16, kleine effektive Batches) sonst still
+# entgleisen lassen können.
+gradient_clip_val: 1.0
+
 # mixed precision for extra speed-up
 # precision: 16
 

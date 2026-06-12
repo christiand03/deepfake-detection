@@ -112,6 +112,50 @@ def _scale_bbox(
     return nx1, ny1, nx2, ny2
 
 
+def _expand_to_square(
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    img_h: int,
+    img_w: int,
+) -> tuple[int, int, int, int]:
+    """Expand the shorter side of a bbox so the crop becomes square.
+
+    Resizing a rectangular face box to the square 224x224 model input
+    stretches faces by a per-video factor — nuisance variance the model has
+    to learn to ignore.  The square is centred on the original box; if it
+    would cross an image edge it is shifted inward instead of clamped (which
+    would re-introduce the distortion).  Only when the image itself is
+    smaller than the required side does the box degrade to the image bounds.
+
+    Args:
+        x1, y1: Top-left corner of the (already scale-expanded) bbox.
+        x2, y2: Bottom-right corner.
+        img_h:  Image height used for shifting/clamping.
+        img_w:  Image width used for shifting/clamping.
+
+    Returns:
+        ``(x1, y1, x2, y2)`` of the square (or maximal) crop box.
+    """
+    side = max(x2 - x1, y2 - y1)
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    nx1 = int(round(cx - side / 2.0))
+    ny1 = int(round(cy - side / 2.0))
+    # Shift inward so the square stays inside the frame where possible.
+    nx1 = max(0, min(nx1, img_w - side))
+    ny1 = max(0, min(ny1, img_h - side))
+    nx2 = nx1 + side
+    ny2 = ny1 + side
+    # Degenerate case: frame smaller than the square — clamp to the frame.
+    if nx2 > img_w:
+        nx1, nx2 = 0, img_w
+    if ny2 > img_h:
+        ny1, ny2 = 0, img_h
+    return nx1, ny1, nx2, ny2
+
+
 # ── FaceExtractor ─────────────────────────────────────────────────────────────
 
 
@@ -256,6 +300,9 @@ class FaceExtractor:
             img_h,
             img_w,
         )
+        # Square crop: avoids per-video aspect-ratio distortion when resizing
+        # to the square target_size x target_size model input.
+        x1_s, y1_s, x2_s, y2_s = _expand_to_square(x1_s, y1_s, x2_s, y2_s, img_h, img_w)
 
         # ── Crop + resize each frame ──────────────────────────────────────────
         out_frames: list[np.ndarray] = []

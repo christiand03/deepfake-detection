@@ -93,10 +93,18 @@ def test_fusion_output_shape():
 
 @pytest.mark.parametrize("mode", ["cross_attention", "concat", "video_only", "audio_only"])
 def test_fusion_mode_output_shape(mode):
-    fusion = CrossAttentionFusion(
-        video_dim=VIDEO_DIM, audio_dim=AUDIO_DIM, fusion_dim=FUSION_DIM,
-        num_heads=NUM_HEADS, num_classes=NUM_CLASSES, fusion_mode=mode,
-    ).to(DEVICE).eval()
+    fusion = (
+        CrossAttentionFusion(
+            video_dim=VIDEO_DIM,
+            audio_dim=AUDIO_DIM,
+            fusion_dim=FUSION_DIM,
+            num_heads=NUM_HEADS,
+            num_classes=NUM_CLASSES,
+            fusion_mode=mode,
+        )
+        .to(DEVICE)
+        .eval()
+    )
     logits = fusion(make_video_hidden(), make_audio_hidden())
     assert logits.shape == (BATCH_SIZE, NUM_CLASSES)
     assert not torch.isnan(logits).any() and not torch.isinf(logits).any()
@@ -110,10 +118,18 @@ def test_fusion_mode_invalid_raises():
 def test_fusion_mode_single_modality_ignores_dropped_input():
     """video_only must ignore audio: changing audio leaves logits unchanged."""
     torch.manual_seed(0)
-    fusion = CrossAttentionFusion(
-        video_dim=VIDEO_DIM, audio_dim=AUDIO_DIM, fusion_dim=FUSION_DIM,
-        num_heads=NUM_HEADS, num_classes=NUM_CLASSES, fusion_mode="video_only",
-    ).to(DEVICE).eval()
+    fusion = (
+        CrossAttentionFusion(
+            video_dim=VIDEO_DIM,
+            audio_dim=AUDIO_DIM,
+            fusion_dim=FUSION_DIM,
+            num_heads=NUM_HEADS,
+            num_classes=NUM_CLASSES,
+            fusion_mode="video_only",
+        )
+        .to(DEVICE)
+        .eval()
+    )
     v = make_video_hidden()
     out_a = fusion(v, make_audio_hidden())
     out_b = fusion(v, make_audio_hidden())  # different audio, same video

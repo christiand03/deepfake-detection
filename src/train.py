@@ -87,8 +87,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if warmstart_ckpt:
         if cfg.get("ckpt_path"):
             raise ValueError(
-                "Set either warmstart_ckpt (load weights, fresh optimizer) or "
-                "ckpt_path (full resume) — not both."
+                "Set either warmstart_ckpt (load weights, fresh optimizer) or ckpt_path (full resume) — not both."
             )
         log.info("Warm-starting weights from <%s> (fresh optimizer/LR, no resume)", warmstart_ckpt)
         state = torch.load(warmstart_ckpt, map_location="cpu", weights_only=False)["state_dict"]
@@ -102,8 +101,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             )
         if result.unexpected_keys:
             log.warning(
-                "Warm-start: %d checkpoint key(s) had no match in the current model, ignored "
-                "(e.g. %s).",
+                "Warm-start: %d checkpoint key(s) had no match in the current model, ignored (e.g. %s).",
                 len(result.unexpected_keys),
                 result.unexpected_keys[:3],
             )

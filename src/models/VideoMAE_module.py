@@ -51,9 +51,7 @@ class VideoMAEModule(BaseDeepfakeModule):
         # HF only applies it when self.training is True, so the eval-mode
         # explain() / AttnLRP path is unaffected.
         if self.hparams.gradient_checkpointing:
-            self.net.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": False}
-            )
+            self.net.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
         # Phase 1 (default): freeze the VideoMAE backbone, train only the head
         # (fc_norm + classifier). Phase 2: freeze_backbone=False fine-tunes

@@ -67,6 +67,8 @@ class BaseDeepfakeModule(LightningModule):
     def __init__(self) -> None:
         super().__init__()
         self._backbone_frozen = False
+        # Cache for class_weights='auto' resolution (computed once per fit).
+        self._auto_class_weights: list[float] | None = None
         self._init_metrics()
         # Per-stage buffers of (video_idx, prob, label, modify_idx) chunk tuples
         # for video-level aggregation. Single-device only (the project trains
@@ -157,8 +159,8 @@ class BaseDeepfakeModule(LightningModule):
     # Loss weighting ---------------------------------------------------------------
 
     @staticmethod
-    def _plain_class_weights(class_weights: Any) -> list[float] | None:
-        """Convert ``class_weights`` to a plain float list (or ``None``).
+    def _plain_class_weights(class_weights: Any) -> list[float] | str | None:
+        """Convert ``class_weights`` to a plain float list, ``"auto"``, or ``None``.
 
         Hydra passes an OmegaConf ListConfig; left as-is in the hparams it ends
         up pickled into checkpoints, which ``torch.load(weights_only=True)``
@@ -167,19 +169,47 @@ class BaseDeepfakeModule(LightningModule):
         """
         if class_weights is None:
             return None
+        if isinstance(class_weights, str):
+            if class_weights != "auto":
+                msg = f"class_weights must be a list, null, or 'auto' — got {class_weights!r}."
+                raise ValueError(msg)
+            return class_weights
         return [float(w) for w in class_weights]
+
+    def _resolve_auto_class_weights(self) -> list[float]:
+        """Resolve ``class_weights='auto'`` from the attached datamodule (cached).
+
+        Delegates to ``BaseDeepfakeDataModule.compute_class_weights``, which
+        derives inverse-frequency weights from the train split's label column —
+        always in sync with the actual ``label_type`` and data version.
+        """
+        if self._auto_class_weights is None:
+            trainer = getattr(self, "_trainer", None)
+            datamodule = getattr(trainer, "datamodule", None) if trainer is not None else None
+            if datamodule is None or not hasattr(datamodule, "compute_class_weights"):
+                msg = (
+                    "class_weights='auto' requires running with a datamodule that provides "
+                    "compute_class_weights() (any BaseDeepfakeDataModule). Pass explicit "
+                    "weights or null instead."
+                )
+                raise ValueError(msg)
+            num_classes = int(getattr(self.hparams, "num_classes", None) or getattr(self.hparams, "num_labels", 2))
+            self._auto_class_weights = datamodule.compute_class_weights(num_classes)
+        return self._auto_class_weights
 
     def _loss_weight(self) -> torch.Tensor | None:
         """Per-class CE weights from the ``class_weights`` hparam (or ``None``).
 
         With segment-accurate chunk labels the fake class is rare (~7–10 % of
         chunks); inverse-frequency weights keep the loss from collapsing onto
-        the majority class.  ``scripts/relabel_chunks.py`` prints suggested
-        values per label column.
+        the majority class.  ``"auto"`` (recommended) computes them from the
+        train split at fit time; explicit lists remain supported as overrides.
         """
         cw = getattr(self.hparams, "class_weights", None)
         if cw is None:
             return None
+        if isinstance(cw, str):
+            cw = self._resolve_auto_class_weights()
         # list(...) also converts OmegaConf ListConfig values from Hydra.
         return torch.as_tensor(list(cw), device=self.device, dtype=torch.float32)
 
@@ -333,11 +363,22 @@ class BaseDeepfakeModule(LightningModule):
             return {"optimizer": optimizer}
 
         scheduler_fn = self.hparams.scheduler
-        target = scheduler_fn.func if isinstance(scheduler_fn, functools.partial) else scheduler_fn
+        if isinstance(scheduler_fn, functools.partial):
+            target, scheduler_kwargs = scheduler_fn.func, dict(scheduler_fn.keywords)
+        else:
+            target, scheduler_kwargs = scheduler_fn, {}
         if "num_training_steps" in inspect.signature(target).parameters:
             # Step-based warmup schedule (e.g. src.utils.lr_schedulers.linear_warmup_cosine):
             # needs the total optimizer-step count, known only at fit time.
-            scheduler = scheduler_fn(optimizer=optimizer, num_training_steps=self.trainer.estimated_stepping_batches)
+            # An optional `horizon_epochs` scheduler-config key decouples the decay
+            # horizon from trainer.max_epochs: with early stopping (patience 5) a
+            # cosine spanning all of max_epochs=30 never reaches its low-LR tail.
+            num_training_steps = self.trainer.estimated_stepping_batches
+            horizon_epochs = scheduler_kwargs.pop("horizon_epochs", None)
+            max_epochs = self.trainer.max_epochs
+            if horizon_epochs and max_epochs and max_epochs > 0:
+                num_training_steps = max(1, round(num_training_steps / max_epochs * horizon_epochs))
+            scheduler = target(optimizer=optimizer, num_training_steps=num_training_steps, **scheduler_kwargs)
             lr_scheduler: dict[str, Any] = {"scheduler": scheduler, "interval": "step", "frequency": 1}
         else:
             scheduler = scheduler_fn(optimizer=optimizer)

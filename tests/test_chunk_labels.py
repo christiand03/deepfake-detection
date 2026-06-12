@@ -47,14 +47,37 @@ class TestLabelsForChunk:
     def test_segment_spanning_multiple_chunks(self):
         segments = [[0.5, 2.0]]
         labels = [labels_for_chunk(i, CHUNK, segments, segments)[0] for i in range(5)]
-        # Chunks [0, 0.64), [0.64, 1.28), [1.28, 1.92), [1.92, 2.56) overlap; [2.56, …) does not.
-        assert labels == [1, 1, 1, 1, 0]
+        # Chunks [0, 0.64), [0.64, 1.28), [1.28, 1.92) overlap substantially;
+        # chunk 3 = [1.92, 2.56) grazes the segment by only 0.08 s (< 0.1 s and
+        # < 50 % of the 1.5 s segment) and stays real under the min-overlap rule.
+        assert labels == [1, 1, 1, 0, 0]
 
     def test_multiple_segments(self):
         segments = [[0.1, 0.2], [9.42, 9.6]]
         assert labels_for_chunk(0, CHUNK, segments, [])[1] == 1
         assert labels_for_chunk(14, CHUNK, segments, [])[1] == 1
         assert labels_for_chunk(5, CHUNK, segments, [])[1] == 0
+
+    def test_grazing_overlap_stays_real(self):
+        # 0.05 s overlap with a long (1.0 s) segment: below the absolute 0.1 s
+        # threshold and below 50 % of the segment — boundary label noise, real.
+        segments = [[0.59, 1.59]]  # chunk 0 = [0, 0.64) → overlap 0.05 s
+        assert labels_for_chunk(0, CHUNK, segments, []) == (0, 0, 0)
+
+    def test_short_segment_half_inside_counts_as_fake(self):
+        # 0.08 s segment with 0.06 s inside the chunk: below the absolute 0.1 s
+        # threshold but >= 50 % of the segment duration → fake (the fraction
+        # criterion keeps sub-threshold word edits labellable).
+        segments = [[0.58, 0.66]]  # chunk 0 = [0, 0.64) → overlap 0.06 s of 0.08 s
+        assert labels_for_chunk(0, CHUNK, segments, []) == (1, 1, 0)
+
+    def test_min_overlap_zero_restores_any_overlap_rule(self):
+        # With both thresholds disabled, any positive overlap counts again.
+        segments = [[0.5, 2.0]]
+        labels = [
+            labels_for_chunk(i, CHUNK, segments, segments, min_overlap_s=0.0, min_overlap_frac=0.0)[0] for i in range(5)
+        ]
+        assert labels == [1, 1, 1, 1, 0]
 
 
 class TestParseChunkIdx:

@@ -9,10 +9,10 @@ freeze_feature_extractor: True
 # Phase 2: false + warmstart_ckpt für End-to-End-Finetuning.
 freeze_backbone: True
 
-# CE-Klassengewichte [real, fake]. Mit segment-genauen Chunk-Labels ist die
-# Fake-Klasse selten (label_audio ~7 % der Chunks) — Inverse-Frequenz-Gewichte
-# aus dem Train-Split (scripts/relabel_chunks.py gibt sie aus). null = ungewichtet.
-class_weights: [0.536, 7.374]
+# CE-Klassengewichte [real, fake]. "auto" berechnet Inverse-Frequenz-Gewichte
+# zur Fit-Zeit aus dem Train-Split (immer konsistent mit data.label_type und
+# Datenstand; zuletzt [0.536, 7.374]). Liste = Override, null = ungewichtet.
+class_weights: auto
 
 # Layer-wise LR-Decay für Phase 2 (z. B. 0.75); null = einheitliche LR.
 # Wirkt nur bei freeze_backbone=false.
@@ -30,3 +30,6 @@ scheduler:
   _target_: src.utils.lr_schedulers.linear_warmup_cosine
   _partial_: true
   warmup_ratio: 0.05
+  # Decay-Horizont in Epochen, entkoppelt von trainer.max_epochs — siehe
+  # configs/model/videomae.yaml für die Begründung.
+  horizon_epochs: 15

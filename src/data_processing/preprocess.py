@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
 from src.data_processing.face_extractor import FaceExtractor, iter_video_chunks
-from src.data_processing.ffmpeg_utils import extract_audio, normalize_av
+from src.data_processing.ffmpeg_utils import extract_audio, normalize_av, probe_video
 from src.data_processing.hdf5_writer import ChunkMetadata, H5Writer
 from src.data_processing.split_utils import assign_splits
 
@@ -110,6 +110,8 @@ def labels_for_chunk(
     chunk_duration: float,
     visual_fake_segments: list[list[float]],
     audio_fake_segments: list[list[float]],
+    min_overlap_s: float = 0.1,
+    min_overlap_frac: float = 0.5,
 ) -> tuple[int, int, int]:
     """Compute per-chunk labels from temporal overlap with the fake segments.
 
@@ -117,14 +119,24 @@ def labels_for_chunk(
     second inside a multi-second clip.  Labelling every chunk of a fake video
     as fake therefore produces mostly-wrong labels (and pixel-identical chunks
     with opposite labels across the real/fake variants of the same source
-    clip).  A chunk is fake in a modality iff its time window overlaps at
-    least one fake segment of that modality.
+    clip).
+
+    A chunk is fake in a modality iff its time window overlaps a fake segment
+    of that modality by a *meaningful* amount: at least ``min_overlap_s``
+    seconds OR at least ``min_overlap_frac`` of the segment's own duration
+    (the fraction criterion keeps segments shorter than ``min_overlap_s``
+    labellable).  Without the threshold, a chunk grazing a segment boundary
+    by a few milliseconds gets a fake label despite ~99 % real content —
+    label noise concentrated on exactly the hard examples.
 
     Args:
         chunk_idx:            Zero-based temporal index of the chunk in the video.
         chunk_duration:       Chunk length in seconds (``num_frames / target_fps``).
         visual_fake_segments: ``[[start_s, end_s], ...]`` from the JSON sidecar.
         audio_fake_segments:  ``[[start_s, end_s], ...]`` from the JSON sidecar.
+        min_overlap_s:        Absolute overlap (seconds) that always counts.
+        min_overlap_frac:     Fraction of the segment duration that counts even
+                              below ``min_overlap_s``.
 
     Returns:
         ``(label, label_video, label_audio)`` for this chunk; ``label`` is the
@@ -134,7 +146,13 @@ def labels_for_chunk(
     end = start + chunk_duration
 
     def _overlaps(segments: list[list[float]]) -> int:
-        return int(any(seg_start < end and start < seg_end for seg_start, seg_end in segments))
+        for seg_start, seg_end in segments:
+            overlap = min(end, seg_end) - max(start, seg_start)
+            if overlap <= 0:
+                continue
+            if overlap >= min_overlap_s or overlap >= min_overlap_frac * (seg_end - seg_start):
+                return 1
+        return 0
 
     label_video = _overlaps(visual_fake_segments)
     label_audio = _overlaps(audio_fake_segments)
@@ -262,7 +280,7 @@ def _process_video(
     extractor: FaceExtractor,
     writers: dict[str, H5Writer],
     done_video_ids: set[str],
-) -> tuple[int, int]:
+) -> tuple[int, int, bool]:
     """Normalise, chunk, crop and write a single video.
 
     Args:
@@ -275,30 +293,47 @@ def _process_video(
                         run (resume logic).
 
     Returns:
-        ``(n_written, n_skipped_noface)`` counts for this video.
+        ``(n_written, n_skipped_noface, failed)`` for this video.  ``failed``
+        is ``True`` only for unrecoverable errors (crash, not "no faces") so
+        the caller can distinguish broken inputs from face-less ones.
     """
     video_id: str = row.video_id  # type: ignore[attr-defined]
 
     if video_id in done_video_ids:
         log.debug("Skipping already-processed video: %s", video_id)
-        return 0, 0
+        return 0, 0, False
 
     try:
         video_path = Path(row.video_path)  # type: ignore[attr-defined]
         split: str = row.split  # type: ignore[attr-defined]
 
-        normalized_dir = Path(cfg.data.normalized_dir)
-        normalized_dir.mkdir(parents=True, exist_ok=True)
-        normalized_path = normalized_dir / f"{video_id}.mp4"
-
-        # Normalise video+audio in a single FFmpeg pass (skip if already done)
-        if not normalized_path.exists():
-            normalize_av(
-                video_path,
-                normalized_path,
-                target_fps=cfg.preprocessing.target_fps,
-                sample_rate=cfg.preprocessing.sample_rate,
+        # Read frames straight from the source when it is already at the target
+        # fps — re-encoding (even at crf 18) is a second generation of lossy
+        # compression on exactly the high-frequency band where forgery traces
+        # live. Only off-fps sources get the FFmpeg normalisation pass.
+        source_fps = float(probe_video(video_path)["fps"])
+        if abs(source_fps - cfg.preprocessing.target_fps) < 0.01:  # noqa: PLR2004
+            chunk_source_path = video_path
+        else:
+            log.info(
+                "Source fps %.3f != target %d — re-encoding %s",
+                source_fps,
+                cfg.preprocessing.target_fps,
+                video_id,
             )
+            normalized_dir = Path(cfg.data.normalized_dir)
+            normalized_dir.mkdir(parents=True, exist_ok=True)
+            normalized_path = normalized_dir / f"{video_id}.mp4"
+            # Normalise video+audio in a single FFmpeg pass (skip if already done)
+            if not normalized_path.exists():
+                normalize_av(
+                    video_path,
+                    normalized_path,
+                    target_fps=cfg.preprocessing.target_fps,
+                    sample_rate=cfg.preprocessing.sample_rate,
+                    crf=cfg.preprocessing.get("reencode_crf", 18),
+                )
+            chunk_source_path = normalized_path
 
         # Extract audio directly from the source MP4 — not from the AAC-normalised
         # intermediate — to avoid a second lossy encoding step (MP4→AAC→WAV).
@@ -311,14 +346,14 @@ def _process_video(
         n_audio_chunks = len(audio) // audio_samples_per_chunk
         if n_audio_chunks == 0:
             log.warning("Video too short for even one audio chunk, skipping: %s", video_id)
-            return 0, 0
+            return 0, 0, False
 
         n_written = 0
         n_skipped_noface = 0
         num_frames: int = cfg.preprocessing.num_frames
         chunk_duration = num_frames / cfg.preprocessing.target_fps
 
-        for chunk_idx, frames in enumerate(iter_video_chunks(normalized_path, num_frames=num_frames)):
+        for chunk_idx, frames in enumerate(iter_video_chunks(chunk_source_path, num_frames=num_frames)):
             if chunk_idx >= n_audio_chunks:
                 break  # video has more frames than audio — alignment boundary
 
@@ -334,13 +369,15 @@ def _process_video(
             audio_chunk = audio[audio_start : audio_start + audio_samples_per_chunk].astype(np.float32)
 
             # Per-chunk labels: a chunk is fake only if its time window overlaps
-            # a fake segment (AV-Deepfake1M manipulations are word-level — most
-            # chunks of a "fake" video are pristine).
+            # a fake segment meaningfully (AV-Deepfake1M manipulations are
+            # word-level — most chunks of a "fake" video are pristine).
             label, label_video, label_audio = labels_for_chunk(
                 chunk_idx=chunk_idx,
                 chunk_duration=chunk_duration,
                 visual_fake_segments=row.visual_fake_segments,  # type: ignore[attr-defined]
                 audio_fake_segments=row.audio_fake_segments,  # type: ignore[attr-defined]
+                min_overlap_s=cfg.preprocessing.get("min_label_overlap_s", 0.1),
+                min_overlap_frac=cfg.preprocessing.get("min_label_overlap_frac", 0.5),
             )
 
             chunk_id = f"{video_id}__chunk{chunk_idx:05d}"
@@ -363,11 +400,11 @@ def _process_video(
             writers[split].write_chunk(cropped, audio_chunk, metadata)
             n_written += 1
 
-        return n_written, n_skipped_noface
+        return n_written, n_skipped_noface, False
 
     except Exception:
         log.warning("Unrecoverable error processing %s — skipping", video_id, exc_info=True)
-        return 0, 0
+        return 0, 0, True
 
 
 # ── Resume helpers ─────────────────────────────────────────────────────────────
@@ -463,6 +500,12 @@ def preprocess(cfg: DictConfig) -> None:
 
         total_written = 0
         total_skipped_noface = 0
+        n_failed_videos = 0
+        # Per-category accounting: a face-skip rate that is much higher for
+        # manipulated videos than for real ones would silently underrepresent
+        # the fake class in the written chunks.
+        per_type_written: dict[str, int] = {}
+        per_type_skipped: dict[str, int] = {}
 
         with FaceExtractor(
             crop_scale=cfg.face_extraction.crop_scale,
@@ -470,7 +513,7 @@ def preprocess(cfg: DictConfig) -> None:
             model_path=cfg.face_extraction.model_path,
         ) as extractor:
             for row in tqdm(df.itertuples(index=False), total=len(df), desc="Videos"):
-                n_written, n_skipped = _process_video(
+                n_written, n_skipped, failed = _process_video(
                     row=row,
                     cfg=cfg,
                     extractor=extractor,
@@ -479,6 +522,9 @@ def preprocess(cfg: DictConfig) -> None:
                 )
                 total_written += n_written
                 total_skipped_noface += n_skipped
+                n_failed_videos += int(failed)
+                per_type_written[row.modify_type] = per_type_written.get(row.modify_type, 0) + n_written
+                per_type_skipped[row.modify_type] = per_type_skipped.get(row.modify_type, 0) + n_skipped
 
     finally:
         for writer in writers.values():
@@ -493,6 +539,25 @@ def preprocess(cfg: DictConfig) -> None:
         total_skipped_noface,
         total_face_attempts,
     )
+    for modify_type in sorted(per_type_written):
+        written = per_type_written[modify_type]
+        skipped = per_type_skipped.get(modify_type, 0)
+        attempts = written + skipped
+        rate = skipped / attempts if attempts > 0 else 0.0
+        log.info("  face-skip[%s]: %.1f%% (%d/%d)", modify_type, rate * 100, skipped, attempts)
+    if n_failed_videos > 0:
+        failure_rate = n_failed_videos / len(df)
+        level = logging.ERROR if failure_rate > 0.05 else logging.WARNING  # noqa: PLR2004
+        log.log(
+            level,
+            "%d/%d videos (%.1f%%) failed with unrecoverable errors (see warnings above)%s",
+            n_failed_videos,
+            len(df),
+            failure_rate * 100,
+            " — above the 5% threshold, the processed dataset is likely incomplete!"
+            if failure_rate > 0.05  # noqa: PLR2004
+            else "",
+        )
     for split in splits:
         h5_path = output_dir / f"{split}.h5"
         if h5_path.exists():

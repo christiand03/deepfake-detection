@@ -11,10 +11,13 @@ per optimizer step.
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import torch.serialization
-from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
+
+if TYPE_CHECKING:
+    from torch.optim import Optimizer
 
 
 def linear_warmup_cosine(
@@ -24,6 +27,13 @@ def linear_warmup_cosine(
     min_lr_ratio: float = 0.0,
 ) -> LambdaLR:
     """Linear warmup to the configured LR, then cosine decay to ``min_lr_ratio``.
+
+    Steps past ``num_training_steps`` stay at ``min_lr_ratio`` (progress is
+    clamped), so a decay horizon shorter than ``trainer.max_epochs`` is safe.
+    Set the ``horizon_epochs`` scheduler-config key to decouple the horizon
+    from ``max_epochs`` — ``configure_optimizers`` consumes it and scales
+    ``num_training_steps`` accordingly (with early stopping, a cosine spanning
+    all of ``max_epochs`` never reaches its low-LR tail).
 
     Args:
         optimizer:          Wrapped optimizer (per-group base LRs are respected,

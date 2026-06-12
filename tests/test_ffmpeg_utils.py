@@ -81,7 +81,7 @@ class TestNormalizeVideo:
             mock_stream.overwrite_output.return_value = mock_stream
             normalize_video(fake_input, output, target_fps=30)
             mock_stream.output.assert_called_once_with(
-                str(output), vf="fps=30", fps_mode="cfr", vcodec="libx264", an=None
+                str(output), vf="fps=30", fps_mode="cfr", vcodec="libx264", crf=18, an=None
             )
 
     @requires_ffmpeg
@@ -281,6 +281,7 @@ class TestNormalizeAv:
                 vf="fps=25",
                 fps_mode="cfr",
                 vcodec="libx264",
+                crf=18,
                 ac=1,
                 ar=16_000,
                 acodec="aac",

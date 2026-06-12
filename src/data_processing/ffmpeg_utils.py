@@ -20,6 +20,7 @@ def normalize_video(
     input_path: Path | str,
     output_path: Path | str,
     target_fps: int = 25,
+    crf: int = 18,
 ) -> Path:
     """Re-encode a video to a fixed, constant frame rate with no audio stream.
 
@@ -30,6 +31,8 @@ def normalize_video(
         input_path: Path to the source video file.
         output_path: Destination path for the normalized video.
         target_fps: Target frames per second. Default is 25.
+        crf: H.264 constant rate factor. Default 18 (visually lossless, see
+             :func:`normalize_av`).
 
     Returns:
         Path to the written output file (video-only, no audio stream).
@@ -49,7 +52,7 @@ def normalize_video(
 
     (
         ffmpeg.input(str(input_path))
-        .output(str(output_path), vf=f"fps={target_fps}", fps_mode="cfr", vcodec="libx264", an=None)
+        .output(str(output_path), vf=f"fps={target_fps}", fps_mode="cfr", vcodec="libx264", crf=crf, an=None)
         .overwrite_output()
         .run(quiet=True)
     )
@@ -62,11 +65,12 @@ def normalize_av(
     output_path: Path | str,
     target_fps: int = 25,
     sample_rate: int = 16_000,
+    crf: int = 18,
 ) -> Path:
     """Re-encode a video to a fixed frame rate with standardized mono audio.
 
     Normalizes both streams in a single FFmpeg pass:
-    - Video: ``target_fps`` CFR, H.264 (libx264).
+    - Video: ``target_fps`` CFR, H.264 (libx264) at ``crf`` quality.
     - Audio: mono, ``sample_rate`` Hz, AAC (MP4-compatible).
 
     The output is the standardized audio-visual file for Phase 2
@@ -77,6 +81,10 @@ def normalize_av(
         output_path: Destination path for the normalized AV file.
         target_fps: Target frames per second. Default is 25.
         sample_rate: Target audio sample rate in Hz. Default is 16,000.
+        crf: H.264 constant rate factor. Default 18 (visually lossless) —
+             forgery traces live in the high-frequency band that the libx264
+             default (23) visibly degrades; the re-encode must not become a
+             second generation of compression loss.
 
     Returns:
         Path to the written output file.
@@ -101,6 +109,7 @@ def normalize_av(
             vf=f"fps={target_fps}",
             fps_mode="cfr",
             vcodec="libx264",
+            crf=crf,
             ac=1,
             ar=sample_rate,
             acodec="aac",

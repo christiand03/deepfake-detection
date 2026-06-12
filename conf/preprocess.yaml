@@ -16,6 +16,16 @@ preprocessing:
   sample_rate: 16000
   # 16 frames / 25 fps * 16000 Hz = 10240 samples per chunk
   audio_samples_per_chunk: 10240
+  # A chunk counts as fake only if it overlaps a fake segment by >= min_label_overlap_s
+  # seconds OR >= min_label_overlap_frac of the segment's duration (short segments).
+  # Without this, boundary-grazing chunks (few ms overlap, ~99% real content) get
+  # fake labels — label noise on exactly the hard examples.
+  min_label_overlap_s: 0.1
+  min_label_overlap_frac: 0.5
+  # H.264 CRF for the fps re-encode of off-fps sources (sources already at
+  # target_fps are read directly, no re-encode). 18 = visually lossless —
+  # the libx264 default (23) degrades the high-frequency forgery traces.
+  reencode_crf: 18
 
 face_extraction:
   crop_scale: 1.4
@@ -32,9 +42,9 @@ run:
   val_ratio: 0.15
   test_ratio: 0.15
   # Seed for the deterministic per-identity hash split. Stable across re-runs; with
-  # few identities pick a seed giving non-empty val/test AND a train-heavy chunk split
-  # (current 12 ids: seed=11 → 8/2/2 identities ≈ 70/11/19 % chunks; seed=42 → val nur 1 ID).
-  # The run logs split counts and warns on an empty split.
+  # few identities pick a seed giving non-empty val/test AND a train-heavy chunk split.
+  # Current dataset (max_videos=12000, ~30 identities): seed=11 → 9959/861/1180
+  # Videos (train/val/test). The run logs split counts and warns on an empty split.
   split_seed: 11
   # Skip videos whose video_id already appears in an existing output CSV
   skip_existing: true

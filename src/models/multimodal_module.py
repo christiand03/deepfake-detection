@@ -133,46 +133,55 @@ class CrossAttentionFusion(nn.Module):
 
     def forward(
         self,
-        video_hidden: torch.Tensor,
-        audio_hidden: torch.Tensor,
+        video_hidden: torch.Tensor | None,
+        audio_hidden: torch.Tensor | None,
     ) -> torch.Tensor:
         """Fuse video and audio hidden states and return class logits.
 
         Args:
             video_hidden: ``(B, T_v, video_dim)`` — output of VideoMAEModel.
+                          May be ``None`` in ``audio_only`` mode (backbone skipped).
             audio_hidden: ``(B, T_a, audio_dim)`` — output of Wav2Vec2Model.
+                          May be ``None`` in ``video_only`` mode (backbone skipped).
 
         Returns:
             ``(B, num_classes)`` logit tensor.
         """
-        # Project to shared space (+ dropout, all modes).
-        v = self.proj_dropout(self.video_proj(video_hidden))  # (B, T_v, fusion_dim)
-        a = self.proj_dropout(self.audio_proj(audio_hidden))  # (B, T_a, fusion_dim)
-
-        # Pre-norm: normalize ONCE before both attention blocks so that each
-        # direction attends to the original, unmodified representation of the
-        # other modality.  This is required for clean xAI interpretation:
-        # v_n and a_n are shared as K/V in both blocks — neither direction
-        # contaminates the other (parallel, not sequential).
-        v_n = self.v_norm(v)  # (B, T_v, fusion_dim)
-        a_n = self.a_norm(a)  # (B, T_a, fusion_dim)
-
-        if self.fusion_mode == "cross_attention":
-            # Block 1: video attends to audio.
-            v_cross, _ = self.v_to_a_attn(query=v_n, key=a_n, value=a_n)
-            v = v + v_cross  # (B, T_v, fusion_dim)
-            # Block 2: audio attends to ORIGINAL video (v_n, not the updated v).
-            a_cross, _ = self.a_to_v_attn(query=a_n, key=v_n, value=v_n)
-            a = a + a_cross  # (B, T_a, fusion_dim)
-            v_pool, a_pool = v.mean(dim=1), a.mean(dim=1)
+        # *_only ablations: pool only the kept modality, zero the other.  The
+        # dropped modality's pooled vector was always zeroed, so its backbone /
+        # projection need not run at all (callers may pass None for it).
+        if self.fusion_mode == "video_only":
+            v = self.proj_dropout(self.video_proj(video_hidden))  # (B, T_v, fusion_dim)
+            v_pool = self.v_norm(v).mean(dim=1)
+            a_pool = torch.zeros_like(v_pool)
+        elif self.fusion_mode == "audio_only":
+            a = self.proj_dropout(self.audio_proj(audio_hidden))  # (B, T_a, fusion_dim)
+            a_pool = self.a_norm(a).mean(dim=1)
+            v_pool = torch.zeros_like(a_pool)
         else:
-            # Ablations: no cross-attention. Mean-pool the (normalized) projections.
-            v_pool, a_pool = v_n.mean(dim=1), a_n.mean(dim=1)
-            if self.fusion_mode == "video_only":
-                a_pool = torch.zeros_like(a_pool)  # drop audio
-            elif self.fusion_mode == "audio_only":
-                v_pool = torch.zeros_like(v_pool)  # drop video
-            # "concat": keep both pooled projections as-is.
+            # Project to shared space (+ dropout).
+            v = self.proj_dropout(self.video_proj(video_hidden))  # (B, T_v, fusion_dim)
+            a = self.proj_dropout(self.audio_proj(audio_hidden))  # (B, T_a, fusion_dim)
+
+            # Pre-norm: normalize ONCE before both attention blocks so that each
+            # direction attends to the original, unmodified representation of the
+            # other modality.  This is required for clean xAI interpretation:
+            # v_n and a_n are shared as K/V in both blocks — neither direction
+            # contaminates the other (parallel, not sequential).
+            v_n = self.v_norm(v)  # (B, T_v, fusion_dim)
+            a_n = self.a_norm(a)  # (B, T_a, fusion_dim)
+
+            if self.fusion_mode == "cross_attention":
+                # Block 1: video attends to audio.
+                v_cross, _ = self.v_to_a_attn(query=v_n, key=a_n, value=a_n)
+                v = v + v_cross  # (B, T_v, fusion_dim)
+                # Block 2: audio attends to ORIGINAL video (v_n, not the updated v).
+                a_cross, _ = self.a_to_v_attn(query=a_n, key=v_n, value=v_n)
+                a = a + a_cross  # (B, T_a, fusion_dim)
+                v_pool, a_pool = v.mean(dim=1), a.mean(dim=1)
+            else:
+                # "concat": mean-pool the (normalized) projections of both modalities.
+                v_pool, a_pool = v_n.mean(dim=1), a_n.mean(dim=1)
 
         fused = torch.cat([v_pool, a_pool], dim=1)  # (B, fusion_dim * 2)
         return self.classifier(fused)  # (B, num_classes)
@@ -273,12 +282,8 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         # eval, see BaseDeepfakeModule.train()) and during eval-mode explain() — only
         # the unfrozen backbones of Phase 2 benefit. use_reentrant=False is recommended.
         if self.hparams.gradient_checkpointing:
-            self.video_backbone.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": False}
-            )
-            self.audio_backbone.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": False}
-            )
+            self.video_backbone.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            self.audio_backbone.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
         # Fusion head
         video_dim = self.video_backbone.config.hidden_size  # 768 for base
@@ -316,8 +321,12 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         audio_encoder = self.audio_backbone.encoder
         return [
             [self.video_backbone.embeddings, *self.video_backbone.encoder.layer],
-            [self.audio_backbone.feature_projection, audio_encoder.pos_conv_embed,
-             audio_encoder.layer_norm, *audio_encoder.layers],
+            [
+                self.audio_backbone.feature_projection,
+                audio_encoder.pos_conv_embed,
+                audio_encoder.layer_norm,
+                *audio_encoder.layers,
+            ],
         ]
 
     # Forward
@@ -336,15 +345,23 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
 
         Returns:
             ``(video_hidden, audio_hidden)`` — shapes
-            ``(B, T_v, D_v)`` and ``(B, T_a, D_a)``.
+            ``(B, T_v, D_v)`` and ``(B, T_a, D_a)``.  The dropped modality of a
+            ``video_only`` / ``audio_only`` ablation is ``None`` (its backbone
+            pass is skipped — the fusion head zeroes its pooled vector anyway).
         """
-        video_out = self.video_backbone(pixel_values=pixel_values)
-        # VideoMAE has no CLS token: last_hidden_state is the 1568 patch-token
-        # sequence (8 temporal x 14 x 14 patches for 16 frames @ 224x224).
-        video_hidden = video_out.last_hidden_state  # (B, T_v, D_v)
+        mode = self.fusion.fusion_mode
 
-        audio_out = self.audio_backbone(input_values=input_values)
-        audio_hidden = audio_out.last_hidden_state  # (B, T_a, D_a)
+        video_hidden = None
+        if mode != "audio_only":
+            video_out = self.video_backbone(pixel_values=pixel_values)
+            # VideoMAE has no CLS token: last_hidden_state is the 1568 patch-token
+            # sequence (8 temporal x 14 x 14 patches for 16 frames @ 224x224).
+            video_hidden = video_out.last_hidden_state  # (B, T_v, D_v)
+
+        audio_hidden = None
+        if mode != "video_only":
+            audio_out = self.audio_backbone(input_values=input_values)
+            audio_hidden = audio_out.last_hidden_state  # (B, T_a, D_a)
 
         return video_hidden, audio_hidden
 

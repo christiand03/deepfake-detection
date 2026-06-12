@@ -272,13 +272,22 @@ def _make_row(
     )
 
 
+def _patch_probe(fps: float = 25.0):
+    """Patch probe_video so _process_video sees a source at the given fps.
+
+    At the target fps (25) the pipeline reads frames straight from the source;
+    other values exercise the FFmpeg re-encode branch.
+    """
+    return patch("src.data_processing.preprocess.probe_video", return_value={"fps": fps})
+
+
 class TestProcessVideo:
     def test_skips_done_video(self, tmp_path: Path) -> None:
         row = _make_row(video_id="already_done")
         cfg = _make_cfg(tmp_path)
 
         with patch("src.data_processing.preprocess.normalize_av") as mock_norm:
-            n_written, n_skipped = _process_video(
+            n_written, n_skipped, failed = _process_video(
                 row=row,
                 cfg=cfg,
                 extractor=MagicMock(),
@@ -288,6 +297,7 @@ class TestProcessVideo:
 
         assert n_written == 0
         assert n_skipped == 0
+        assert failed is False
         mock_norm.assert_not_called()
 
     def test_all_frames_no_face_counts_skips(self, tmp_path: Path) -> None:
@@ -310,12 +320,12 @@ class TestProcessVideo:
         mock_writer = MagicMock()
 
         with (
-            patch("src.data_processing.preprocess.normalize_av"),
+            _patch_probe(),
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
             patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter(fake_chunks)),
         ):
-            n_written, n_skipped = _process_video(
+            n_written, n_skipped, failed = _process_video(
                 row=row,
                 cfg=cfg,
                 extractor=mock_extractor,
@@ -325,6 +335,7 @@ class TestProcessVideo:
 
         assert n_written == 0
         assert n_skipped == n_chunks
+        assert failed is False
         mock_writer.write_chunk.assert_not_called()
 
     def test_writes_correct_chunk_count(self, tmp_path: Path) -> None:
@@ -345,12 +356,12 @@ class TestProcessVideo:
         mock_writer = MagicMock()
 
         with (
-            patch("src.data_processing.preprocess.normalize_av"),
+            _patch_probe(),
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
             patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter(fake_frames)),
         ):
-            n_written, n_skipped = _process_video(
+            n_written, n_skipped, failed = _process_video(
                 row=row,
                 cfg=cfg,
                 extractor=mock_extractor,
@@ -360,6 +371,7 @@ class TestProcessVideo:
 
         assert n_written == n_chunks
         assert n_skipped == 0
+        assert failed is False
         assert mock_writer.write_chunk.call_count == n_chunks
 
     def test_chunk_id_format(self, tmp_path: Path) -> None:
@@ -378,7 +390,7 @@ class TestProcessVideo:
         mock_writer = MagicMock()
 
         with (
-            patch("src.data_processing.preprocess.normalize_av"),
+            _patch_probe(),
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
             patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter(fake_frames)),
@@ -417,7 +429,7 @@ class TestProcessVideo:
         mock_writer = MagicMock()
 
         with (
-            patch("src.data_processing.preprocess.normalize_av"),
+            _patch_probe(),
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
             patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter(fake_frames)),
@@ -435,13 +447,16 @@ class TestProcessVideo:
         assert all(call.args[2].label_audio == 0 for call in mock_writer.write_chunk.call_args_list)
         assert all(call.args[2].modify_type == "visual_modified" for call in mock_writer.write_chunk.call_args_list)
 
-    def test_unrecoverable_error_returns_zeros(self, tmp_path: Path) -> None:
-        """If normalize_av raises, _process_video logs and returns (0, 0)."""
+    def test_unrecoverable_error_flags_failure(self, tmp_path: Path) -> None:
+        """If normalize_av raises, _process_video logs and returns (0, 0, failed=True)."""
         cfg = _make_cfg(tmp_path)
         row = _make_row(video_path=str(tmp_path / "video.mp4"))
 
-        with patch("src.data_processing.preprocess.normalize_av", side_effect=RuntimeError("FFmpeg failed")):
-            n_written, n_skipped = _process_video(
+        with (
+            _patch_probe(fps=30.0),  # off-fps source → re-encode branch
+            patch("src.data_processing.preprocess.normalize_av", side_effect=RuntimeError("FFmpeg failed")),
+        ):
+            n_written, n_skipped, failed = _process_video(
                 row=row,
                 cfg=cfg,
                 extractor=MagicMock(),
@@ -451,6 +466,33 @@ class TestProcessVideo:
 
         assert n_written == 0
         assert n_skipped == 0
+        assert failed is True
+
+    def test_source_at_target_fps_skips_reencode(self, tmp_path: Path) -> None:
+        """A source already at target fps is read directly — no FFmpeg re-encode."""
+        cfg = _make_cfg(tmp_path)
+        row = _make_row(video_path=str(tmp_path / "video.mp4"))
+
+        fake_audio = np.zeros(10240, dtype=np.float32)
+
+        with (
+            _patch_probe(fps=25.0),
+            patch("src.data_processing.preprocess.normalize_av") as mock_norm,
+            patch("src.data_processing.preprocess.extract_audio"),
+            patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
+            patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter([])) as mock_iter,
+        ):
+            _process_video(
+                row=row,
+                cfg=cfg,
+                extractor=MagicMock(),
+                writers={"train": MagicMock()},
+                done_video_ids=set(),
+            )
+
+        mock_norm.assert_not_called()
+        # Chunks must be read from the SOURCE file, not a normalized copy.
+        assert mock_iter.call_args[0][0] == Path(row.video_path)
 
     def test_reuses_normalized_file_if_exists(self, tmp_path: Path) -> None:
         """normalize_av must NOT be called again if the normalized file already exists."""
@@ -467,6 +509,7 @@ class TestProcessVideo:
         fake_frames: list = []  # no chunks → (0, 0)
 
         with (
+            _patch_probe(fps=30.0),  # off-fps source → re-encode branch
             patch("src.data_processing.preprocess.normalize_av") as mock_norm,
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
