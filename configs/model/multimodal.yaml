@@ -16,15 +16,37 @@ freeze_backbone: True
 
 gradient_checkpointing: true  # nur in Phase 2 aktiv (unfrozen Backbones); spart VRAM
 
+# Attention-Implementierung BEIDER Backbones fürs TRAINING: "sdpa" (schneller)
+# oder "eager". explain_multimodal.py / die API laden Checkpoints immer mit
+# eager (AttnLRP) — s. configs/model/videomae.yaml für Details.
+attn_implementation: sdpa
+
 # CE-Klassengewichte [real, fake]. "auto" berechnet Inverse-Frequenz-Gewichte
 # zur Fit-Zeit aus dem Train-Split (immer konsistent mit data.label_type und
 # Datenstand; zuletzt [0.557, 4.905]). Liste = Override, null = ungewichtet.
 class_weights: auto
 
+# Label Smoothing (z. B. 0.1) weicht die One-Hot-Targets auf. 0.0 = aus.
+label_smoothing: 0.0
+
+# Mixup (Beta(alpha, alpha), z. B. 0.2) — beide Modalitäten werden mit demselben
+# lam/perm gemischt, damit die A/V-Paarung erhalten bleibt. Nur im Training
+# aktiv; bei adv_train automatisch übersprungen. 0.0 = aus.
+mixup_alpha: 0.0
+
 # Layer-wise LR-Decay für Phase 2 (z. B. 0.75): Backbone-Block i trainiert mit
 # lr * decay^(Tiefe - i), der Fusion-Head mit voller lr. null = einheitliche LR.
 # Wirkt nur bei freeze_backbone=false.
 llrd_decay: null
+
+# PEFT: "lora" trainiert Low-Rank-Adapter auf den Attention-Q/V-Projektionen
+# BEIDER Backbones statt Full-Finetuning (Phase-2-Alternative; s.
+# configs/model/videomae.yaml). Erfordert freeze_backbone=false; nicht mit
+# llrd_decay kombinierbar.
+peft_mode: none   # none | lora
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
 
 optimizer:
   _target_: torch.optim.AdamW

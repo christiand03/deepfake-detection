@@ -34,6 +34,11 @@ face_extraction:
   # Download from: https://storage.googleapis.com/mediapipe-models/face_landmarker/
   #   face_landmarker/float16/1/face_landmarker.task
   model_path: models/face_landmarker.task
+  # "image" (default) = per-frame detection (current dataset was built with this).
+  # "video" = MediaPipe VIDEO mode: tracks the face between frames — faster and
+  # temporally smoother boxes, but slightly different crops. Only switch
+  # together with a full regeneration (validate via scripts/validate_processed.py).
+  running_mode: image
 
 run:
   # Set to a positive integer to cap the number of videos processed (useful for smoke runs)
@@ -48,4 +53,9 @@ run:
   split_seed: 11
   # Skip videos whose video_id already appears in an existing output CSV
   skip_existing: true
+  # Parallel extraction workers (FFmpeg/decord/MediaPipe). 0 = sequential
+  # (previous behaviour). All HDF5/CSV writing stays in the main process.
+  # RAM budget: each worker holds one decoded video + MediaPipe (~1-2 GB);
+  # 3 is a sensible maximum on the 16-GB box. Expected ~3x on a full regen.
+  num_workers: 0
   log_level: INFO

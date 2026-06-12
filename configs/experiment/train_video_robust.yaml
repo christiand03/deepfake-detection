@@ -1,0 +1,21 @@
+# @package _global_
+
+# Ablation — Robustheits-Augmentation (Phase 1, zahlt auf Phase 3 ein):
+# Training mit Social-Media-Korruptionen (JPEG-Artefakte / Gaussian Blur /
+# Downscale-Upscale, je p=0.3) zusätzlich zur Standard-Augmentation — das
+# DFDC-Gewinner-Rezept. Erwartung: leicht schlechtere Clean-AUC, deutlich
+# bessere AUC unter den Phase-3-Degradationen.
+# Run/Launch: experiment=train_video_robust
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: videomae_robust
+
+data:
+  augment_strength: robust
+
+tags: ["videomae", "video", "ablation", "robust-augmentation", "phase3"]

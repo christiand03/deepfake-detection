@@ -40,6 +40,20 @@ Der Parameter `run.max_videos` ist in `conf/preprocess.yaml` definiert.
 Der Lauf ist resumierbar: bereits verarbeitete Videos werden dank
 `run.skip_existing=true` bei erneutem Ausführen übersprungen.
 
+**Paralleler Lauf (~3× schneller — empfohlen für volle Regenerierungen):**
+
+```bash
+python -m src.data_processing.preprocess run.num_workers=3
+```
+
+Worker-Prozesse übernehmen die Extraktion (FFmpeg/decord/MediaPipe); alles
+HDF5/CSV-Schreiben bleibt im Hauptprozess (Single-Writer). `run.num_workers=0`
+(Default) = sequenzieller Pfad. RAM-Budget beachten: ~1–2 GB je Worker auf der
+16-GB-Box. Optional beschleunigt `face_extraction.running_mode=video` die
+Gesichtserkennung (Tracking statt Per-Frame-Detection) — liefert leicht andere
+Crops, daher **nur zusammen mit einer vollen Regenerierung** aktivieren und mit
+`python -m scripts.validate_processed` prüfen (s. `docs/performance_roadmap.md` §1.6/§1.7).
+
 **Ausgaben:**
 - `data/processed/train.h5`, `val.h5`, `test.h5`
 - `data/processed/train_metadata.csv`, `val_metadata.csv`, `test_metadata.csv`
@@ -95,6 +109,44 @@ mkdir checkpoints
 > **Phase 2** (End-to-End-Finetuning) ist optional und für jedes Modell gleich:
 > `model.freeze_backbone=false` + `warmstart_ckpt=<phase1.ckpt>` (siehe unten und `docs/model.md` §7.6).
 
+### 4.0 Attention-Modus (SDPA ↔ Eager) — der gesamte Prozess
+
+Das Projekt nutzt **zwei Attention-Implementierungen für zwei Aufgaben**. Der
+Prozess von Training bis xAI-Erklärung läuft so ab:
+
+1. **Training mit SDPA (Default).** Alle drei Modell-Configs setzen
+   `attn_implementation: sdpa` (`configs/model/*.yaml`): fused Kernels, ~2,8×
+   Durchsatz, die `O(N²)`-Attention-Matrix wird nie materialisiert — dadurch
+   passt Phase-2-Video-Finetuning mit Batch 6 statt 2 (s. `docs/model.md` §6.4).
+
+2. **Der Checkpoint ist implementierungs-unabhängig.** SDPA und Eager berechnen
+   dieselbe Funktion mit denselben Gewichten; nur der Rechenweg unterscheidet
+   sich. Ein SDPA-trainierter Checkpoint lädt unverändert in ein Eager-Modell
+   (Paritätstest: `tests/test_attn_implementation.py`).
+
+3. **Erklären immer mit Eager — automatisch.** AttnLRP patcht
+   `eager_attention_forward` auf Modulebene; unter SDPA würde der Patch still
+   umgangen und die Heatmaps wären falsch. Deshalb laden `explain.py`,
+   `explain_audio.py`, `explain_multimodal.py` und alle drei API-Loader
+   (`src/api/inference.py`) Checkpoints **immer** mit dem Override
+   `attn_implementation="eager"` — hier ist nichts umzuschalten.
+
+4. **Guard als letzte Sicherung.** Erreicht doch ein Nicht-Eager-Modell
+   `explain()`, wirft `BaseDeepfakeModule._require_eager_attention` einen
+   `RuntimeError` mit Reload-Anleitung, statt still unbrauchbare Relevanzen zu
+   liefern.
+
+**Modus pro Trainings-Lauf umschalten** (z. B. Repro alter Eager-Läufe; dann
+gilt wieder die Eager-Batch-Obergrenze, Video Phase 2 = bs 2):
+
+```bash
+python src/train.py experiment=train_video model.attn_implementation=eager
+```
+
+Details und Messwerte: `docs/performance_roadmap.md` §1.8, `docs/model.md` §6.4.
+
+### 4.1 Trainings-Läufe
+
 **Video-Modell (VideoMAE) – Phase 1 (Backbone eingefroren, nur Kopf):**
 
 ```bash
@@ -110,13 +162,41 @@ python src/train.py experiment=train_audio
 **Video/Audio – Phase 2 (End-to-End-Finetuning, Warm-Start):**
 
 > Phase 2 trainiert den Backbone → der große Phase-1-Default-Batch muss heruntergesetzt werden
-> (`data.batch_size=2` für Video; Audio ist klein und verträgt mehr).
+> (`data.batch_size=6` für Video unter SDPA; unter `model.attn_implementation=eager` nur 2,
+> s. §4.0. Audio ist klein und verträgt mehr). Einfacher: das fertige Experiment
+> `experiment=train_video_phase2` nutzen (setzt Batch/LLRD/LR bereits korrekt).
 
 ```bash
+python src/train.py experiment=train_video_phase2          # empfohlen (bs 6, LLRD, lr 1e-5)
+# oder manuell:
 python src/train.py experiment=train_video \
     model.freeze_backbone=false warmstart_ckpt=checkpoints/videomae.ckpt \
-    data.batch_size=2
+    data.batch_size=6
 # analog: experiment=train_audio ... warmstart_ckpt=checkpoints/wav2vec2.ckpt
+```
+
+**Phase 2 mit LoRA statt Full-Finetuning (PEFT-Alternative):**
+
+> Low-Rank-Adapter auf den Attention-Q/V-Projektionen; Basisgewichte bleiben
+> eingefroren. Optimizer-States ~94M → <1M Parameter, weniger Overfitting. Der
+> Checkpoint-Export **merged die Adapter automatisch zurück** — der exportierte
+> Checkpoint ist ein plain Modell, API und `explain()` bleiben unverändert
+> (s. `docs/performance_roadmap.md` §1.4).
+
+```bash
+python src/train.py experiment=train_video_phase2_lora
+```
+
+**Trainings-Ablationen / SOTA-Features (alle config-gated, Defaults unverändert):**
+
+> Vergleichsmetrik jeweils `val/auc_video` gegen die Baseline `train_video`.
+> Hintergründe: `docs/performance_roadmap.md` §1.
+
+```bash
+python src/train.py experiment=train_video_balanced   # Balanced Sampling statt CE-Gewicht 8,7
+python src/train.py experiment=train_video_mixup      # Mixup + Label Smoothing (+ Sampler)
+python src/train.py experiment=train_video_robust     # Social-Media-Augmentation (zahlt auf Phase 3 ein)
+python src/train.py experiment=train_video callbacks=swa trainer.max_epochs=15  # SWA (ohne Early Stopping)
 ```
 
 **Multimodal-Modell – Phase 1 (Backbones eingefroren, nur Fusion-Head):**
@@ -230,11 +310,16 @@ python src/eval.py experiment=train_audio \
 
 ## 6. xAI-Visualisierungen erzeugen
 
+> **Attention-Modus:** Alle explain-Skripte laden den Checkpoint automatisch mit
+> `attn_implementation="eager"` (AttnLRP-Voraussetzung) — auch SDPA-trainierte
+> Checkpoints funktionieren unverändert (s. §4.0). **Hinweis für Skript-/CI-Läufe:**
+> ohne Tags fragt das `extras`-Utility interaktiv nach — `extras.enforce_tags=false`
+> anhängen, sonst hängt der Lauf.
+
 ### 6.1 Video – AttnLRP-Heatmap (VideoMAE)
 
 ```bash
-python src/explain.py experiment=train_video \
-    ckpt_path=checkpoints/videomae_colleague.ckpt
+python src/explain.py ckpt_path=checkpoints/videomae.ckpt extras.enforce_tags=false
 ```
 
 **Optionale Overrides:**
@@ -461,3 +546,5 @@ oder `true`, werden synthetische Demo-Daten ohne Backend-Aufruf zurückgegeben.
 - Konfigurationsstruktur: Siehe `configs/` und `conf/preprocess.yaml`
 - xAI-Methoden und Visualisierungsstandards: Siehe `docs/xai.md`
 - Modellarchitekturen: Siehe `docs/model.md`
+- Performance-Features (SDPA, LoRA, Sampler, Augmentation, paralleles
+  Preprocessing): Siehe `docs/performance_roadmap.md`

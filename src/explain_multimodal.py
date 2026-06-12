@@ -72,7 +72,11 @@ def explain_multimodal(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]
     test_dataloader = datamodule.test_dataloader()
 
     log.info("Loading multimodal model from checkpoint: %s", cfg.ckpt_path)
-    model = MultimodalDeepfakeModule.load_from_checkpoint(cfg.ckpt_path, weights_only=False)
+    # eager override: checkpoints may be trained with SDPA (faster), but AttnLRP
+    # needs the eager attention path. Weights are identical either way.
+    model = MultimodalDeepfakeModule.load_from_checkpoint(
+        cfg.ckpt_path, weights_only=False, attn_implementation="eager"
+    )
     model.eval()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

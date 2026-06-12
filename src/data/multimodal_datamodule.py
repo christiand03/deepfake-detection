@@ -27,6 +27,9 @@ class MultimodalDataModule(BaseDeepfakeDataModule):
                      ``"label_video"``, or ``"label_audio"``.  Default: ``"label"``.
         augment:     Apply random train-time augmentation to both modalities
                      (train split only).  Default: ``False``.
+        balanced_sampling: Draw ~50/50 class-balanced training batches via a
+                     ``WeightedRandomSampler`` instead of shuffling.  Use with
+                     ``model.class_weights=null``.  Default: ``False``.
     """
 
     def __init__(
@@ -37,6 +40,8 @@ class MultimodalDataModule(BaseDeepfakeDataModule):
         pin_memory: bool = True,
         label_type: str = "label",
         augment: bool = False,
+        augment_strength: str = "standard",
+        balanced_sampling: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -51,4 +56,5 @@ class MultimodalDataModule(BaseDeepfakeDataModule):
             label_type=self.hparams.label_type,
             # Augmentation is train-only; val/test stay deterministic.
             augment=self.hparams.augment and split == "train",
+            augment_strength=self.hparams.augment_strength,
         )

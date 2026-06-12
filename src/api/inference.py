@@ -100,7 +100,9 @@ def get_video_model() -> VideoMAEModule:
                 from src.models.VideoMAE_module import VideoMAEModule as _M
 
                 log.info("Loading VideoMAE from %s …", ckpt)
-                _video_model = _M.load_from_checkpoint(ckpt, weights_only=False)
+                # eager override: the API serves explain() heatmaps (AttnLRP needs
+                # eager attention); SDPA-trained checkpoints have identical weights.
+                _video_model = _M.load_from_checkpoint(ckpt, weights_only=False, attn_implementation="eager")
                 _video_model.eval()
                 _video_model = _video_model.to(_device)
                 log.info("VideoMAE loaded on %s", _device)
@@ -123,7 +125,7 @@ def get_audio_model() -> Wav2Vec2DeepfakeModule:
                 from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule as _A
 
                 log.info("Loading Wav2Vec2 from %s …", ckpt)
-                _audio_model = _A.load_from_checkpoint(ckpt, weights_only=False)
+                _audio_model = _A.load_from_checkpoint(ckpt, weights_only=False, attn_implementation="eager")
                 _audio_model.eval()
                 _audio_model = _audio_model.to(_device)
                 log.info("Wav2Vec2 loaded on %s", _device)
@@ -146,7 +148,7 @@ def get_multimodal_model() -> MultimodalDeepfakeModule:
                 from src.models.multimodal_module import MultimodalDeepfakeModule as _MM
 
                 log.info("Loading MultimodalDeepfakeModule from %s …", ckpt)
-                _multimodal_model = _MM.load_from_checkpoint(ckpt, weights_only=False)
+                _multimodal_model = _MM.load_from_checkpoint(ckpt, weights_only=False, attn_implementation="eager")
                 _multimodal_model.eval()
                 _multimodal_model = _multimodal_model.to(_device)
                 log.info("MultimodalDeepfakeModule loaded on %s", _device)

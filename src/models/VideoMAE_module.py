@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import torch
-import torch.nn.functional as F
 from transformers import VideoMAEForVideoClassification
 
 from .base_module import BaseDeepfakeModule
@@ -20,8 +19,15 @@ class VideoMAEModule(BaseDeepfakeModule):
         num_labels: int = 2,
         freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
+        attn_implementation: str = "eager",
         class_weights: Any = None,
+        label_smoothing: float = 0.0,
+        mixup_alpha: float = 0.0,
         llrd_decay: float | None = None,
+        peft_mode: str = "none",
+        lora_r: int = 8,
+        lora_alpha: int = 16,
+        lora_dropout: float = 0.05,
         adv_train: bool = False,
         adv_epsilon: float = 0.03,
         adv_steps: int = 7,
@@ -38,12 +44,15 @@ class VideoMAEModule(BaseDeepfakeModule):
         # Load the pre-trained VideoMAE model with a classification head.
         # use_mean_pooling=True averages over all patch tokens (excluding CLS) — the
         # default VideoMAE pooling strategy. AttnLRP propagates through this correctly.
+        # attn_implementation: "sdpa" (training configs, ~2.8x faster) or "eager"
+        # (required for explain()/AttnLRP — the weights are identical either way,
+        # so explain/API paths reload checkpoints with the eager override).
         self.net = VideoMAEForVideoClassification.from_pretrained(
             self.hparams.model_name_or_path,
             num_labels=self.hparams.num_labels,
             ignore_mismatched_sizes=True,
             use_mean_pooling=True,
-            attn_implementation="eager",
+            attn_implementation=self.hparams.attn_implementation,
         )
 
         # Gradient checkpointing trades ~10% step time (measured) for a large
@@ -57,6 +66,10 @@ class VideoMAEModule(BaseDeepfakeModule):
         # (fc_norm + classifier). Phase 2: freeze_backbone=False fine-tunes
         # end-to-end (typically warm-started from a Phase 1 checkpoint).
         self._apply_backbone_freeze(self.hparams.freeze_backbone)
+
+        # Optional LoRA (Phase 2 alternative): adapters on the attention
+        # query/value projections; base weights stay frozen via PEFT.
+        self._wrap_lora(self.net, "videomae", ("query", "value"), prefix="net.videomae")
 
     def _backbone_modules(self):
         # The pretrained encoder; self.net.fc_norm + self.net.classifier are the head.
@@ -78,7 +91,7 @@ class VideoMAEModule(BaseDeepfakeModule):
         # with segment-accurate chunk labels the fake class is rare (~7 %).
         outputs = self.net(pixel_values=pixel_values)
         logits = outputs.logits
-        loss = F.cross_entropy(logits, labels, weight=self._loss_weight())
+        loss = self._classification_loss(logits, labels)
         preds = torch.argmax(logits, dim=1)
 
         return loss, preds, labels, logits
@@ -129,9 +142,17 @@ class VideoMAEModule(BaseDeepfakeModule):
         return {"pixel_values": mixed, "labels": labels}
 
     def training_step(self, batch: Any, batch_idx: int):
+        step = None
         if self.hparams.adv_train:
+            # Mixup is skipped on adversarial batches to keep PGD semantics clean.
             batch = self._adversarial_mix(batch)
-        loss, preds, labels, _ = self.model_step(batch)
+        else:
+            step = self._mixup_training_loss(
+                batch, ("pixel_values",), lambda b: self.net(pixel_values=b["pixel_values"]).logits
+            )
+        if step is None:
+            step = self.model_step(batch)
+        loss, preds, labels, _ = step
         self.train_loss(loss)
         self.train_acc(preds, labels)
         self.train_f1(preds, labels)
@@ -191,6 +212,7 @@ class VideoMAEModule(BaseDeepfakeModule):
                 frame independently to [-1, 1].
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
+        self._require_eager_attention(self.net)
 
         global _VIDEOMAE_LRP_PATCHED
         if not _VIDEOMAE_LRP_PATCHED:

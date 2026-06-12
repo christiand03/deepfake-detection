@@ -1,0 +1,36 @@
+# @package _global_
+
+# Phase 2 (LoRA) — Alternative zum Full-Finetuning (train_video_phase2):
+# Low-Rank-Adapter (r=8) auf den Attention-Q/V-Projektionen, Basisgewichte
+# bleiben eingefroren. Vorteile: Optimizer-States ~94M → <1M Parameter, weniger
+# Overfitting-Risiko bei kleinem Datensatz, kein LLRD nötig. Der Export merged
+# die Adapter zurück (plain Checkpoint — API/explain() unverändert).
+# Vergleichsmetrik: val/auc_video gegen train_video_phase2.
+# Run/Launch: experiment=train_video_phase2_lora
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: videomae_phase2_lora
+
+# Warm-Start vom Phase-1-Checkpoint (nur Gewichte, frischer Optimizer/LR).
+warmstart_ckpt: ${paths.export_dir}/videomae.ckpt
+
+# Aktivierungs-Speicher entspricht Full-Finetuning (Gradienten fließen durch
+# alle Layer zu den Adaptern); unter SDPA passt bs 6 wie in train_video_phase2.
+# Gespart werden Optimizer-States und Gradienten der Basisgewichte.
+data:
+  batch_size: 6
+trainer:
+  accumulate_grad_batches: 1  # 6 × 1 = effektiv 6, wie train_video_phase2
+
+model:
+  freeze_backbone: false  # PEFT friert die Basisgewichte selbst ein
+  peft_mode: lora
+  optimizer:
+    lr: 1e-4   # LoRA verträgt höhere LRs als Full-Finetuning (Adapter starten bei 0)
+
+tags: ["videomae", "video", "phase2", "lora", "peft"]

@@ -166,5 +166,32 @@ def export_best_checkpoint(cfg: DictConfig, trainer: "Trainer") -> None:
     export_dir.mkdir(parents=True, exist_ok=True)
     dst = export_dir / f"{name}.ckpt"
 
+    module = trainer.lightning_module
+    if getattr(module, "_lora_wrapped", None):
+        _export_merged_lora_checkpoint(module, callback.best_model_path, dst)
+        return
+
     shutil.copy2(callback.best_model_path, dst)
     log.info("Exported best checkpoint to %s", dst)
+
+
+def _export_merged_lora_checkpoint(module: Any, best_model_path: str, dst: Path) -> None:
+    """Export a LoRA training's best checkpoint with the adapters merged in.
+
+    The merged checkpoint is a PLAIN model again (no peft wrappers in the
+    state dict, ``peft_mode='none'`` in the hparams), so the API, ``eval.py``,
+    and the eager AttnLRP ``explain()`` path load it exactly like a non-LoRA
+    checkpoint.  The live module holds the LAST epoch's weights, so the best
+    checkpoint is re-loaded fresh before merging.
+    """
+    import torch
+
+    best = type(module).load_from_checkpoint(best_model_path, map_location="cpu")
+    best.merge_lora()
+    # Keep the original checkpoint structure (loop states etc.); swap only the
+    # weights and the peft hparam.
+    checkpoint = torch.load(best_model_path, map_location="cpu", weights_only=False)
+    checkpoint["state_dict"] = best.state_dict()
+    checkpoint["hyper_parameters"]["peft_mode"] = "none"
+    torch.save(checkpoint, dst)
+    log.info("Exported best checkpoint (LoRA merged into base weights) to %s", dst)

@@ -16,10 +16,10 @@ import torch
 
 from .base_hdf5_dataset import (
     BaseHDF5Dataset,
-    augment_audio,
-    augment_video_frames,
     normalize_audio,
     normalize_video_frames,
+    resolve_audio_augment_fn,
+    resolve_video_augment_fn,
 )
 
 
@@ -32,12 +32,22 @@ class MultimodalHDF5Dataset(BaseHDF5Dataset):
                     ``"label_video"``, or ``"label_audio"``.  Default: ``"label"``.
         augment:    Apply random train-time augmentation to both modalities.
                     Enable for the train split only.
+        augment_strength: ``"standard"`` (default) or ``"robust"`` (adds JPEG /
+                    blur / downscale to video, time masking to audio).
     """
 
-    def __init__(self, h5_path: str, label_type: str = "label", augment: bool = False) -> None:
+    def __init__(
+        self,
+        h5_path: str,
+        label_type: str = "label",
+        augment: bool = False,
+        augment_strength: str = "standard",
+    ) -> None:
         super().__init__(h5_path)
         self.label_type = label_type
         self.augment = augment
+        self._video_augment_fn = resolve_video_augment_fn(augment, augment_strength)
+        self._audio_augment_fn = resolve_audio_augment_fn(augment, augment_strength)
 
         with h5py.File(self.h5_path, "r") as f:
             if "video" not in f or "audio" not in f:
@@ -58,12 +68,10 @@ class MultimodalHDF5Dataset(BaseHDF5Dataset):
         f = self._open_h5()
 
         # Video: (16, 3, 224, 224) uint8 → normalised float32
-        pixel_values = normalize_video_frames(
-            f["video"][idx], augment_fn=augment_video_frames if self.augment else None
-        )
+        pixel_values = normalize_video_frames(f["video"][idx], augment_fn=self._video_augment_fn)
 
         # Audio: (10240,) float32 → zero-mean / unit-var
-        input_values = normalize_audio(f["audio"][idx], augment_fn=augment_audio if self.augment else None)
+        input_values = normalize_audio(f["audio"][idx], augment_fn=self._audio_augment_fn)
 
         # Label
         label = int(f[self.label_type][idx])

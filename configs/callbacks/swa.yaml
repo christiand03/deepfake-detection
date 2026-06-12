@@ -1,0 +1,40 @@
+# Stochastic Weight Averaging (opt-in) — mittelt die Gewichte der späten
+# Trainingsphase und glättet so das Loss-Minimum (bessere Generalisierung,
+# Standard-Rezept für ViT-Finetuning).
+#
+# WICHTIG: SWA braucht die SPÄTEN Epochen — es beißt sich mit Early Stopping
+# (patience 5), das Runs typischerweise nach ~8-12 Epochen beendet, bevor die
+# Mittelung greift. Für SWA-Runs daher Early Stopping deaktivieren und mit
+# fester Epochenzahl trainieren, z. B.:
+#   python src/train.py experiment=train_video callbacks=swa trainer.max_epochs=15
+#
+# Erbt alle Default-Callbacks AUSSER early_stopping.
+
+defaults:
+  - model_checkpoint
+  - model_summary
+  - rich_progress_bar
+  - _self_
+
+model_checkpoint:
+  dirpath: ${paths.output_dir}/checkpoints
+  filename: "epoch_{epoch:03d}-val_auc_video_{val/auc_video:.3f}"
+  monitor: "val/auc_video"
+  mode: "max"
+  save_last: True
+  auto_insert_metric_name: False
+
+model_summary:
+  max_depth: -1
+
+# Hinweis: Lightning-SWA unterstützt LR-seitig nur Epoch-Schedules — mit dem
+# step-basierten linear_warmup_cosine loggt es "SWA is currently only supported
+# every epoch". Die Gewichts-Mittelung funktioniert trotzdem; nur der
+# SWA-LR-Swap (swa_lrs) greift epochenweise statt pro Step.
+stochastic_weight_averaging:
+  _target_: lightning.pytorch.callbacks.StochasticWeightAveraging
+  # Konstante SWA-LR während der Mittelungsphase — in der Größenordnung der
+  # End-LR des Cosine-Schedules (Phase 1 lr=1e-4 → 1e-5 ist ein guter Start).
+  swa_lrs: 1e-5
+  # Mittelung ab 75 % von trainer.max_epochs (Lightning-Default 0.8; float = Anteil).
+  swa_epoch_start: 0.75

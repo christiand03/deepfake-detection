@@ -15,6 +15,8 @@ class Wav2Vec2DataModule(BaseDeepfakeDataModule):
         pin_memory: bool = True,
         label_type: str = "label_audio",
         augment: bool = False,
+        augment_strength: str = "standard",
+        balanced_sampling: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -29,4 +31,5 @@ class Wav2Vec2DataModule(BaseDeepfakeDataModule):
             label_type=self.hparams.label_type,
             # Augmentation is train-only; val/test stay deterministic.
             augment=self.hparams.augment and split == "train",
+            augment_strength=self.hparams.augment_strength,
         )

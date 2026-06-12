@@ -7,6 +7,13 @@ num_labels: 2
 freeze_backbone: true
 gradient_checkpointing: true  # spart VRAM (Recompute im Backward); v. a. in Phase 2 relevant
 
+# Attention-Implementierung fürs TRAINING: "sdpa" (fused Kernels, ~2,8× schneller,
+# O(N²)-Score-Matrix wird nie materialisiert — s. docs/model.md §6.4) oder "eager".
+# Die Gewichte sind unabhängig davon identisch; explain.py / die API laden
+# Checkpoints immer mit attn_implementation="eager" (AttnLRP-Voraussetzung),
+# und explain() wirft einen Fehler, falls nicht.
+attn_implementation: sdpa
+
 # CE-Klassengewichte [real, fake]. Mit segment-genauen Chunk-Labels ist die
 # Fake-Klasse selten (label_video ~7 % der Chunks). "auto" berechnet die
 # Inverse-Frequenz-Gewichte zur Fit-Zeit aus dem Train-Split — immer konsistent
@@ -15,10 +22,31 @@ gradient_checkpointing: true  # spart VRAM (Recompute im Backward); v. a. in Pha
 # Override, null = ungewichtet.
 class_weights: auto
 
+# Label Smoothing (z. B. 0.1) weicht die One-Hot-Targets auf — Standard-ViT-
+# Regularisierung gegen überkonfidente Köpfe. 0.0 = aus.
+label_smoothing: 0.0
+
+# Mixup (Beta(alpha, alpha)-Interpolation von Inputs UND Targets im Batch,
+# z. B. 0.2). Nur im Training aktiv; bei adv_train automatisch übersprungen.
+# 0.0 = aus. Ablation: experiment=train_video_mixup
+mixup_alpha: 0.0
+
 # Layer-wise LR-Decay für Phase 2 (z. B. 0.75): Encoder-Block i trainiert mit
 # lr * decay^(Tiefe - i), der Kopf mit voller lr. null = einheitliche LR.
 # Wirkt nur bei freeze_backbone=false.
 llrd_decay: null
+
+# PEFT: "lora" trainiert Low-Rank-Adapter auf den Attention-Q/V-Projektionen
+# statt des vollen Backbones (Phase-2-Alternative zu Full-Finetuning + LLRD;
+# Optimizer-States schrumpfen von ~94M auf <1M Parameter). Erfordert
+# freeze_backbone=false (PEFT friert die Basisgewichte selbst ein); nicht mit
+# llrd_decay kombinierbar. Der Checkpoint-Export merged die Adapter zurück in
+# die Basisgewichte (plain Modell — API/explain() unverändert).
+# Ablation: experiment=train_video_phase2_lora
+peft_mode: none   # none | lora
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
 
 optimizer:
   _target_: torch.optim.AdamW

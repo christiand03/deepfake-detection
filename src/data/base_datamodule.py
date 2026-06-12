@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING
 
 import h5py
 import numpy as np
+import torch
 from lightning import LightningDataModule
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 if TYPE_CHECKING:
-    from torch.utils.data import Dataset
+    from torch.utils.data import Dataset, Sampler
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +54,14 @@ class BaseDeepfakeDataModule(LightningDataModule):
             self.val_dataset = self._make_dataset("val")
             self.test_dataset = self._make_dataset("test")
 
+    def _train_labels(self) -> np.ndarray:
+        """Per-chunk labels of the train split, read from the SAME column the
+        train dataset serves (``self.hparams.label_type``)."""
+        self.setup()
+        dataset = self.train_dataset
+        with h5py.File(dataset.h5_path, "r") as f:
+            return f[dataset.label_type][:].astype(np.int64)
+
     def compute_class_weights(self, num_classes: int = 2) -> list[float]:
         """Inverse-frequency CE weights from the train split's label column.
 
@@ -67,10 +76,8 @@ class BaseDeepfakeDataModule(LightningDataModule):
             ValueError: If a class is absent from the train split (weights
                         would be infinite — the split is unusable for training).
         """
-        self.setup()
+        labels = self._train_labels()
         dataset = self.train_dataset
-        with h5py.File(dataset.h5_path, "r") as f:
-            labels = f[dataset.label_type][:].astype(np.int64)
         counts = np.bincount(labels, minlength=num_classes)
         if (counts == 0).any():
             msg = (
@@ -89,13 +96,47 @@ class BaseDeepfakeDataModule(LightningDataModule):
         )
         return weights
 
-    def _make_loader(self, dataset: Dataset, *, shuffle: bool, drop_last: bool = False) -> DataLoader:
+    def _train_sampler(self) -> Sampler:
+        """Balanced (inverse-frequency) ``WeightedRandomSampler`` over the train split.
+
+        Alternative to CE ``class_weights``: instead of scaling the loss of the
+        rare fake class (weight ~8.7 at the current ~94/6 ``label_video`` split,
+        which makes per-batch gradients high-variance), each batch is drawn
+        ~50/50 from both classes (``replacement=True``).  One epoch still covers
+        ``len(train)`` draws.  Do NOT combine with ``class_weights`` — that
+        would correct for the imbalance twice.
+        """
+        labels = self._train_labels()
+        counts = np.bincount(labels, minlength=2)
+        if (counts == 0).any():
+            msg = (
+                f"Cannot build a balanced sampler for '{self.train_dataset.label_type}': "
+                f"class counts {counts.tolist()} contain an empty class."
+            )
+            raise ValueError(msg)
+        sample_weights = (1.0 / counts)[labels]
+        return WeightedRandomSampler(
+            weights=torch.from_numpy(sample_weights).double(),
+            num_samples=len(labels),
+            replacement=True,
+        )
+
+    def _make_loader(
+        self,
+        dataset: Dataset,
+        *,
+        shuffle: bool = False,
+        sampler: Sampler | None = None,
+        drop_last: bool = False,
+    ) -> DataLoader:
         return DataLoader(
             dataset=dataset,
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            shuffle=shuffle,
+            # shuffle and sampler are mutually exclusive in DataLoader.
+            shuffle=shuffle if sampler is None else False,
+            sampler=sampler,
             drop_last=drop_last,
             persistent_workers=self.hparams.num_workers > 0,
         )
@@ -104,6 +145,8 @@ class BaseDeepfakeDataModule(LightningDataModule):
         # drop_last keeps every accumulated gradient step at the full effective
         # batch size (Phase 2 uses accumulate_grad_batches with batch_size 1-2)
         # and avoids high-variance trailing mini-batches.
+        if getattr(self.hparams, "balanced_sampling", False):
+            return self._make_loader(self.train_dataset, sampler=self._train_sampler(), drop_last=True)
         return self._make_loader(self.train_dataset, shuffle=True, drop_last=True)
 
     def val_dataloader(self) -> DataLoader:

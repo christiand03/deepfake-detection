@@ -114,6 +114,76 @@ def augment_video_frames(frames: torch.Tensor) -> torch.Tensor:
     return frames.clamp_(0.0, 1.0)
 
 
+def _jpeg_compress_frames(frames: torch.Tensor, quality: int) -> torch.Tensor:
+    """Round-trip every frame through JPEG at the given quality (block/ringing artifacts).
+
+    Args:
+        frames:  ``(T, C, H, W)`` float32 in ``[0, 1]`` (RGB).
+        quality: JPEG quality in ``[1, 100]`` — lower = stronger artifacts.
+    """
+    import cv2
+
+    out = torch.empty_like(frames)
+    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+    for i in range(frames.shape[0]):
+        img = rearrange((frames[i] * 255.0).round().byte(), "c h w -> h w c").numpy()
+        # cv2 works in BGR; flip channels both ways so chroma subsampling hits
+        # the correct planes.
+        _, buf = cv2.imencode(".jpg", img[:, :, ::-1], encode_params)
+        decoded = cv2.imdecode(buf, cv2.IMREAD_COLOR)[:, :, ::-1]
+        out[i] = rearrange(torch.from_numpy(decoded.copy()), "h w c -> c h w").float() / 255.0
+    return out
+
+
+def _gaussian_blur_frames(frames: torch.Tensor, sigma: float) -> torch.Tensor:
+    """Separable Gaussian blur over the spatial dims of ``(T, C, H, W)`` frames."""
+    radius = max(1, int(3.0 * sigma + 0.5))
+    coords = torch.arange(-radius, radius + 1, dtype=torch.float32)
+    kernel = torch.exp(-(coords**2) / (2.0 * sigma**2))
+    kernel = kernel / kernel.sum()
+
+    t = frames.shape[0]
+    x = rearrange(frames, "t c h w -> (t c) 1 h w")
+    x = torch.nn.functional.conv2d(x, rearrange(kernel, "k -> 1 1 1 k"), padding=(0, radius))
+    x = torch.nn.functional.conv2d(x, rearrange(kernel, "k -> 1 1 k 1"), padding=(radius, 0))
+    return rearrange(x, "(t c) 1 h w -> t c h w", t=t)
+
+
+def augment_video_frames_robust(frames: torch.Tensor) -> torch.Tensor:
+    """Standard augmentation + compression-style corruptions (DFDC-winner recipe).
+
+    Simulates the social-media re-encode chain (Phase 3 robustness target):
+    JPEG artifacts, Gaussian blur, and downscale-upscale, each with p = 0.3 and
+    parameters drawn once per chunk (consistent across all frames).  Ranges are
+    deliberately strong — unlike :func:`augment_video_frames` these ARE meant
+    to degrade forgery artifacts so the model cannot rely on fragile
+    high-frequency cues alone.
+
+    Args:
+        frames: ``(T, C, H, W)`` float32 tensor in ``[0, 1]``.
+
+    Returns:
+        Augmented tensor of the same shape, clamped to ``[0, 1]``.
+    """
+    frames = augment_video_frames(frames)
+
+    if torch.rand(()) < 0.3:
+        quality = int(torch.randint(30, 91, ()).item())
+        frames = _jpeg_compress_frames(frames, quality)
+
+    if torch.rand(()) < 0.3:
+        sigma = float(torch.empty(()).uniform_(0.5, 2.0).item())
+        frames = _gaussian_blur_frames(frames, sigma)
+
+    if torch.rand(()) < 0.3:
+        h, w = frames.shape[-2:]
+        scale = float(torch.empty(()).uniform_(0.5, 0.9).item())
+        small = torch.nn.functional.interpolate(frames, scale_factor=scale, mode="bilinear", align_corners=False)
+        frames = torch.nn.functional.interpolate(small, size=(h, w), mode="bilinear", align_corners=False)
+
+    return frames.clamp_(0.0, 1.0)
+
+
 def augment_audio(waveform: torch.Tensor) -> torch.Tensor:
     """Random train-time augmentation for one raw audio chunk.
 
@@ -139,6 +209,54 @@ def augment_audio(waveform: torch.Tensor) -> torch.Tensor:
         waveform = waveform + noise_power.sqrt() * torch.randn_like(waveform)
 
     return waveform
+
+
+def augment_audio_robust(waveform: torch.Tensor) -> torch.Tensor:
+    """Standard audio augmentation + time masking (SpecAugment-style, on the waveform).
+
+    Zeroes one contiguous span of 5–10 % of the chunk with p = 0.5, forcing the
+    model to use evidence from the whole window instead of a single transient —
+    and simulating short dropouts of the social-media transmission chain.
+
+    Args:
+        waveform: ``(T_samples,)`` float32 raw waveform.
+
+    Returns:
+        Augmented waveform of the same shape.
+    """
+    waveform = augment_audio(waveform)
+
+    if torch.rand(()) < 0.5:
+        n = waveform.shape[0]
+        span = int(n * float(torch.empty(()).uniform_(0.05, 0.10).item()))
+        if 0 < span < n:
+            start = int(torch.randint(0, n - span + 1, ()).item())
+            waveform = waveform.clone()
+            waveform[start : start + span] = 0.0
+
+    return waveform
+
+
+# Augmentation strengths: "standard" = identity-shortcut breaking only (the
+# conservative default), "robust" = + social-media corruption simulation.
+_VIDEO_AUGMENT_FNS = {"standard": augment_video_frames, "robust": augment_video_frames_robust}
+_AUDIO_AUGMENT_FNS = {"standard": augment_audio, "robust": augment_audio_robust}
+
+
+def resolve_video_augment_fn(augment: bool, strength: str = "standard"):
+    """Return the video augmentation callable for the configured strength (or ``None``)."""
+    if strength not in _VIDEO_AUGMENT_FNS:
+        msg = f"augment_strength must be one of {sorted(_VIDEO_AUGMENT_FNS)}, got {strength!r}."
+        raise ValueError(msg)
+    return _VIDEO_AUGMENT_FNS[strength] if augment else None
+
+
+def resolve_audio_augment_fn(augment: bool, strength: str = "standard"):
+    """Return the audio augmentation callable for the configured strength (or ``None``)."""
+    if strength not in _AUDIO_AUGMENT_FNS:
+        msg = f"augment_strength must be one of {sorted(_AUDIO_AUGMENT_FNS)}, got {strength!r}."
+        raise ValueError(msg)
+    return _AUDIO_AUGMENT_FNS[strength] if augment else None
 
 
 class BaseHDF5Dataset(Dataset):

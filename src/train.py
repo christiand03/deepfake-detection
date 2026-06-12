@@ -91,6 +91,10 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             )
         log.info("Warm-starting weights from <%s> (fresh optimizer/LR, no resume)", warmstart_ckpt)
         state = torch.load(warmstart_ckpt, map_location="cpu", weights_only=False)["state_dict"]
+        if hasattr(model, "translate_warmstart_state_dict"):
+            # LoRA-wrapped modules nest the backbone keys; remap plain Phase 1
+            # checkpoints so the backbone weights are not silently skipped.
+            state = model.translate_warmstart_state_dict(state)
         result = model.load_state_dict(state, strict=False)
         if result.missing_keys:
             log.warning(

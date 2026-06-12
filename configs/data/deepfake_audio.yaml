@@ -9,3 +9,9 @@ num_workers: 4   # von 8 reduziert: Windows-Spawn-Worker brauchen je ~1,5 GB Hos
 pin_memory: True
 label_type: "label_audio"
 augment: true  # Train-only-Augmentation (Rauschen / Polaritäts-Flip) gegen Sprecher-Memorierung
+# "standard" | "robust": robust ergänzt Time Masking (5-10 % des Chunks genullt,
+# p=0.5) — SpecAugment-Stil gegen Transienten-Shortcuts.
+augment_strength: standard
+# Balanced Sampling (WeightedRandomSampler) statt Shuffle; Alternative zu
+# model.class_weights (dann auf null setzen — nicht doppelt korrigieren!).
+balanced_sampling: false

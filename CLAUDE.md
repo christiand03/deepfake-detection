@@ -72,12 +72,19 @@ python src/train.py experiment=train_multimodal
 # Phase 2 — end-to-end fine-tuning with warm-start
 python src/train.py experiment=train_video model.freeze_backbone=false warmstart_ckpt=checkpoints/videomae.ckpt data.batch_size=2
 
+# Attention mode (model.attn_implementation): training defaults to "sdpa" (~2.8x faster,
+# set in configs/model/*.yaml). Weights are identical either way; switch per run via:
+python src/train.py experiment=train_video model.attn_implementation=eager   # e.g. repro of old eager runs
+# explain.py / explain_audio.py / explain_multimodal.py and the API ALWAYS reload
+# checkpoints with eager (AttnLRP requirement) — never pass sdpa there; explain()
+# raises if the model is not eager. Details: docs/performance_roadmap.md §1.8.
+
 ---
 
 ## Eval & xAI:
 
 python src/eval.py experiment=train_video ckpt_path=checkpoints/videomae.ckpt
-python src/explain.py experiment=train_video ckpt_path=<path>
+python src/explain.py ckpt_path=<path> extras.enforce_tags=false  # loads eager automatically (AttnLRP)
 
 ---
 
@@ -94,4 +101,4 @@ cd frontend && npm run dev                                  # Frontend
 
 # Extended Context Links:
 If you need deeper context on specific domains, read the corresponding markdown files:
-Docs (docs/): project.md, datasets.md, tech.md, model.md, xai.md, mlops.md, code_quality.md, frontend.md, adversarial.md, audit_2026-06.md (Silent-Failure-Audit: Pipeline-Fixes, Daten-Regenerierung, UND die geprüften False Alarms — diese nicht "fixen").
+Docs (docs/): project.md, datasets.md, tech.md, model.md, xai.md, mlops.md, code_quality.md, frontend.md, adversarial.md, audit_2026-06.md (Silent-Failure-Audit: Pipeline-Fixes, Daten-Regenerierung, UND die geprüften False Alarms — diese nicht "fixen"), performance_roadmap.md (umgesetzte SOTA-Features: Balanced Sampling, Mixup/Label-Smoothing, SWA, LoRA, Robust-Augmentation, paralleles Preprocessing, SDPA-Training mit Eager-only-explain()), commands.md (vollständige Befehls-Referenz von Rohdaten bis xAI, inkl. Attention-Modus-Prozess §4.0).

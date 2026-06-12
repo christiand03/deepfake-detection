@@ -184,6 +184,14 @@ class FaceExtractor:
         model_path:  Path to the ``face_landmarker.task`` model bundle.
                      Defaults to ``models/face_landmarker.task`` in the
                      project root (three directories above this file).
+        running_mode: ``"image"`` (default) detects every frame independently;
+                     ``"video"`` uses MediaPipe's VIDEO mode, which tracks the
+                     face between frames — faster and temporally smoother
+                     boxes, but slightly different outputs (only switch
+                     together with a dataset regeneration).
+        frame_interval_ms: Timestamp increment per frame for VIDEO mode
+                     (``1000 / target_fps``; 40 ms at 25 fps).  Ignored in
+                     IMAGE mode.
 
     Example::
 
@@ -192,15 +200,26 @@ class FaceExtractor:
     """
 
     _DEFAULT_MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "face_landmarker.task"
+    _RUNNING_MODES = ("image", "video")
 
     def __init__(
         self,
         crop_scale: float = 1.4,
         target_size: int = 224,
         model_path: str | Path | None = None,
+        running_mode: str = "image",
+        frame_interval_ms: int = 40,
     ) -> None:
         self._crop_scale = crop_scale
         self._target_size = target_size
+        if running_mode not in self._RUNNING_MODES:
+            msg = f"running_mode must be one of {self._RUNNING_MODES}, got {running_mode!r}."
+            raise ValueError(msg)
+        self._running_mode = running_mode
+        self._frame_interval_ms = frame_interval_ms
+        # VIDEO mode requires strictly increasing timestamps across ALL detect
+        # calls on the same landmarker instance (chunks continue the clock).
+        self._timestamp_ms = 0
 
         resolved = Path(model_path) if model_path is not None else self._DEFAULT_MODEL_PATH
         if not resolved.exists():
@@ -215,7 +234,11 @@ class FaceExtractor:
         base_options = mp.tasks.BaseOptions(model_asset_path=str(resolved))
         options = mp.tasks.vision.FaceLandmarkerOptions(
             base_options=base_options,
-            running_mode=mp.tasks.vision.RunningMode.IMAGE,
+            running_mode=(
+                mp.tasks.vision.RunningMode.IMAGE
+                if self._running_mode == "image"
+                else mp.tasks.vision.RunningMode.VIDEO
+            ),
             num_faces=1,
         )
         self._face_landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
@@ -234,7 +257,11 @@ class FaceExtractor:
         """
         img_h, img_w = frame_rgb.shape[:2]
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-        result = self._face_landmarker.detect(mp_image)
+        if self._running_mode == "video":
+            self._timestamp_ms += self._frame_interval_ms
+            result = self._face_landmarker.detect_for_video(mp_image, self._timestamp_ms)
+        else:
+            result = self._face_landmarker.detect(mp_image)
         if not result.face_landmarks:
             return None
         return _landmarks_to_bbox(result.face_landmarks[0], img_h, img_w)

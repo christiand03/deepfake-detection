@@ -1,0 +1,24 @@
+# @package _global_
+
+# Ablation — Balanced Sampling statt CE-Klassengewichten (Phase 1).
+# Der Train-Split ist unter label_video ~94/6 verteilt; class_weights=auto ergibt
+# ein Fake-Gewicht von ~8,7, das die Gradienten pro Batch hochvariant macht.
+# Hier zieht stattdessen ein WeightedRandomSampler ~50/50-Batches (mit Zurücklegen),
+# der Loss bleibt ungewichtet. Vergleichsmetrik: val/auc_video gegen train_video.
+# Run/Launch: experiment=train_video_balanced
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: videomae_balanced
+
+data:
+  balanced_sampling: true
+
+model:
+  class_weights: null  # Sampler korrigiert die Imbalance bereits — nicht doppelt!
+
+tags: ["videomae", "video", "ablation", "balanced-sampling"]

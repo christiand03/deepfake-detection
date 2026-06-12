@@ -5,3 +5,11 @@ num_workers: 2
 pin_memory: True
 label_type: "label_video"  # Video-only-Modell: beobachtbares Ziel (nicht das kombinierte "label")
 augment: true  # Train-only-Augmentation (Flip / Color-Jitter / Random-Crop) gegen Identitäts-Memorierung
+# "standard" | "robust": robust ergänzt JPEG-Artefakte / Gaussian Blur /
+# Downscale-Upscale (je p=0.3) — Social-Media-Simulation als Trainings-
+# Augmentation (DFDC-Gewinner-Rezept, zahlt direkt auf Phase 3 ein).
+augment_strength: standard
+# Balanced Sampling (WeightedRandomSampler): zieht Train-Batches ~50/50 statt der
+# nativen ~94/6-Verteilung. Alternative zu model.class_weights (dann auf null
+# setzen — nicht doppelt korrigieren!). Ablation: experiment=train_video_balanced
+balanced_sampling: false

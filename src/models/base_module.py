@@ -35,6 +35,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import torch
+import torch.nn.functional as F
 from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryAveragePrecision, BinaryF1Score
@@ -67,6 +68,10 @@ class BaseDeepfakeModule(LightningModule):
     def __init__(self) -> None:
         super().__init__()
         self._backbone_frozen = False
+        # (parent, attr) of backbones wrapped by PEFT, and their state-dict key
+        # prefixes — needed for merge_lora() / warm-start key translation.
+        self._lora_wrapped: list[tuple[nn.Module, str]] = []
+        self._lora_prefixes: list[str] = []
         # Cache for class_weights='auto' resolution (computed once per fit).
         self._auto_class_weights: list[float] | None = None
         self._init_metrics()
@@ -115,6 +120,150 @@ class BaseDeepfakeModule(LightningModule):
         training with ``freeze_backbone=False`` + ``warmstart_ckpt=<phase1.ckpt>``.
         """
         self._apply_backbone_freeze(False)
+
+    # Attention implementation (SDPA training / eager explain) --------------------
+
+    @staticmethod
+    def _require_eager_attention(*models: nn.Module) -> None:
+        """Precondition for ``explain()``: every backbone must run eager attention.
+
+        AttnLRP monkey-patches ``eager_attention_forward`` at module level; under
+        SDPA the HF dispatch never calls that function, so the patch would be
+        bypassed and the relevance maps would be silently WRONG (no error, just
+        unfaithful heatmaps).  Raise loudly instead.
+        """
+        for model in models:
+            impl = getattr(getattr(model, "config", None), "_attn_implementation", "eager")
+            if impl != "eager":
+                msg = (
+                    f"explain() requires attn_implementation='eager' but this model runs "
+                    f"{impl!r}. Reload the checkpoint with "
+                    "load_from_checkpoint(..., attn_implementation='eager') — the weights "
+                    "are identical; only the attention dispatch differs."
+                )
+                raise RuntimeError(msg)
+
+    # PEFT / LoRA (Phase 2 alternative to full fine-tuning) -----------------------
+
+    _PEFT_MODES = ("none", "lora")
+
+    def _wrap_lora(
+        self,
+        parent: nn.Module,
+        attr: str,
+        target_modules: tuple[str, ...],
+        prefix: str,
+    ) -> None:
+        """Wrap ``parent.<attr>`` with LoRA adapters when ``peft_mode='lora'``.
+
+        Low-rank adapters on the attention projections train INSTEAD of the
+        full backbone: the base weights stay frozen (PEFT sets their
+        ``requires_grad``), only adapters + task head update — optimizer states
+        shrink from ~94M params to <1M, allowing larger Phase 2 batches.
+
+        Must be called AFTER ``_apply_backbone_freeze``.  No-op for
+        ``peft_mode='none'``.
+
+        Args:
+            parent:         Module holding the backbone attribute.
+            attr:           Attribute name of the backbone on ``parent``.
+            target_modules: Linear-layer names to adapt (HF naming, e.g.
+                            ``("query", "value")`` for ViT-style attention or
+                            ``("q_proj", "v_proj")`` for Wav2Vec2).
+            prefix:         State-dict prefix of the backbone (e.g.
+                            ``"net.videomae"``) for warm-start key translation.
+        """
+        mode = getattr(self.hparams, "peft_mode", "none") or "none"
+        if mode not in self._PEFT_MODES:
+            msg = f"peft_mode must be one of {self._PEFT_MODES}, got {mode!r}."
+            raise ValueError(msg)
+        if mode == "none":
+            return
+        if self.hparams.freeze_backbone:
+            msg = (
+                "peft_mode='lora' requires freeze_backbone=false: PEFT freezes the base "
+                "weights itself and trains only the adapters + head (LoRA replaces the "
+                "Phase 1 freeze, it does not combine with it)."
+            )
+            raise ValueError(msg)
+        if getattr(self.hparams, "llrd_decay", None):
+            msg = "llrd_decay and peft_mode='lora' are mutually exclusive — adapters train at a single LR."
+            raise ValueError(msg)
+
+        from peft import LoraConfig, get_peft_model
+
+        config = LoraConfig(
+            r=int(self.hparams.lora_r),
+            lora_alpha=int(self.hparams.lora_alpha),
+            lora_dropout=float(self.hparams.lora_dropout),
+            target_modules=list(target_modules),
+            bias="none",
+        )
+        backbone = getattr(parent, attr)
+        if getattr(backbone, "is_gradient_checkpointing", False):
+            # With checkpointing active, PEFT re-registers the HF
+            # input-require-grads hook at wrap time, which needs
+            # get_input_embeddings() — Wav2Vec2Model has none (its "embedding"
+            # is the CNN extractor).  Probe first and wrap with checkpointing
+            # off in that case (audio activations are small).
+            try:
+                backbone.get_input_embeddings()
+            except NotImplementedError:
+                backbone.gradient_checkpointing_disable()
+                log.warning(
+                    "Disabled gradient checkpointing on '%s' for LoRA wrapping "
+                    "(backbone has no input embeddings for the require-grads hook).",
+                    prefix,
+                )
+        setattr(parent, attr, get_peft_model(backbone, config))
+        self._lora_wrapped.append((parent, attr))
+        self._lora_prefixes.append(f"{prefix}.")
+
+    def merge_lora(self) -> None:
+        """Merge the LoRA adapters into the base weights and drop the PEFT wrappers.
+
+        Afterwards the module is a plain HF-backed model again — state-dict
+        layout, the eager AttnLRP ``explain()`` path, and API checkpoint loading
+        all match a non-LoRA training.  ``peft_mode`` is reset to ``'none'`` in
+        the hparams so a re-saved checkpoint reloads without peft installed.
+        """
+        for parent, attr in self._lora_wrapped:
+            setattr(parent, attr, getattr(parent, attr).merge_and_unload())
+        self._lora_wrapped = []
+        self._lora_prefixes = []
+        if hasattr(self.hparams, "peft_mode"):
+            self.hparams.peft_mode = "none"
+
+    def translate_warmstart_state_dict(self, state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Remap plain checkpoint keys onto this module's LoRA-wrapped paths.
+
+        PEFT nests a wrapped backbone under ``<prefix>.base_model.model.*`` and
+        the adapted linears under ``*.base_layer.<weight|bias>``.  A Phase 1
+        warm-start checkpoint uses the plain layout, so without remapping every
+        backbone weight would be silently skipped by ``strict=False`` loading.
+        No-op when the module has no LoRA wrappers.
+        """
+        if not self._lora_prefixes:
+            return state
+        own_keys = set(self.state_dict().keys())
+        remapped: dict[str, torch.Tensor] = {}
+        for key, value in state.items():
+            new_key = key
+            if key not in own_keys:
+                for prefix in self._lora_prefixes:
+                    if not key.startswith(prefix):
+                        continue
+                    candidate = f"{prefix}base_model.model.{key[len(prefix) :]}"
+                    if candidate not in own_keys:
+                        # LoRA-targeted linear: original weight lives one level
+                        # deeper, under .base_layer.
+                        stem, _, leaf = candidate.rpartition(".")
+                        candidate = f"{stem}.base_layer.{leaf}"
+                    if candidate in own_keys:
+                        new_key = candidate
+                    break
+            remapped[new_key] = value
+        return remapped
 
     def train(self, mode: bool = True) -> "BaseDeepfakeModule":
         """Set training mode, but keep a frozen backbone in eval mode.
@@ -212,6 +361,55 @@ class BaseDeepfakeModule(LightningModule):
             cw = self._resolve_auto_class_weights()
         # list(...) also converts OmegaConf ListConfig values from Hydra.
         return torch.as_tensor(list(cw), device=self.device, dtype=torch.float32)
+
+    def _classification_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Cross-entropy with the shared ``class_weights`` / ``label_smoothing`` hparams.
+
+        Label smoothing (typically 0.1) softens the one-hot targets — the
+        standard ViT-recipe regularizer against overconfident heads.  Modules
+        without a ``label_smoothing`` hparam fall back to 0.0 (plain CE).
+        """
+        return F.cross_entropy(
+            logits,
+            labels,
+            weight=self._loss_weight(),
+            label_smoothing=float(getattr(self.hparams, "label_smoothing", 0.0) or 0.0),
+        )
+
+    # Mixup -------------------------------------------------------------------------
+
+    def _mixup_training_loss(
+        self,
+        batch: dict[str, torch.Tensor],
+        input_keys: tuple[str, ...],
+        logits_fn: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None:
+        """One mixup training forward, or ``None`` when mixup is inactive.
+
+        Mixes the ``input_keys`` tensors within the batch (same ``lam`` and
+        permutation across keys, so multimodal A/V pairs stay aligned) and
+        returns ``(loss, preds, labels, logits)`` with the standard mixed loss
+        ``lam * CE(y) + (1 - lam) * CE(y[perm])``.  Metrics are reported against
+        the un-permuted labels.  Inactive (returns ``None``) when the
+        ``mixup_alpha`` hparam is 0/absent or the batch has fewer than 2 samples.
+        """
+        alpha = float(getattr(self.hparams, "mixup_alpha", 0.0) or 0.0)
+        labels = batch["labels"]
+        if alpha <= 0.0 or labels.shape[0] < 2:
+            return None
+
+        lam = float(torch.distributions.Beta(alpha, alpha).sample())
+        perm = torch.randperm(labels.shape[0], device=labels.device)
+        mixed = dict(batch)
+        for key in input_keys:
+            x = batch[key]
+            mixed[key] = lam * x + (1.0 - lam) * x[perm]
+
+        logits = logits_fn(mixed)
+        loss = lam * self._classification_loss(logits, labels) + (1.0 - lam) * self._classification_loss(
+            logits, labels[perm]
+        )
+        return loss, torch.argmax(logits, dim=1), labels, logits
 
     # Video-level evaluation -------------------------------------------------------
 

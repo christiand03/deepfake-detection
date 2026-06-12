@@ -17,11 +17,13 @@ ckpt_export_name: videomae_phase2
 # ${paths.export_dir} = DEEPFAKE_CKPT_DIR (W&B-Launch) bzw. ./checkpoints/ (lokal).
 warmstart_ckpt: ${paths.export_dir}/videomae.ckpt
 
-# Full-Finetune (eager VideoMAE): bs 2 mit Gradient Checkpointing; bs 4 spillt (s. docs/model.md §6.3).
+# Full-Finetune unter SDPA: ohne die materialisierte O(N²)-Attention passt bs 6
+# direkt (eager-Obergrenze war bs 2, s. docs/model.md §6.3/§6.4). Effektive
+# Batch-Größe bleibt 6 wie zuvor (2 × 3) — gleiche Trainings-Dynamik, ~3× Durchsatz.
 data:
-  batch_size: 2
+  batch_size: 6
 trainer:
-  accumulate_grad_batches: 3  # 2 × 3 = effektiv 6
+  accumulate_grad_batches: 1  # 6 × 1 = effektiv 6 (wie vorher 2 × 3)
 
 model:
   freeze_backbone: false

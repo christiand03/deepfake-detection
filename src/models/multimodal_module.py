@@ -223,6 +223,13 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         freeze_backbone:  If ``True`` (Phase 1, default), both backbones are frozen
                           and only the fusion head is trained.  ``False`` (Phase 2)
                           fine-tunes end-to-end.
+        attn_implementation: ``"eager"`` (default) or ``"sdpa"``.  SDPA is ~2.8x
+                          faster for training; eager is required for ``explain()``
+                          (AttnLRP).  Weights are identical either way.
+        label_smoothing:  CE label-smoothing factor (e.g. 0.1).  Default: 0.0 (off).
+        mixup_alpha:      Beta(alpha, alpha) mixup on both modalities during
+                          training (same lam/perm for video and audio).
+                          Default: 0.0 (off).
         optimizer:        Partial / callable that returns an ``Optimizer`` when
                           called with ``params=self.parameters()``.
         scheduler:        Optional partial / callable that returns an LR scheduler
@@ -247,8 +254,15 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         fusion_mode: str = "cross_attention",
         freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
+        attn_implementation: str = "eager",
         class_weights: list[float] | None = None,
+        label_smoothing: float = 0.0,
+        mixup_alpha: float = 0.0,
         llrd_decay: float | None = None,
+        peft_mode: str = "none",
+        lora_r: int = 8,
+        lora_alpha: int = 16,
+        lora_dropout: float = 0.05,
         optimizer: Any = None,
         scheduler: Any = None,
         adv_train: bool = False,
@@ -271,11 +285,13 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
 
         # Backbones
         # Use the base models (no classification head) to get hidden-state sequences.
-        # attn_implementation="eager" is required so explain() can monkey-patch the
-        # attention for AttnLRP (SDPA's fused kernels are not patchable) — matches the
-        # unimodal VideoMAEModule / Wav2Vec2DeepfakeModule.
-        self.video_backbone = VideoMAEModel.from_pretrained(video_model_name, attn_implementation="eager")
-        self.audio_backbone = Wav2Vec2Model.from_pretrained(audio_model_name, attn_implementation="eager")
+        # attn_implementation: "sdpa" for training (~2.8x faster), "eager" required so
+        # explain() can monkey-patch the attention for AttnLRP (SDPA's fused kernels
+        # are not patchable) — explain/API paths reload checkpoints with the eager
+        # override; the weights are identical either way.
+        attn = self.hparams.attn_implementation
+        self.video_backbone = VideoMAEModel.from_pretrained(video_model_name, attn_implementation=attn)
+        self.audio_backbone = Wav2Vec2Model.from_pretrained(audio_model_name, attn_implementation=attn)
 
         # Gradient checkpointing for Phase 2 (end-to-end fine-tuning). HF only applies
         # it when a backbone is in train mode, so it is INERT in Phase 1 (frozen ->
@@ -304,6 +320,11 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         # warm-started from a Phase 1 checkpoint). The base class also forces
         # frozen backbones into eval() inside train().
         self._apply_backbone_freeze(self.hparams.freeze_backbone)
+
+        # Optional LoRA (Phase 2 alternative): adapters on both backbones'
+        # attention projections (ViT vs. Wav2Vec2 naming differs).
+        self._wrap_lora(self, "video_backbone", ("query", "value"), prefix="video_backbone")
+        self._wrap_lora(self, "audio_backbone", ("q_proj", "v_proj"), prefix="audio_backbone")
 
     # Backbone freeze hooks (see BaseDeepfakeModule)
 
@@ -404,7 +425,7 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         logits = self.forward(pixel_values, input_values)
         # Optional class weighting — with segment-accurate chunk labels the fake
         # class is rare (~10 % of chunks), so unweighted CE collapses onto "real".
-        loss = F.cross_entropy(logits, labels, weight=self._loss_weight())
+        loss = self._classification_loss(logits, labels)
         preds = torch.argmax(logits, dim=1)
         return loss, preds, labels, logits
 
@@ -490,9 +511,20 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         return {"pixel_values": pv_mixed, "input_values": iv_mixed, "labels": labels}
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        step = None
         if self.hparams.adv_train:
+            # Mixup is skipped on adversarial batches to keep PGD semantics clean.
             batch = self._adversarial_mix(batch)
-        loss, preds, labels, _ = self._model_step(batch)
+        else:
+            # Same lam/perm for both modalities so the A/V pairing stays aligned.
+            step = self._mixup_training_loss(
+                batch,
+                ("pixel_values", "input_values"),
+                lambda b: self.forward(b["pixel_values"], b["input_values"]),
+            )
+        if step is None:
+            step = self._model_step(batch)
+        loss, preds, labels, _ = step
         self.train_loss(loss)
         self.train_acc(preds, labels)
         self.train_f1(preds, labels)
@@ -557,6 +589,7 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
             resolved_target: ``(B,)`` long tensor of explained class indices.
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
+        self._require_eager_attention(self.video_backbone, self.audio_backbone)
 
         # Apply the lxt monkey_patch once to ALL differentiable sub-graphs so that
         # AttnLRP relevance propagates correctly: both eager backbones (attention +

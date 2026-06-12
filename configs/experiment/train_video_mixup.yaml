@@ -1,0 +1,26 @@
+# @package _global_
+
+# Ablation — ViT-Regularisierungs-Rezept (Phase 1): Mixup + Label Smoothing,
+# kombiniert mit Balanced Sampling (statt CE-Gewichten, s. train_video_balanced).
+# Mixup interpoliert Inputs und Targets im Batch (Beta(0.2, 0.2)); Label
+# Smoothing 0.1 verhindert überkonfidente Head-Logits.
+# Vergleichsmetrik: val/auc_video gegen train_video und train_video_balanced.
+# Run/Launch: experiment=train_video_mixup
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: videomae_mixup
+
+data:
+  balanced_sampling: true
+
+model:
+  class_weights: null  # Sampler korrigiert die Imbalance bereits — nicht doppelt!
+  label_smoothing: 0.1
+  mixup_alpha: 0.2
+
+tags: ["videomae", "video", "ablation", "mixup", "label-smoothing"]

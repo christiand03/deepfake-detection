@@ -22,9 +22,15 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         scheduler: Any = None,
         freeze_feature_extractor: bool = True,
         freeze_backbone: bool = True,
+        attn_implementation: str = "eager",
         # Any (not list[float]) because Hydra passes an OmegaConf ListConfig.
         class_weights: Any = None,
+        label_smoothing: float = 0.0,
         llrd_decay: float | None = None,
+        peft_mode: str = "none",
+        lora_r: int = 8,
+        lora_alpha: int = 16,
+        lora_dropout: float = 0.05,
     ) -> None:
         super().__init__()
 
@@ -32,9 +38,11 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         class_weights = self._plain_class_weights(class_weights)
         self.save_hyperparameters(logger=False)
 
-        # Load the pre-trained Wav2Vec2 model for sequence classification (2 Klassen: Echt vs. Fake)
+        # Load the pre-trained Wav2Vec2 model for sequence classification (2 Klassen: Echt vs. Fake).
+        # attn_implementation: "sdpa" for training, "eager" required for explain()/AttnLRP
+        # (explain/API paths reload checkpoints with the eager override).
         self.net = Wav2Vec2ForSequenceClassification.from_pretrained(
-            model_name_or_path, num_labels=2, attn_implementation="eager"
+            model_name_or_path, num_labels=2, attn_implementation=self.hparams.attn_implementation
         )
 
         # Phase 1 (default): freeze the whole Wav2Vec2 backbone, train only the
@@ -43,6 +51,10 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         # Phase 2 (freeze_backbone=False) fine-tunes the transformer while the CNN
         # feature extractor stays frozen (see _enforce_backbone_invariants).
         self._apply_backbone_freeze(self.hparams.freeze_backbone)
+
+        # Optional LoRA (Phase 2 alternative): adapters on the attention
+        # q/v projections (Wav2Vec2 naming); base weights stay frozen via PEFT.
+        self._wrap_lora(self.net, "wav2vec2", ("q_proj", "v_proj"), prefix="net.wav2vec2")
 
     def _backbone_modules(self):
         # self.net.projector + self.net.classifier form the trainable head.
@@ -88,7 +100,7 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         y = batch["labels"]
 
         logits = self.forward(x)
-        loss = F.cross_entropy(logits, y, weight=self._loss_weight())
+        loss = self._classification_loss(logits, y)
         preds = torch.argmax(logits, dim=1)
 
         return loss, preds, y, logits
@@ -179,6 +191,7 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         Must be called in eval mode.
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
+        self._require_eager_attention(self.net)
 
         global _WAV2VEC2_LRP_PATCHED
         if not _WAV2VEC2_LRP_PATCHED:

@@ -3,11 +3,17 @@ from __future__ import annotations
 import h5py
 import torch
 
-from .base_hdf5_dataset import BaseHDF5Dataset, augment_video_frames, normalize_video_frames
+from .base_hdf5_dataset import BaseHDF5Dataset, normalize_video_frames, resolve_video_augment_fn
 
 
 class DeepfakeHDF5Dataset(BaseHDF5Dataset):
-    def __init__(self, h5_path: str, label_type: str = "label_video", augment: bool = False) -> None:
+    def __init__(
+        self,
+        h5_path: str,
+        label_type: str = "label_video",
+        augment: bool = False,
+        augment_strength: str = "standard",
+    ) -> None:
         """
         Args:
             h5_path:    Path to an HDF5 file produced by the preprocessing pipeline.
@@ -20,10 +26,13 @@ class DeepfakeHDF5Dataset(BaseHDF5Dataset):
                         balanced, observable target for the video backbone.
             augment:    Apply random train-time augmentation (flip / color jitter /
                         random resized crop). Enable for the train split only.
+            augment_strength: ``"standard"`` (default) or ``"robust"`` (adds JPEG /
+                        blur / downscale corruptions — social-media simulation).
         """
         super().__init__(h5_path)
         self.label_type = label_type
         self.augment = augment
+        self._augment_fn = resolve_video_augment_fn(augment, augment_strength)
         # Open briefly to read the dataset length; closed immediately.
         with h5py.File(self.h5_path, "r") as f:
             if self.label_type not in f:
@@ -42,7 +51,7 @@ class DeepfakeHDF5Dataset(BaseHDF5Dataset):
         label = f[self.label_type][idx]
 
         # Scale to [0, 1], optionally augment, apply ImageNet normalization.
-        pixel_values = normalize_video_frames(video_chunk, augment_fn=augment_video_frames if self.augment else None)
+        pixel_values = normalize_video_frames(video_chunk, augment_fn=self._augment_fn)
 
         # HuggingFace VideoMAE expects torch.long labels.
         labels = torch.tensor(label, dtype=torch.long)

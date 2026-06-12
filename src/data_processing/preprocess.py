@@ -48,7 +48,9 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import hydra
@@ -274,34 +276,32 @@ def _load_audio_array(wav_path: Path, expected_sample_rate: int = 16_000) -> np.
 # ── Per-video processing ───────────────────────────────────────────────────────
 
 
-def _process_video(
+def _extract_video_chunks(
     row: object,
     cfg: DictConfig,
     extractor: FaceExtractor,
-    writers: dict[str, H5Writer],
-    done_video_ids: set[str],
-) -> tuple[int, int, bool]:
-    """Normalise, chunk, crop and write a single video.
+) -> tuple[list[tuple[np.ndarray, np.ndarray, ChunkMetadata]], int, bool]:
+    """Normalise, chunk, and face-crop a single video WITHOUT writing.
+
+    Pure computation shared by the sequential path (:func:`_process_video`)
+    and the parallel workers (:func:`_extract_video_chunks_worker`) — HDF5
+    writing stays in the main process (single-writer constraint).
 
     Args:
-        row:            A named-tuple row from :func:`_scan_dataset`'s DataFrame.
-        cfg:            Hydra ``DictConfig`` with ``data``, ``preprocessing``,
-                        ``face_extraction`` sub-configs.
-        extractor:      A ready :class:`FaceExtractor` instance.
-        writers:        Mapping of split name → open :class:`H5Writer`.
-        done_video_ids: Set of ``video_id`` values already written in a prior
-                        run (resume logic).
+        row:       A named-tuple row from :func:`_scan_dataset`'s DataFrame
+                   (or any object with the same attributes).
+        cfg:       Hydra ``DictConfig`` with ``data``, ``preprocessing``,
+                   ``face_extraction`` sub-configs.
+        extractor: A ready :class:`FaceExtractor` instance.
 
     Returns:
-        ``(n_written, n_skipped_noface, failed)`` for this video.  ``failed``
-        is ``True`` only for unrecoverable errors (crash, not "no faces") so
-        the caller can distinguish broken inputs from face-less ones.
+        ``(chunks, n_skipped_noface, failed)`` where ``chunks`` is a list of
+        ``(cropped_frames, audio_chunk, metadata)`` triples in temporal order.
+        ``failed`` is ``True`` only for unrecoverable errors (crash, not
+        "no faces") so the caller can distinguish broken inputs from
+        face-less ones.
     """
     video_id: str = row.video_id  # type: ignore[attr-defined]
-
-    if video_id in done_video_ids:
-        log.debug("Skipping already-processed video: %s", video_id)
-        return 0, 0, False
 
     try:
         video_path = Path(row.video_path)  # type: ignore[attr-defined]
@@ -346,9 +346,9 @@ def _process_video(
         n_audio_chunks = len(audio) // audio_samples_per_chunk
         if n_audio_chunks == 0:
             log.warning("Video too short for even one audio chunk, skipping: %s", video_id)
-            return 0, 0, False
+            return [], 0, False
 
-        n_written = 0
+        chunks: list[tuple[np.ndarray, np.ndarray, ChunkMetadata]] = []
         n_skipped_noface = 0
         num_frames: int = cfg.preprocessing.num_frames
         chunk_duration = num_frames / cfg.preprocessing.target_fps
@@ -397,14 +397,89 @@ def _process_video(
                 orig_w=ow,
                 orig_h=oh,
             )
-            writers[split].write_chunk(cropped, audio_chunk, metadata)
-            n_written += 1
+            chunks.append((cropped, audio_chunk, metadata))
 
-        return n_written, n_skipped_noface, False
+        return chunks, n_skipped_noface, False
 
     except Exception:
         log.warning("Unrecoverable error processing %s — skipping", video_id, exc_info=True)
-        return 0, 0, True
+        return [], 0, True
+
+
+def _process_video(
+    row: object,
+    cfg: DictConfig,
+    extractor: FaceExtractor,
+    writers: dict[str, H5Writer],
+    done_video_ids: set[str],
+) -> tuple[int, int, bool]:
+    """Normalise, chunk, crop and write a single video (sequential path).
+
+    Args:
+        row:            A named-tuple row from :func:`_scan_dataset`'s DataFrame.
+        cfg:            Hydra ``DictConfig`` with ``data``, ``preprocessing``,
+                        ``face_extraction`` sub-configs.
+        extractor:      A ready :class:`FaceExtractor` instance.
+        writers:        Mapping of split name → open :class:`H5Writer`.
+        done_video_ids: Set of ``video_id`` values already written in a prior
+                        run (resume logic).
+
+    Returns:
+        ``(n_written, n_skipped_noface, failed)`` for this video.  ``failed``
+        is ``True`` only for unrecoverable errors (crash, not "no faces") so
+        the caller can distinguish broken inputs from face-less ones.
+    """
+    if row.video_id in done_video_ids:  # type: ignore[attr-defined]
+        log.debug("Skipping already-processed video: %s", row.video_id)  # type: ignore[attr-defined]
+        return 0, 0, False
+
+    chunks, n_skipped_noface, failed = _extract_video_chunks(row, cfg, extractor)
+    for cropped, audio_chunk, metadata in chunks:
+        writers[metadata.split].write_chunk(cropped, audio_chunk, metadata)
+    return len(chunks), n_skipped_noface, failed
+
+
+# ── Parallel extraction workers ────────────────────────────────────────────────
+
+# Per-worker-process state, populated once by _init_worker (Windows spawn-safe:
+# top-level function + module-level dict, no closures).
+_WORKER_STATE: dict = {}
+
+
+def _init_worker(cfg: DictConfig) -> None:
+    """Initialise one ``ProcessPoolExecutor`` worker with its own FaceExtractor.
+
+    MediaPipe handles cannot be shared across processes, so every worker
+    builds its own extractor; it is released when the worker process exits.
+    """
+    logging.basicConfig(level=getattr(logging, cfg.run.log_level.upper(), logging.INFO))
+    _WORKER_STATE["cfg"] = cfg
+    _WORKER_STATE["extractor"] = _make_face_extractor(cfg)
+
+
+def _make_face_extractor(cfg: DictConfig) -> FaceExtractor:
+    """Build a FaceExtractor from the ``face_extraction`` / ``preprocessing`` config."""
+    return FaceExtractor(
+        crop_scale=cfg.face_extraction.crop_scale,
+        target_size=cfg.face_extraction.target_size,
+        model_path=cfg.face_extraction.model_path,
+        running_mode=cfg.face_extraction.get("running_mode", "image"),
+        frame_interval_ms=int(round(1000 / cfg.preprocessing.target_fps)),
+    )
+
+
+def _extract_video_chunks_worker(
+    row_dict: dict,
+) -> tuple[str, list[tuple[np.ndarray, np.ndarray, ChunkMetadata]], int, bool]:
+    """Run :func:`_extract_video_chunks` inside a pool worker.
+
+    Takes a plain dict (``itertuples`` rows are dynamically created namedtuples
+    and do not pickle) and returns ``(modify_type, chunks, n_skipped, failed)``
+    so the main process can do the per-category accounting and all writing.
+    """
+    row = SimpleNamespace(**row_dict)
+    chunks, n_skipped, failed = _extract_video_chunks(row, _WORKER_STATE["cfg"], _WORKER_STATE["extractor"])
+    return row_dict["modify_type"], chunks, n_skipped, failed
 
 
 # ── Resume helpers ─────────────────────────────────────────────────────────────
@@ -507,24 +582,42 @@ def preprocess(cfg: DictConfig) -> None:
         per_type_written: dict[str, int] = {}
         per_type_skipped: dict[str, int] = {}
 
-        with FaceExtractor(
-            crop_scale=cfg.face_extraction.crop_scale,
-            target_size=cfg.face_extraction.target_size,
-            model_path=cfg.face_extraction.model_path,
-        ) as extractor:
-            for row in tqdm(df.itertuples(index=False), total=len(df), desc="Videos"):
-                n_written, n_skipped, failed = _process_video(
-                    row=row,
-                    cfg=cfg,
-                    extractor=extractor,
-                    writers=writers,
-                    done_video_ids=done_video_ids,
-                )
-                total_written += n_written
-                total_skipped_noface += n_skipped
-                n_failed_videos += int(failed)
-                per_type_written[row.modify_type] = per_type_written.get(row.modify_type, 0) + n_written
-                per_type_skipped[row.modify_type] = per_type_skipped.get(row.modify_type, 0) + n_skipped
+        num_workers = int(cfg.run.get("num_workers", 0) or 0)
+        if num_workers > 0:
+            # Parallel path: workers extract (FFmpeg/decord/MediaPipe), the main
+            # process does ALL HDF5/CSV writing (single-writer constraint).
+            pending = [row._asdict() for row in df.itertuples(index=False) if row.video_id not in done_video_ids]
+            log.info(
+                "Parallel extraction with %d workers (%d videos to process, %d resumed)",
+                num_workers,
+                len(pending),
+                len(df) - len(pending),
+            )
+            with ProcessPoolExecutor(max_workers=num_workers, initializer=_init_worker, initargs=(cfg,)) as pool:
+                results = pool.map(_extract_video_chunks_worker, pending, chunksize=1)
+                for modify_type, chunks, n_skipped, failed in tqdm(results, total=len(pending), desc="Videos"):
+                    for cropped, audio_chunk, metadata in chunks:
+                        writers[metadata.split].write_chunk(cropped, audio_chunk, metadata)
+                    total_written += len(chunks)
+                    total_skipped_noface += n_skipped
+                    n_failed_videos += int(failed)
+                    per_type_written[modify_type] = per_type_written.get(modify_type, 0) + len(chunks)
+                    per_type_skipped[modify_type] = per_type_skipped.get(modify_type, 0) + n_skipped
+        else:
+            with _make_face_extractor(cfg) as extractor:
+                for row in tqdm(df.itertuples(index=False), total=len(df), desc="Videos"):
+                    n_written, n_skipped, failed = _process_video(
+                        row=row,
+                        cfg=cfg,
+                        extractor=extractor,
+                        writers=writers,
+                        done_video_ids=done_video_ids,
+                    )
+                    total_written += n_written
+                    total_skipped_noface += n_skipped
+                    n_failed_videos += int(failed)
+                    per_type_written[row.modify_type] = per_type_written.get(row.modify_type, 0) + n_written
+                    per_type_skipped[row.modify_type] = per_type_skipped.get(row.modify_type, 0) + n_skipped
 
     finally:
         for writer in writers.values():
