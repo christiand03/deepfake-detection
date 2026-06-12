@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -50,6 +51,9 @@ log = logging.getLogger(__name__)
 NUM_FRAMES = 16
 IMG_SIZE = 224
 AUDIO_SAMPLE_RATE = 16_000
+TARGET_FPS = 25
+# 16 frames / 25 fps * 16 kHz — the fixed audio window length used in training.
+AUDIO_SAMPLES_PER_CHUNK = 10_240
 
 _frame_transform = transforms.Compose(
     [
@@ -165,6 +169,18 @@ def models_status() -> dict:
 # ── HDF5 loading ─────────────────────────────────────────────────────────────
 
 
+def _normalize_uint8_frames(frames_np: np.ndarray) -> torch.Tensor:
+    """Convert uint8 ``(..., C, H, W)`` frames to ImageNet-normalised float32.
+
+    The exact normalisation the training DataLoader applies to HDF5 chunks:
+    uint8 → float32 ``[0, 1]`` → ``(x - mean) / std``.
+    """
+    frames = frames_np.astype(np.float32) / 255.0
+    mean = np.array(IMAGENET_MEAN, dtype=np.float32)[:, None, None]  # (3, 1, 1)
+    std = np.array(IMAGENET_STD, dtype=np.float32)[:, None, None]
+    return torch.from_numpy((frames - mean) / std)
+
+
 def _load_from_hdf5(h5_path: Path, h5_index: int) -> torch.Tensor:
     """Load and normalise a preprocessed video chunk from an HDF5 file.
 
@@ -178,11 +194,7 @@ def _load_from_hdf5(h5_path: Path, h5_index: int) -> torch.Tensor:
 
     with h5py.File(h5_path, "r") as f:
         frames_np: np.ndarray = f["video"][h5_index]  # (T, C, H, W) uint8
-    frames = frames_np.astype(np.float32) / 255.0
-    mean = np.array(IMAGENET_MEAN, dtype=np.float32)[:, None, None]  # (3, 1, 1)
-    std = np.array(IMAGENET_STD, dtype=np.float32)[:, None, None]
-    frames = (frames - mean) / std  # broadcast over T: (T, C, H, W)
-    return torch.from_numpy(frames).unsqueeze(0)  # (1, T, C, H, W)
+    return _normalize_uint8_frames(frames_np).unsqueeze(0)  # (1, T, C, H, W)
 
 
 # ── Heatmap uprojection ───────────────────────────────────────────────────────
@@ -227,14 +239,170 @@ def _upproject_heatmap(
 
 # ── Video preprocessing ───────────────────────────────────────────────────────
 
+# Lazy FaceExtractor singleton — MediaPipe detectors are NOT thread-safe, so all
+# detection calls are serialised through _face_extractor_lock.
+_face_extractor = None
+_face_extractor_lock = threading.Lock()
+
+
+def _get_face_extractor():
+    """Return the shared :class:`FaceExtractor`; initialise it on first call.
+
+    Raises:
+        ModelNotReadyError: If the MediaPipe ``face_landmarker.task`` bundle is
+                            missing (translated to HTTP 503 by the routers).
+    """
+    global _face_extractor
+    if _face_extractor is None:
+        with _face_extractor_lock:
+            if _face_extractor is None:  # re-check after acquiring lock
+                from src.data_processing.face_extractor import FaceExtractor
+
+                try:
+                    _face_extractor = FaceExtractor()
+                except FileNotFoundError as exc:
+                    raise ModelNotReadyError(str(exc)) from exc
+                log.info("FaceExtractor initialised for upload preprocessing.")
+    return _face_extractor
+
+
+def _ensure_target_fps(clip_path: Path) -> Path:
+    """Return a 25-fps version of *clip_path* — the source itself when compliant.
+
+    Mirrors the offline preprocessing policy: sources already at the target fps
+    are read directly (no second compression generation); off-fps sources are
+    re-encoded once with crf 18 into a cached ``normalized/`` sibling.
+    """
+    from src.data_processing.ffmpeg_utils import normalize_av, probe_video
+
+    fps = float(probe_video(clip_path)["fps"])
+    if abs(fps - TARGET_FPS) < 0.01:  # noqa: PLR2004
+        return clip_path
+    normalized_path = clip_path.parent / "normalized" / clip_path.name
+    if not normalized_path.exists():
+        log.info("Upload at %.3f fps != %d — normalising %s", fps, TARGET_FPS, clip_path.name)
+        normalize_av(clip_path, normalized_path, target_fps=TARGET_FPS, sample_rate=AUDIO_SAMPLE_RATE, crf=18)
+    return normalized_path
+
+
+@dataclass(frozen=True)
+class _PreparedClip:
+    """Training-identical chunks of an uploaded clip (see _prepare_uploaded_video)."""
+
+    chunks: torch.Tensor  # (M, 16, 3, 224, 224) ImageNet-normalised float32
+    chunk_indices: list[int]  # temporal index of each kept chunk in the 25-fps video
+    crop_box: tuple[int, int, int, int]  # per-chunk boxes averaged — for display/upprojection
+    orig_w: int
+    orig_h: int
+    video_path: Path  # the 25-fps file the chunks were read from
+
+
+def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
+    """Preprocess an uploaded clip exactly like the training pipeline.
+
+    25-fps normalisation → consecutive non-overlapping 16-frame chunks →
+    MediaPipe face crop per chunk (temporally smoothed, 1.4×-scaled, square)
+    → uint8 → ImageNet normalisation.  Face-less chunks are skipped, matching
+    training.  Capped at ``_MAX_FULL_FRAMES // NUM_FRAMES`` chunks.
+
+    Returns:
+        A :class:`_PreparedClip`, or ``None`` when no chunk contains a
+        detectable face (callers fall back to the legacy full-frame path).
+    """
+    from src.data_processing.face_extractor import iter_video_chunks
+
+    video_path = _ensure_target_fps(clip_path)
+    extractor = _get_face_extractor()
+
+    cropped_chunks: list[np.ndarray] = []
+    chunk_indices: list[int] = []
+    boxes: list[tuple[int, int, int, int]] = []
+    orig_w = orig_h = 0
+    max_chunks = _MAX_FULL_FRAMES // NUM_FRAMES
+
+    for chunk_idx, frames in enumerate(iter_video_chunks(video_path, num_frames=NUM_FRAMES)):
+        if chunk_idx >= max_chunks:
+            break
+        with _face_extractor_lock:
+            result = extractor(frames)
+        if result is None:
+            continue
+        cropped, (x1, y1, x2, y2, ow, oh) = result
+        cropped_chunks.append(cropped)  # (16, 3, 224, 224) uint8
+        chunk_indices.append(chunk_idx)
+        boxes.append((x1, y1, x2, y2))
+        orig_w, orig_h = ow, oh
+
+    if not cropped_chunks:
+        return None
+
+    chunks = _normalize_uint8_frames(np.stack(cropped_chunks))  # (M, 16, 3, 224, 224)
+    box_arr = np.array(boxes, dtype=np.float32).mean(axis=0)
+    crop_box = tuple(int(round(v)) for v in box_arr)
+    return _PreparedClip(
+        chunks=chunks,
+        chunk_indices=chunk_indices,
+        crop_box=crop_box,  # type: ignore[arg-type]
+        orig_w=orig_w,
+        orig_h=orig_h,
+        video_path=video_path,
+    )
+
+
+def _chunked_fake_prob(model: VideoMAEModule, chunks: torch.Tensor) -> float:
+    """Max-pooled fake probability over per-chunk forward passes.
+
+    The same aggregation the evaluation uses (``reduce="amax"`` per video in
+    ``BaseDeepfakeModule._video_eval_epoch_end``): a video is as fake as its
+    most suspicious chunk.  Chunks run one at a time to stay VRAM-safe.
+    """
+    fake_prob = 0.0
+    with torch.no_grad():
+        for chunk in chunks:
+            pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
+            logits = model.net(pixel_values=pv).logits  # (1, 2)
+            fake_prob = max(fake_prob, torch.softmax(logits, dim=-1)[0, 1].item())
+    return fake_prob
+
+
+def _preprocess_video_chunked(clip_path: Path) -> tuple[torch.Tensor, int]:
+    """Return one training-identical chunk tensor for single-chunk consumers.
+
+    Used by the adversarial / UAP paths, which operate on a single
+    ``(1, 16, 3, 224, 224)`` input.  Returns the FIRST face chunk together
+    with its temporal chunk index (for audio alignment); falls back to the
+    legacy evenly-sampled full-frame tensor (index ``-1``) when no face is
+    found.
+    """
+    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is not None:
+        return prepared.chunks[0].unsqueeze(0), prepared.chunk_indices[0]
+    log.warning(
+        "No face detected in %s — falling back to full-frame sampling; the input is out-of-distribution.",
+        clip_path.name,
+    )
+    return _preprocess_video_fullframe(clip_path), -1
+
 
 def _preprocess_video(clip_path: Path) -> torch.Tensor:
-    """Load and return a VideoMAE-compatible pixel tensor.
+    """Load one VideoMAE-compatible pixel tensor for an uploaded clip.
 
-    Samples ``NUM_FRAMES`` frames evenly, applies ImageNet normalisation.
+    Training-identical preprocessing (25 fps → consecutive 16-frame chunk →
+    face crop); see :func:`_preprocess_video_chunked` for the fallback rules.
 
     Returns:
         Float tensor of shape ``(1, T, C, H, W)``.
+    """
+    pixel_values, _ = _preprocess_video_chunked(clip_path)
+    return pixel_values
+
+
+def _preprocess_video_fullframe(clip_path: Path) -> torch.Tensor:
+    """Legacy full-frame preprocessing — fallback when no face is detectable.
+
+    Samples ``NUM_FRAMES`` frames evenly over the whole clip and resizes the
+    full frames; the result is out-of-distribution for the face-crop-trained
+    models and only used so degraded/face-less clips still get a response.
     """
     try:
         import decord
@@ -445,20 +613,64 @@ def _compute_heatmaps_chunked(
 # ── Video inference ───────────────────────────────────────────────────────────
 
 
-def run_video_inference(
-    clip_path: Path,
+def _video_result_with_heatmaps(
+    model: VideoMAEModule,
+    verdict: Literal["FAKE", "REAL"],
+    confidence: float,
+    video_path: Path,
+    crop_box: tuple[int, int, int, int],
+    orig_w: int,
+    orig_h: int,
 ) -> dict:
-    """Run video deepfake detection with per-frame AttnLRP heatmaps.
+    """Build the full analysis dict: face-cropped heatmaps + upprojection + cropBox.
 
-    Args:
-        clip_path: Path to the MP4 clip.
+    Shared tail of the H5-registry and upload paths: loads every frame of
+    *video_path* with the face crop applied, computes per-chunk AttnLRP
+    heatmaps, derives per-frame scores, and upprojects the 224×224 heatmaps
+    back into the original frame canvas.
+    """
+    cx1, cy1, cx2, cy2 = crop_box
 
-    Returns:
-        Dict with keys: verdict, confidence, perFrameScores, heatmapFrames,
-        anomalyRegions.
+    all_frames = _load_all_frames_cropped(video_path, cx1, cy1, cx2, cy2)
+    n_frames = all_frames.shape[0]
 
-    Raises:
-        ModelNotReadyError: If the VideoMAE checkpoint is not configured.
+    heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
+
+    # Per-frame scores: mean absolute LRP relevance
+    per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
+
+    # Upproject each 224×224 heatmap to the original full-frame resolution
+    heatmap_frames: list[str] = []
+    for i in range(n_frames):
+        full_frame = _upproject_heatmap(heatmap_np[i], cx1, cy1, cx2, cy2, orig_w, orig_h)
+        alpha_mask = np.abs(full_frame) > 1e-6
+        heatmap_frames.append(_array_to_data_uri(full_frame, alpha_mask=alpha_mask))
+
+    anomaly_regions = _extract_anomaly_regions(heatmap_np)
+
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "perFrameScores": per_frame_scores,
+        "heatmapFrames": heatmap_frames,
+        "anomalyRegions": anomaly_regions,
+        "cropBox": {
+            "x1": cx1,
+            "y1": cy1,
+            "x2": cx2,
+            "y2": cy2,
+            "origW": orig_w,
+            "origH": orig_h,
+        },
+    }
+
+
+def _run_video_inference_fullframe(clip_path: Path) -> dict:
+    """Legacy full-frame analysis — fallback when no face is detectable.
+
+    Evenly samples 16 uncropped frames for the verdict and computes heatmaps
+    on full frames.  Out-of-distribution for the face-crop-trained model;
+    only used so face-less / heavily degraded clips still get a response.
     """
     model = get_video_model()
 
@@ -466,7 +678,7 @@ def run_video_inference(
     all_frames = _load_all_frames(clip_path)  # (N, C, H, W)
     n_frames = all_frames.shape[0]
 
-    # Verdict/confidence: single pass on 16 evenly-sampled frames (fast)
+    # Verdict/confidence: single pass on 16 evenly-sampled frames
     indices = np.linspace(0, n_frames - 1, NUM_FRAMES, dtype=int).tolist()
     pixel_values = all_frames[indices].unsqueeze(0).to(_device)  # (1, 16, C, H, W)
     with torch.no_grad():
@@ -491,6 +703,52 @@ def run_video_inference(
         "heatmapFrames": heatmap_frames,
         "anomalyRegions": anomaly_regions,
     }
+
+
+def run_video_inference(
+    clip_path: Path,
+) -> dict:
+    """Run video deepfake detection with per-frame AttnLRP heatmaps.
+
+    Training-identical preprocessing: 25-fps normalisation, MediaPipe face
+    crops, consecutive 16-frame chunks; the verdict is the max-pooled fake
+    probability over all chunks (the evaluation aggregation).  Falls back to
+    legacy full-frame inference (with a warning) when no face is detectable.
+
+    Args:
+        clip_path: Path to the MP4 clip.
+
+    Returns:
+        Dict with keys: verdict, confidence, perFrameScores, heatmapFrames,
+        anomalyRegions, and cropBox (absent in the no-face fallback).
+
+    Raises:
+        ModelNotReadyError: If the VideoMAE checkpoint is not configured.
+    """
+    model = get_video_model()
+
+    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is None:
+        log.warning(
+            "No face detected in %s — falling back to full-frame inference; "
+            "the result is out-of-distribution for the face-crop-trained model.",
+            clip_path.name,
+        )
+        return _run_video_inference_fullframe(clip_path)
+
+    fake_prob = _chunked_fake_prob(model, prepared.chunks)
+    verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
+    confidence = fake_prob if verdict == "FAKE" else 1.0 - fake_prob
+
+    return _video_result_with_heatmaps(
+        model,
+        verdict,
+        confidence,
+        prepared.video_path,
+        prepared.crop_box,
+        prepared.orig_w,
+        prepared.orig_h,
+    )
 
 
 def run_video_inference_h5(
@@ -529,52 +787,26 @@ def run_video_inference_h5(
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     confidence = fake_prob if verdict == "FAKE" else probs[0].item()
 
-    cx1, cy1 = h5_metadata.crop_x1, h5_metadata.crop_y1
-    cx2, cy2 = h5_metadata.crop_x2, h5_metadata.crop_y2
-    ow, oh = h5_metadata.orig_w, h5_metadata.orig_h
-
-    # Heatmap: load every frame from the source video with the same face-crop
-    # applied, then process in 16-frame windows to cover the full duration.
-    all_frames = _load_all_frames_cropped(h5_metadata.video_path, cx1, cy1, cx2, cy2)
-    n_frames = all_frames.shape[0]
-
-    heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
-
-    # Per-frame scores: mean absolute LRP relevance
-    per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
-
-    # Upproject each 224×224 heatmap to the original full-frame resolution
-    heatmap_frames: list[str] = []
-    for i in range(n_frames):
-        full_frame = _upproject_heatmap(heatmap_np[i], cx1, cy1, cx2, cy2, ow, oh)
-        alpha_mask = np.abs(full_frame) > 1e-6
-        heatmap_frames.append(_array_to_data_uri(full_frame, alpha_mask=alpha_mask))
-
-    anomaly_regions = _extract_anomaly_regions(heatmap_np)
-
-    return {
-        "verdict": verdict,
-        "confidence": confidence,
-        "perFrameScores": per_frame_scores,
-        "heatmapFrames": heatmap_frames,
-        "anomalyRegions": anomaly_regions,
-        "cropBox": {
-            "x1": cx1,
-            "y1": cy1,
-            "x2": cx2,
-            "y2": cy2,
-            "origW": ow,
-            "origH": oh,
-        },
-    }
+    # Heatmaps: every source frame with the stored face crop applied, AttnLRP
+    # per 16-frame window, upprojected into the original frame canvas.
+    return _video_result_with_heatmaps(
+        model,
+        verdict,
+        confidence,
+        Path(h5_metadata.video_path),
+        (h5_metadata.crop_x1, h5_metadata.crop_y1, h5_metadata.crop_x2, h5_metadata.crop_y2),
+        h5_metadata.orig_w,
+        h5_metadata.orig_h,
+    )
 
 
 def run_video_inference_fast(clip_path: Path) -> tuple[str, float]:
     """Run video deepfake detection without heatmap generation.
 
     Intended for batch evaluation (e.g. robustness / adversarial sweeps) where
-    per-frame AttnLRP heatmaps are not required.  Significantly faster than
-    :func:`run_video_inference` because ``_compute_heatmaps_chunked`` is skipped.
+    per-frame AttnLRP heatmaps are not required.  Uses the same
+    training-identical chunked preprocessing and max-pool aggregation as
+    :func:`run_video_inference`, with the same no-face full-frame fallback.
 
     Args:
         clip_path: Path to the MP4 clip.
@@ -587,16 +819,25 @@ def run_video_inference_fast(clip_path: Path) -> tuple[str, float]:
         ModelNotReadyError: If the VideoMAE checkpoint is not configured.
     """
     model = get_video_model()
-    all_frames = _load_all_frames(clip_path)  # (N, C, H, W)
-    n_frames = all_frames.shape[0]
-    indices = np.linspace(0, n_frames - 1, NUM_FRAMES, dtype=int).tolist()
-    pixel_values = all_frames[indices].unsqueeze(0).to(_device)  # (1, 16, C, H, W)
-    with torch.no_grad():
-        logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
-    probs = torch.softmax(logits, dim=-1)[0]
-    fake_prob = probs[1].item()
+
+    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is not None:
+        fake_prob = _chunked_fake_prob(model, prepared.chunks)
+    else:
+        log.warning(
+            "No face detected in %s — falling back to full-frame sampling; the input is out-of-distribution.",
+            clip_path.name,
+        )
+        all_frames = _load_all_frames(clip_path)  # (N, C, H, W)
+        n_frames = all_frames.shape[0]
+        indices = np.linspace(0, n_frames - 1, NUM_FRAMES, dtype=int).tolist()
+        pixel_values = all_frames[indices].unsqueeze(0).to(_device)  # (1, 16, C, H, W)
+        with torch.no_grad():
+            logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
+        fake_prob = torch.softmax(logits, dim=-1)[0, 1].item()
+
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
-    confidence = fake_prob if verdict == "FAKE" else probs[0].item()
+    confidence = fake_prob if verdict == "FAKE" else 1.0 - fake_prob
     return verdict, confidence
 
 
@@ -729,6 +970,41 @@ def _compute_word_segments(
 
 # ── Audio inference ───────────────────────────────────────────────────────────
 
+_AUDIO_WINDOW_BATCH = 32  # windows per forward pass — VRAM-safe for long uploads
+
+
+def _windowed_audio_fake_prob(model: Wav2Vec2DeepfakeModule, waveform_np: np.ndarray) -> float:
+    """Max-pooled fake probability over 10,240-sample windows (training format).
+
+    Training fed Wav2Vec2 fixed 0.64-s windows; feeding a whole multi-second
+    waveform shifts the mean-pooled feature distribution (train/serve skew).
+    The waveform is split into non-overlapping training-length windows, each
+    z-scored individually (matching ``normalize_audio``), and the verdict is
+    the max window probability — the evaluation aggregation.  A trailing
+    remainder shorter than one window is dropped (same as preprocessing);
+    clips shorter than one window fall back to a whole-waveform pass.
+    """
+    n_windows = len(waveform_np) // AUDIO_SAMPLES_PER_CHUNK
+    if n_windows == 0:
+        t = torch.from_numpy(waveform_np.copy()).unsqueeze(0).to(_device)  # (1, T)
+        t = (t - t.mean()) / torch.sqrt(t.var() + 1e-7)
+        with torch.no_grad():
+            logits = model.net(t).logits  # (1, 2)
+        return torch.softmax(logits, dim=-1)[0, 1].item()
+
+    windows_np = waveform_np[: n_windows * AUDIO_SAMPLES_PER_CHUNK].reshape(n_windows, AUDIO_SAMPLES_PER_CHUNK)
+    windows = torch.from_numpy(windows_np.copy())  # (W, 10240)
+    # Per-window z-score — matches normalize_audio's per-sample standardisation.
+    windows = (windows - windows.mean(dim=1, keepdim=True)) / torch.sqrt(windows.var(dim=1, keepdim=True) + 1e-7)
+
+    fake_prob = 0.0
+    with torch.no_grad():
+        for start in range(0, n_windows, _AUDIO_WINDOW_BATCH):
+            batch = windows[start : start + _AUDIO_WINDOW_BATCH].to(_device)
+            logits = model.net(batch).logits  # (B, 2)
+            fake_prob = max(fake_prob, torch.softmax(logits, dim=-1)[:, 1].max().item())
+    return fake_prob
+
 
 def run_audio_inference(clip_path: Path) -> dict | None:
     """Run Wav2Vec2 deepfake detection with AttnLRP on a clip's audio track.
@@ -746,15 +1022,13 @@ def run_audio_inference(clip_path: Path) -> dict | None:
         return None
 
     model = get_audio_model()
+    # Verdict: max-pooled probability over training-length 0.64-s windows.
+    fake_prob = _windowed_audio_fake_prob(model, waveform_np)
+
+    # Whole-waveform tensor for the visualization-only explain() pass below.
     waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
     # Apply same per-sample z-score normalization as DeepfakeAudioHDF5Dataset
     waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / torch.sqrt(waveform_tensor.var() + 1e-7)
-
-    with torch.no_grad():
-        logits = model.net(waveform_tensor).logits  # (1, 2)
-
-    probs = torch.softmax(logits, dim=-1)[0]
-    fake_prob = probs[1].item()
 
     model.eval()
     try:
@@ -784,7 +1058,7 @@ def run_audio_inference(clip_path: Path) -> dict | None:
     word_segments = _compute_word_segments(waveform_np, sample_rate, relevance, cache_dir)
 
     audio_verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
-    audio_confidence = fake_prob if audio_verdict == "FAKE" else probs[0].item()
+    audio_confidence = fake_prob if audio_verdict == "FAKE" else 1.0 - fake_prob
 
     return {
         "verdict": audio_verdict,
@@ -820,14 +1094,10 @@ def run_audio_inference_score(clip_path: Path) -> tuple[str, float] | None:
         model = get_audio_model()
     except ModelNotReadyError:
         return None
-    waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
-    waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / torch.sqrt(waveform_tensor.var() + 1e-7)
-    with torch.no_grad():
-        logits = model.net(waveform_tensor).logits  # (1, 2)
-    probs = torch.softmax(logits, dim=-1)[0]
-    fake_prob = probs[1].item()
+    # Verdict: max-pooled probability over training-length 0.64-s windows.
+    fake_prob = _windowed_audio_fake_prob(model, waveform_np)
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
-    confidence = fake_prob if verdict == "FAKE" else probs[0].item()
+    confidence = fake_prob if verdict == "FAKE" else 1.0 - fake_prob
     return verdict, confidence
 
 
@@ -856,16 +1126,14 @@ def _run_audio_for_robustness(clip_path: Path) -> dict | None:
     except ModelNotReadyError:
         return None
 
+    # Verdict: max-pooled probability over training-length 0.64-s windows.
+    fake_prob = _windowed_audio_fake_prob(model, waveform_np)
+    audio_verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
+    confidence = fake_prob if audio_verdict == "FAKE" else 1.0 - fake_prob
+
+    # Whole-waveform tensor for the visualization-only explain() pass below.
     waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
     waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / torch.sqrt(waveform_tensor.var() + 1e-7)
-
-    with torch.no_grad():
-        logits = model.net(waveform_tensor).logits  # (1, 2)
-
-    probs = torch.softmax(logits, dim=-1)[0]
-    fake_prob = probs[1].item()
-    audio_verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
-    confidence = fake_prob if audio_verdict == "FAKE" else probs[0].item()
 
     model.eval()
     try:
@@ -1331,14 +1599,25 @@ def run_multimodal_adversarial_inference(
     model = get_multimodal_model()
 
     # ── Preprocessing ─────────────────────────────────────────────────────────
-    pixel_values = _preprocess_video(clip_path).to(_device)
+    pixel_values, chunk_idx = _preprocess_video_chunked(clip_path)
+    pixel_values = pixel_values.to(_device)
 
     try:
         waveform_np, sample_rate = _load_audio(clip_path)
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"Audio extraction failed for {clip_path.name}: {exc}") from exc
 
-    waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)
+    # Slice the audio window aligned to the attacked video chunk (chunk i covers
+    # samples [i*10240, (i+1)*10240)) so the attack runs on a training-identical
+    # (video, audio) pair. Falls back to the whole waveform when the chunk came
+    # from the no-face fallback or the slice is incomplete.
+    if chunk_idx >= 0:
+        start = chunk_idx * AUDIO_SAMPLES_PER_CHUNK
+        window = waveform_np[start : start + AUDIO_SAMPLES_PER_CHUNK]
+        if len(window) == AUDIO_SAMPLES_PER_CHUNK:
+            waveform_np = window
+
+    waveform_tensor = torch.from_numpy(waveform_np.copy()).unsqueeze(0).to(_device)
     # Z-score normalise (Wav2Vec2 expects values close to zero-mean unit-variance).
     waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / (waveform_tensor.std() + 1e-7)
 

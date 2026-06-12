@@ -517,10 +517,14 @@ auf die Platte (~650 GB nötig, 429 GB frei).
 
 > **Konsequenz (erneut):** Alle vor 2026-06-11 trainierten Checkpoints stammen von Daten mit
 > verzerrten Crops, doppelter Kompression und Boundary-Labelrauschen — Phase 1 + Phase 2 +
-> Ablationen müssen auf den regenerierten Daten neu laufen. **Bekannte offene Limitation:**
-> Der API-Upload-Pfad (`src/api/inference.py::_preprocess_video`) hat Train/Serve-Skew
-> (kein Face-Crop, gleichverteiltes statt konsekutives Frame-Sampling) — bewusst aus dem
-> Scope genommen, Details in `docs/audit_2026-06.md` §1.9; für Demos den H5-Registry-Pfad nutzen.
+> Ablationen müssen auf den regenerierten Daten neu laufen.
+>
+> **Nachtrag 2026-06-12:** Der zunächst zurückgestellte Train/Serve-Skew im API-Upload-Pfad
+> (Audit §1.9) ist behoben: Uploads durchlaufen jetzt trainingsidentisches Preprocessing
+> (fps-Policy → MediaPipe-Face-Chunks → Max-Pooling der Chunk-Wahrscheinlichkeiten; Audio
+> in 0,64-s-Fenstern), inkl. `cropBox`/Heatmap-Reprojektion wie im H5-Pfad und
+> Full-Frame-Fallback (WARNING) für gesichtslose Clips. Paritäts-verifiziert gegen den
+> H5-Pfad (identische Max-Fake-Prob auf 12 Chunks). Details: `docs/audit_2026-06.md` §1.9.
 
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"
