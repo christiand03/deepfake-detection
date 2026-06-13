@@ -1,0 +1,21 @@
+# @package _global_
+
+# Ablation — Robustheits-Augmentation (Phase 1, Multimodal; zahlt auf Phase 3 ein):
+# zusätzlich zur Standard-Augmentation kommen Social-Media-Korruptionen — Video:
+# JPEG-Artefakte / Gaussian Blur / Downscale-Upscale (je p=0.3); Audio: Time
+# Masking (p=0.5). Erwartung: leicht schlechtere Clean-AUC, robuster unter den
+# Phase-3-Degradationen.
+# Run/Launch: experiment=train_multimodal_robust
+
+defaults:
+  - override /data: deepfake_multimodal
+  - override /model: multimodal
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: multimodal_robust
+
+data:
+  augment_strength: robust
+
+tags: ["multimodal", "fusion", "ablation", "robust-augmentation", "phase3"]

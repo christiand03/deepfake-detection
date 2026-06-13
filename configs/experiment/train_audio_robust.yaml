@@ -1,0 +1,21 @@
+# @package _global_
+
+# Ablation — Robustheits-Augmentation (Phase 1, Audio; zahlt auf Phase 3 ein):
+# zusätzlich zur Standard-Augmentation (Rauschen / Polaritäts-Flip) kommt Time
+# Masking (5-10 % des Chunks genullt, p=0.5, SpecAugment-Stil) gegen
+# Transienten-Shortcuts. Erwartung: leicht schlechtere Clean-AUC, robuster
+# unter den Phase-3-Degradationen (Audio-Bitrate-Sweep).
+# Run/Launch: experiment=train_audio_robust
+
+defaults:
+  - override /data: deepfake_audio
+  - override /model: wav2vec2
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: wav2vec2_robust
+
+data:
+  augment_strength: robust
+
+tags: ["wav2vec2", "audio", "ablation", "robust-augmentation", "phase3"]

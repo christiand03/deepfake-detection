@@ -195,12 +195,28 @@ amortisieren. Billige Dekodierung + großer Batch (viele kleine Items/Batch) →
 
 ### Ablauf der Ablationen (vom Nutzer zu starten)
 
+Für alle drei Modellfamilien existieren fertige Ablations-Experiment-Configs nach
+demselben Muster (`{video|audio|multimodal}` → `train_video_*`, `train_audio_*`,
+`train_multimodal_*`):
+
 ```bash
-# lokal
+# Video
 python src/train.py experiment=train_video_balanced
 python src/train.py experiment=train_video_mixup
 python src/train.py experiment=train_video_robust
 python src/train.py experiment=train_video_phase2_lora   # braucht videomae.ckpt (Phase 1)
+
+# Audio (Wav2Vec2 hat kein Mixup → train_audio_smoothing statt _mixup, s. §1.2)
+python src/train.py experiment=train_audio_balanced
+python src/train.py experiment=train_audio_smoothing
+python src/train.py experiment=train_audio_robust
+python src/train.py experiment=train_audio_phase2_lora   # braucht wav2vec2.ckpt (Phase 1)
+
+# Multimodal
+python src/train.py experiment=train_multimodal_balanced
+python src/train.py experiment=train_multimodal_mixup
+python src/train.py experiment=train_multimodal_robust
+python src/train.py experiment=train_multimodal_phase2_lora   # braucht multimodal.ckpt (Phase 1)
 
 # oder über W&B Launch (Desktop_PC-Queue, s. docs/launch.md)
 ```

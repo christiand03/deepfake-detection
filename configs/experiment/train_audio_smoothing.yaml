@@ -1,0 +1,26 @@
+# @package _global_
+
+# Ablation — Label Smoothing (Phase 1, Audio); das Audio-Pendant zu
+# train_video_mixup. Wav2Vec2 unterstützt KEIN Mixup (die Interpolation roher
+# 1-D-Wellenformen ist hier bewusst nicht umgesetzt — s. docs/performance_roadmap.md
+# §1.2), daher bleibt von der ViT-Regularisierung nur Label Smoothing 0.1
+# (weicht überkonfidente Head-Logits auf), kombiniert mit Balanced Sampling.
+# Vergleichsmetrik: val/auc_video gegen train_audio und train_audio_balanced.
+# Run/Launch: experiment=train_audio_smoothing
+
+defaults:
+  - override /data: deepfake_audio
+  - override /model: wav2vec2
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: wav2vec2_smoothing
+
+data:
+  balanced_sampling: true
+
+model:
+  class_weights: null  # Sampler korrigiert die Imbalance bereits — nicht doppelt!
+  label_smoothing: 0.1
+
+tags: ["wav2vec2", "audio", "ablation", "label-smoothing"]

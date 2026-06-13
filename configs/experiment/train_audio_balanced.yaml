@@ -1,0 +1,24 @@
+# @package _global_
+
+# Ablation — Balanced Sampling statt CE-Klassengewichten (Phase 1, Audio).
+# Auch label_audio ist nach dem segment-genauen Relabeln unausgewogen
+# (~7 % Fake, auto-Gewicht ~7,4). Statt den Loss zu skalieren zieht hier ein
+# WeightedRandomSampler ~50/50-Batches; der Loss bleibt ungewichtet.
+# Vergleichsmetrik: val/auc_video gegen train_audio.
+# Run/Launch: experiment=train_audio_balanced
+
+defaults:
+  - override /data: deepfake_audio
+  - override /model: wav2vec2
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: wav2vec2_balanced
+
+data:
+  balanced_sampling: true
+
+model:
+  class_weights: null  # Sampler korrigiert die Imbalance bereits — nicht doppelt!
+
+tags: ["wav2vec2", "audio", "ablation", "balanced-sampling"]

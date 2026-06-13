@@ -1,0 +1,36 @@
+# @package _global_
+
+# Phase 2 (LoRA) — Alternative zum Full-Finetuning (train_audio_phase2):
+# Low-Rank-Adapter (r=8) auf den Attention-Q/V-Projektionen des Wav2Vec2-
+# Encoders; die Basisgewichte UND der CNN-Feature-Extractor bleiben eingefroren.
+# Besonders interessant für Audio, weil Cold-Full-Finetuning hier früher
+# kollabierte (Loss=ln2, §7.2) — LoRA ist deutlich stabiler (Adapter starten
+# bei 0, Basis-Features bleiben erhalten). Export merged die Adapter zurück
+# (plain Checkpoint — API/explain() unverändert).
+# Vergleichsmetrik: val/auc_video gegen train_audio_phase2.
+# Run/Launch: experiment=train_audio_phase2_lora
+
+defaults:
+  - override /data: deepfake_audio
+  - override /model: wav2vec2
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: wav2vec2_phase2_lora
+
+# Warm-Start vom Phase-1-Checkpoint (nur Gewichte, frischer Optimizer/LR).
+warmstart_ckpt: ${paths.export_dir}/wav2vec2.ckpt
+
+# Aktivierungs-Speicher entspricht Full-Finetuning → bs 32 wie train_audio_phase2.
+data:
+  batch_size: 32
+trainer:
+  accumulate_grad_batches: 1
+
+model:
+  freeze_backbone: false  # PEFT friert die Basisgewichte selbst ein (LoRA statt LLRD)
+  peft_mode: lora
+  optimizer:
+    lr: 1e-4   # LoRA verträgt höhere LRs als Full-Finetuning (Adapter starten bei 0)
+
+tags: ["wav2vec2", "audio", "phase2", "lora", "peft"]

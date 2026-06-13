@@ -1,0 +1,27 @@
+# @package _global_
+
+# Ablation — ViT-Regularisierungs-Rezept (Phase 1, Multimodal): Mixup + Label
+# Smoothing, kombiniert mit Balanced Sampling. Mixup interpoliert Inputs und
+# Targets im Batch (Beta(0.2, 0.2)) — bei der Fusion werden BEIDE Modalitäten
+# (Video UND Audio) mit demselben lambda/Permutation gemischt, damit die
+# A/V-Paarung erhalten bleibt. Label Smoothing 0.1 dämpft überkonfidente Logits.
+# Vergleichsmetrik: val/auc_video gegen train_multimodal und train_multimodal_balanced.
+# Run/Launch: experiment=train_multimodal_mixup
+
+defaults:
+  - override /data: deepfake_multimodal
+  - override /model: multimodal
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: multimodal_mixup
+
+data:
+  balanced_sampling: true
+
+model:
+  class_weights: null  # Sampler korrigiert die Imbalance bereits — nicht doppelt!
+  label_smoothing: 0.1
+  mixup_alpha: 0.2
+
+tags: ["multimodal", "fusion", "ablation", "mixup", "label-smoothing"]

@@ -1,0 +1,39 @@
+# @package _global_
+
+# Phase 2 (LoRA) — Alternative zum Full-Finetuning (train_multimodal_phase2):
+# Low-Rank-Adapter (r=8) auf den Attention-Q/V-Projektionen BEIDER Backbones
+# (Video: query/value, Audio: q_proj/v_proj); Basisgewichte bleiben eingefroren.
+# Spart die Optimizer-States/Gradienten beider ~94M-Backbones — auf der 8-GB-GPU /
+# 16-GB-RAM-Box deutlich entspannter als Full-Finetuning. Export merged die
+# Adapter zurück (plain Checkpoint — API/explain() unverändert).
+# Vergleichsmetrik: val/auc_video gegen train_multimodal_phase2.
+# Run/Launch: experiment=train_multimodal_phase2_lora
+
+defaults:
+  - override /data: deepfake_multimodal
+  - override /model: multimodal
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: multimodal_phase2_lora
+
+# Warm-Start vom Phase-1-Checkpoint (nur Gewichte, frischer Optimizer/LR).
+warmstart_ckpt: ${paths.export_dir}/multimodal.ckpt
+
+# Aktivierungs-Speicher entspricht Full-Finetuning (Gradienten fließen durch beide
+# Backbones zu den Adaptern). Host-RAM bleibt der Engpass → bs 1 wie in
+# train_multimodal_phase2 (s. docs/model.md §6.6/§7.7). LoRA deaktiviert intern das
+# Gradient-Checkpointing des Audio-Backbones (kein input-embeddings-Hook); der
+# kleine Wav2Vec2-Zweig verträgt das bei bs 1, der Optimizer-Spareffekt überwiegt.
+data:
+  batch_size: 1
+trainer:
+  accumulate_grad_batches: 6  # 1 × 6 = effektiv 6, wie train_multimodal_phase2
+
+model:
+  freeze_backbone: false  # PEFT friert die Basisgewichte selbst ein (LoRA statt LLRD)
+  peft_mode: lora
+  optimizer:
+    lr: 1e-4   # LoRA verträgt höhere LRs als Full-Finetuning (Adapter starten bei 0)
+
+tags: ["multimodal", "fusion", "phase2", "lora", "peft"]
