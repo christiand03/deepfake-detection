@@ -1731,3 +1731,193 @@ def run_multimodal_adversarial_inference(
         "audioAttentionShift": audio_attention_shift,
         "attackModalities": attack_modalities,
     }
+
+
+# ── Multimodal batch helpers (offline sweeps) ─────────────────────────────────
+
+
+def _preprocess_multimodal(
+    clip_path: Path,
+) -> tuple[torch.Tensor, torch.Tensor, np.ndarray, int]:
+    """Load a training-identical (video, audio) pair for the fused model.
+
+    Shared by the multimodal batch helpers below.  Mirrors the preprocessing in
+    :func:`run_multimodal_adversarial_inference`: the first face chunk, the audio
+    window aligned to that chunk, z-score-normalised for Wav2Vec2.
+
+    Returns:
+        ``(pixel_values, waveform_tensor, waveform_np, sample_rate)`` where
+        *pixel_values* is ``(1, 16, 3, 224, 224)`` and *waveform_tensor* is the
+        z-scored ``(1, T_samples)`` audio input.
+
+    Raises:
+        RuntimeError: If audio extraction fails.
+    """
+    import subprocess
+
+    pixel_values, chunk_idx = _preprocess_video_chunked(clip_path)
+    pixel_values = pixel_values.to(_device)
+
+    try:
+        waveform_np, sample_rate = _load_audio(clip_path)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Audio extraction failed for {clip_path.name}: {exc}") from exc
+
+    # Slice the audio window aligned to the video chunk so the pair is
+    # training-identical; fall back to the whole waveform on the no-face path.
+    if chunk_idx >= 0:
+        start = chunk_idx * AUDIO_SAMPLES_PER_CHUNK
+        window = waveform_np[start : start + AUDIO_SAMPLES_PER_CHUNK]
+        if len(window) == AUDIO_SAMPLES_PER_CHUNK:
+            waveform_np = window
+
+    waveform_tensor = torch.from_numpy(waveform_np.copy()).unsqueeze(0).to(_device)
+    waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / (waveform_tensor.std() + 1e-7)
+    return pixel_values, waveform_tensor, waveform_np, sample_rate
+
+
+def _multimodal_region_band_scores(
+    model: MultimodalDeepfakeModule,
+    pixel_values: torch.Tensor,
+    input_values: torch.Tensor,
+    waveform_np: np.ndarray,
+    sample_rate: int,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Return ``(video_region_scores, audio_band_scores)`` from a fused LRP pass.
+
+    Helper for :func:`run_multimodal_adversarial_batch`; falls back to zeroed
+    relevance when the AttnLRP pass raises so the sweep stays robust.
+    """
+    try:
+        video_hm, audio_rel, _ = model.explain(pixel_values=pixel_values, input_values=input_values)
+        video_hm_np = video_hm.detach().cpu().numpy()[0]  # (T, H, W)
+        audio_rel_np = audio_rel.detach().cpu().numpy()[0]  # (T_samples,)
+    except Exception:  # noqa: BLE001
+        video_hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        audio_rel_np = np.zeros_like(waveform_np)
+
+    video_hm_np = video_hm_np / (np.max(np.abs(video_hm_np)) + 1e-8)
+    region_scores = {r["region"]: r["score"] for r in _extract_anomaly_regions(video_hm_np)}
+
+    t_len = len(waveform_np)
+    audio_rel_trimmed = (
+        audio_rel_np[:t_len] if len(audio_rel_np) >= t_len else np.pad(audio_rel_np, (0, t_len - len(audio_rel_np)))
+    )
+    bands = _compute_frequency_bands(waveform_np, audio_rel_trimmed, sample_rate)
+    return region_scores, bands
+
+
+def run_multimodal_inference_score(clip_path: Path) -> tuple[str, float] | None:
+    """Run fused video+audio detection without heatmaps, for batch sweeps.
+
+    Counterpart to :func:`run_video_inference_fast` and
+    :func:`run_audio_inference_score` for the ``MultimodalDeepfakeModule``.  Uses
+    the training-identical chunk-aligned (video, audio) pair.
+
+    Returns:
+        ``(verdict, confidence)`` where *confidence* is the predicted-class
+        probability, or ``None`` when audio extraction fails.
+
+    Raises:
+        ModelNotReadyError: If the multimodal checkpoint is not configured.
+    """
+    model = get_multimodal_model()
+    try:
+        pixel_values, waveform_tensor, _, _ = _preprocess_multimodal(clip_path)
+    except RuntimeError:
+        return None
+
+    with torch.no_grad():
+        logits = model(pixel_values=pixel_values, input_values=waveform_tensor)
+    probs = torch.softmax(logits, dim=-1)[0]
+    fake_prob = probs[1].item()
+    verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
+    confidence = fake_prob if verdict == "FAKE" else 1.0 - fake_prob
+    return verdict, confidence
+
+
+def run_multimodal_adversarial_batch(
+    clip_path: Path,
+    method: Literal["FGSM", "PGD"],
+    epsilon: float,
+    audio_epsilon: float,
+    steps: int,
+    attack_modalities: Literal["video", "audio", "both"],
+) -> tuple[str, float, float]:
+    """Run a multimodal white-box attack and return verdict, confidence, shift.
+
+    Multimodal counterpart to :func:`run_adversarial_batch`, intended for
+    ``scripts/eval_adversarial_sweep.py --multimodal``.  Jointly perturbs video
+    and/or audio via :func:`_pgd_attack_multimodal` and reports a *combined*
+    attention-shift intensity: the mean absolute change in video region scores
+    AND the three audio frequency-band scores between the clean and adversarial
+    forward passes.
+
+    Args:
+        clip_path:         Path to the MP4 clip.
+        method:            ``"FGSM"`` (single step) or ``"PGD"`` (multi-step).
+        epsilon:           L∞ budget for the video modality.
+        audio_epsilon:     L∞ budget for the audio modality.
+        steps:             PGD iterations; ignored when *method* is ``"FGSM"``.
+        attack_modalities: Which inputs to perturb: ``"video"``, ``"audio"`` or
+                           ``"both"``.
+
+    Returns:
+        ``(adv_verdict, adv_confidence, shift_intensity)``.
+
+    Raises:
+        ModelNotReadyError: If the multimodal checkpoint is not configured.
+        RuntimeError:       If audio extraction fails.
+    """
+    model = get_multimodal_model()
+    pixel_values, waveform_tensor, waveform_np, sample_rate = _preprocess_multimodal(clip_path)
+
+    # ── Clean forward pass ────────────────────────────────────────────────────
+    with torch.no_grad():
+        clean_logits = model(pixel_values=pixel_values, input_values=waveform_tensor)
+    clean_probs = torch.softmax(clean_logits, dim=-1)[0]
+    clean_fake_prob = clean_probs[1].item()
+    clean_verdict: Literal["FAKE", "REAL"] = "FAKE" if clean_fake_prob > 0.5 else "REAL"
+    target_class = 1 if clean_verdict == "FAKE" else 0
+
+    # ── Clean LRP (video regions + audio bands) ───────────────────────────────
+    clean_region_scores, clean_bands = _multimodal_region_band_scores(
+        model, pixel_values, waveform_tensor, waveform_np, sample_rate
+    )
+
+    # ── Attack ────────────────────────────────────────────────────────────────
+    n_steps = 1 if method == "FGSM" else steps
+    step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
+    step_size_audio = audio_epsilon if method == "FGSM" else audio_epsilon / steps * 2.5
+    adv_pv, adv_iv = _pgd_attack_multimodal(
+        model,
+        pixel_values,
+        waveform_tensor,
+        target_class,
+        epsilon,
+        audio_epsilon,
+        n_steps,
+        step_size,
+        step_size_audio,
+        attack_modalities,
+    )
+
+    # ── Adversarial forward pass ──────────────────────────────────────────────
+    with torch.no_grad():
+        adv_logits = model(pixel_values=adv_pv, input_values=adv_iv)
+    adv_probs = torch.softmax(adv_logits, dim=-1)[0]
+    adv_fake_prob = adv_probs[1].item()
+    adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
+    adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else adv_probs[0].item()
+
+    # ── Adversarial LRP ───────────────────────────────────────────────────────
+    adv_waveform_np = adv_iv.squeeze(0).detach().cpu().numpy()
+    adv_region_scores, adv_bands = _multimodal_region_band_scores(model, adv_pv, adv_iv, adv_waveform_np, sample_rate)
+
+    # ── Combined attention-shift intensity ────────────────────────────────────
+    shared_regions = set(clean_region_scores) & set(adv_region_scores)
+    deltas = [abs(clean_region_scores[r] - adv_region_scores[r]) for r in shared_regions]
+    deltas += [abs(clean_bands[b] - adv_bands[b]) for b in ("low", "mid", "high")]
+    shift_intensity = float(np.mean(deltas)) if deltas else 0.0
+
+    return adv_verdict, adv_confidence, shift_intensity

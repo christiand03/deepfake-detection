@@ -77,16 +77,18 @@ Komplexität gegliedert.
 
 Phasen 1 und 2 sind abgeschlossen; das interaktive Frontend (ursprünglich als
 optionaler Prototyp geplant) wurde vollständig umgesetzt und übertrifft den
-ursprünglichen Scope. Phase 3 und 4 sind als interaktive Labs + Offline-Sweeps
-implementiert und werden über die ursprünglichen Ziele hinaus erweitert.
+ursprünglichen Scope. Phase 3 und 4 sind **code-seitig vollständig** (interaktive
+Labs, unimodale *und* multimodale Offline-Sweeps, UAP, adversariales Training);
+die verbleibende Arbeit ist das **Ausführen und Dokumentieren** der Sweeps auf den
+aktuellen (post-2026-06-11-)Daten — siehe Runbook [`phase34_runbook.md`](phase34_runbook.md).
 
 | Phase | Status | Anmerkung |
 | --- | --- | --- |
 | Phase 1 — Unimodal Video | ✅ Abgeschlossen | VideoMAE fine-tuned; AttnLRP & Attention Rollout funktionsfähig |
 | Phase 2 — Multimodal | ✅ Abgeschlossen | Cross-Modal Attention Head trainiert, Wav2Vec 2.0 LRP integriert |
 | Frontend (React + FastAPI) | ✅ Abgeschlossen | Vollständiges xAI-Demo-Tool (war ursprünglich optional) |
-| Phase 3 — Robustness | 🔄 In Arbeit | Interaktives Lab + Offline-Sweep fertig; Audio-Robustheit & Attention-Shift ausstehend |
-| Phase 4 — Adversarial | 🔄 In Arbeit | FGSM/PGD + Sweep + adv. Training fertig; multimodaler Angriff & UAP ausstehend |
+| Phase 3 — Robustness | 🔄 Code fertig, Ergebnisse ausstehend | Lab + Sweeps (CRF×FPS, Audio-Bitrate, **joint multimodal**) + Attention-Shift implementiert; Sweep-Läufe + Auswertung (§7.14) noch durchzuführen |
+| Phase 4 — Adversarial | 🔄 Code fertig, Ergebnisse ausstehend | FGSM/PGD (uni- & **multimodal**), UAP, adv. Training, Batch-Sweeps implementiert; ε-/Fooling-Kurven + Defense-Eval (§7.15) noch durchzuführen |
 
 **Belastbare Metriken (leakage-bereinigt, Stand der dokumentierten Läufe):** Der
 multimodale Detektor erreicht in **Phase 2 ~0,77 test/auc** (Phase 1 ~0,65).
@@ -104,21 +106,28 @@ Vorbehalte: [`model.md`](model.md) §7.10/§7.11.
 
 ## 5. Roadmap: Erweiterungen Phase 3 & 4
 
-Da das Projekt dem Zeitplan voraus ist, werden Phase 3 und 4 erweitert. Basis-
-Implementierung (interaktive Labs, FGSM/PGD, Offline-Sweep-Skripte) ist fertig;
-die folgende Priorisierung bündelt die geplanten Ausbaustufen. Befehle zu den
-Sweeps stehen in [`commands.md`](commands.md) §7; die Implementierung in
-`src/api/inference.py` und `scripts/eval_*_sweep.py`.
+Da das Projekt dem Zeitplan voraus ist, wurden Phase 3 und 4 erweitert. **Alle
+sieben Ausbaustufen sind code-seitig umgesetzt** (Spalte „Code"); offen ist nur
+noch das Ausführen + Dokumentieren der Läufe. Befehle stehen in
+[`commands.md`](commands.md) §7 und im Runbook [`phase34_runbook.md`](phase34_runbook.md);
+die Implementierung in `src/api/inference.py` und `scripts/eval_*_sweep.py`.
 
-| Priorität | Aufgabe | Aufwand | Akademischer Impact |
+| Priorität | Aufgabe | Code | Akademischer Impact |
 | --- | --- | --- | --- |
-| 1 | Systematischer Robustness-Sweep → W&B (CRF × FPS-Grid) | Niedrig | Hoch (beantwortet RQ Phase 3 direkt) |
-| 2 | Attention-Shift in Phase 3 (Region-Scores vor/nach Degradation) | Mittel | Hoch (xAI-Kernhypothese) |
-| 3 | Batch-Level Fooling Rate → W&B (ε-Grid) | Niedrig | Hoch (beantwortet RQ Phase 4) |
-| 4 | Audio-Kompressions-Robustheit (AAC/MP3 @ niedrige Bitrate) | Mittel | Mittel-Hoch |
-| 5 | Multimodaler Adversarial Attack (Audio-only / Joint A+V) | Mittel-Hoch | Sehr hoch (novel) |
-| 6 | Adversarial Fine-Tuning als Verteidigung (PGD-augmentiert) | Hoch | Sehr hoch |
-| 7 | Universal Adversarial Perturbation (UAP) | Hoch | Hoch (eindrucksvolle Demo) |
+| 1 | Systematischer Robustness-Sweep → W&B (CRF × FPS-Grid) | ✅ | Hoch (beantwortet RQ Phase 3 direkt) |
+| 2 | Attention-Shift in Phase 3 (Region-Scores vor/nach Degradation) | ✅ | Hoch (xAI-Kernhypothese) |
+| 3 | Batch-Level Fooling Rate → W&B (ε-Grid) | ✅ | Hoch (beantwortet RQ Phase 4) |
+| 4 | Audio-Kompressions-Robustheit (AAC/MP3 @ niedrige Bitrate) | ✅ | Mittel-Hoch |
+| 5 | Multimodaler Adversarial Attack (Audio-only / Joint A+V) | ✅ | Sehr hoch (novel) |
+| 6 | Adversarial Fine-Tuning als Verteidigung (PGD-augmentiert) | ✅ | Sehr hoch |
+| 7 | Universal Adversarial Perturbation (UAP) | ✅ | Hoch (eindrucksvolle Demo) |
+
+> **Zusätzlich umgesetzt (über die obige Liste hinaus):** *joint*-multimodale
+> Offline-Sweeps für beide Phasen — der fusionierte Cross-Attention-Detektor wird
+> jetzt sowohl unter gemeinsamer Video+Audio-*Degradation*
+> (`eval_robustness_sweep.py --multimodal`) als auch unter gemeinsamem
+> Video+Audio-*Angriff* (`eval_adversarial_sweep.py --multimodal`) gemessen.
+> Zuvor liefen beide Sweeps nur über die unimodalen Branches getrennt.
 
 **Die zentrale xAI-Beweisführung bei Attacken:** Zeigt die LRP-Heatmap bei einem
 echten Fake-Frame auf den Mundbereich und nach FGSM-Rauschen auf Schulter/

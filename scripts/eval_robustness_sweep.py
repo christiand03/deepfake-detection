@@ -49,8 +49,10 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from src.api.inference import (  # noqa: E402
     ModelNotReadyError,
     get_audio_model,
+    get_multimodal_model,
     get_video_model,
     run_audio_inference_score,
+    run_multimodal_inference_score,
     run_video_inference_fast,
 )
 
@@ -522,6 +524,136 @@ def _run_upscale_sweep(
     )
 
 
+# ── Multimodal sweep ─────────────────────────────────────────────────────────
+
+
+def _run_multimodal_baseline(
+    videos: list[dict],
+) -> tuple[list[str | None], list[float | None]]:
+    """Evaluate the fused model on clean clips.
+
+    Returns ``(verdicts, scores)`` where entries are ``None`` for clips that
+    produced no fused result (e.g. audio extraction failed).
+    """
+    verdicts: list[str | None] = []
+    scores: list[float | None] = []
+    for rec in tqdm(videos, desc="MM baseline", unit="video"):
+        result = run_multimodal_inference_score(rec["video_path"])
+        if result is not None:
+            verdict, conf = result
+            verdicts.append(verdict)
+            scores.append(_to_fake_score(verdict, conf))
+        else:
+            verdicts.append(None)
+            scores.append(None)
+    return verdicts, scores
+
+
+def _run_multimodal_sweep(
+    videos: list[dict],
+    baseline_mm_verdicts: list[str | None],
+    baseline_mm_scores: list[float | None],
+    crf_grid: list[int],
+    fps_grid: list[int],
+    audio_bitrate: int,
+    summary_rows: list[list],
+) -> None:
+    """CRF × FPS grid sweep on the fused model under *joint* video+audio degradation.
+
+    Every grid point re-encodes video (CRF/FPS) **and** audio (AAC at
+    ``audio_bitrate`` kbps) in a single pass, then scores the fused detector —
+    the realistic social-media case where both modalities degrade together.
+    Uses the combined ``label`` as ground truth.  Only clips with a valid fused
+    baseline are considered.
+    """
+    valid_indices = [i for i, v in enumerate(baseline_mm_verdicts) if v is not None]
+    if not valid_indices:
+        log.warning("No videos with valid multimodal baseline — skipping multimodal sweep.")
+        return
+
+    valid_videos = [videos[i] for i in valid_indices]
+    valid_baseline_verdicts: list[str] = [baseline_mm_verdicts[i] for i in valid_indices]  # type: ignore[misc]
+    valid_baseline_scores: list[float] = [baseline_mm_scores[i] for i in valid_indices]  # type: ignore[misc]
+    labels = [videos[i]["label"] for i in valid_indices]
+    total = len(crf_grid) * len(fps_grid)
+
+    with tqdm(total=total, desc="Multimodal sweep", unit="grid-pt") as pbar:
+        for crf in crf_grid:
+            for fps in fps_grid:
+                degraded_verdicts: list[str] = []
+                degraded_scores: list[float] = []
+                active_labels: list[int] = []
+                active_baseline_verdicts: list[str] = []
+                active_baseline_scores: list[float] = []
+
+                for i, rec in enumerate(valid_videos):
+                    try:
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            degraded = Path(tmpdir) / "degraded.mp4"
+                            _degrade_video(
+                                rec["video_path"],
+                                degraded,
+                                crf=crf,
+                                fps=fps,
+                                audio_bitrate_kbps=audio_bitrate,
+                            )
+                            result = run_multimodal_inference_score(degraded)
+                    except Exception:  # noqa: BLE001
+                        log.warning(
+                            "Multimodal inference failed for %s at CRF=%d FPS=%d — skipping.",
+                            rec["video_id"],
+                            crf,
+                            fps,
+                        )
+                        continue
+
+                    if result is None:
+                        continue
+
+                    verdict, conf = result
+                    degraded_verdicts.append(verdict)
+                    degraded_scores.append(_to_fake_score(verdict, conf))
+                    active_labels.append(labels[i])
+                    active_baseline_verdicts.append(valid_baseline_verdicts[i])
+                    active_baseline_scores.append(valid_baseline_scores[i])
+
+                if not degraded_verdicts:
+                    log.warning("No valid clips at CRF=%d FPS=%d — skipping grid point.", crf, fps)
+                    pbar.update(1)
+                    continue
+
+                metrics = _compute_metrics(
+                    active_labels,
+                    active_baseline_verdicts,
+                    active_baseline_scores,
+                    degraded_verdicts,
+                    degraded_scores,
+                )
+                summary_rows.append(
+                    [
+                        "multimodal",
+                        crf,
+                        fps,
+                        audio_bitrate,
+                        metrics["auc"],
+                        metrics["accuracy"],
+                        metrics["fooling_rate"],
+                        metrics["mean_fake_prob_delta"],
+                    ]
+                )
+                log.info(
+                    "MM CRF=%2d FPS=%2d @%dkbps | AUC=%.3f  Acc=%.3f  FR=%.3f  Δfake=%.4f",
+                    crf,
+                    fps,
+                    audio_bitrate,
+                    metrics["auc"] if not np.isnan(metrics["auc"]) else -1.0,
+                    metrics["accuracy"],
+                    metrics["fooling_rate"] if not np.isnan(metrics["fooling_rate"]) else -1.0,
+                    metrics["mean_fake_prob_delta"],
+                )
+                pbar.update(1)
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 
@@ -626,6 +758,20 @@ def main() -> None:
         metavar="FPS",
         help="FPS held constant during the upscale sweep (default: 25).",
     )
+    parser.add_argument(
+        "--multimodal",
+        action="store_true",
+        help=(
+            "Run the fused-model CRF × FPS sweep under JOINT video+audio degradation (requires MULTIMODAL_CKPT_PATH)."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-audio-bitrate-for-mm",
+        type=int,
+        default=64,
+        metavar="KBPS",
+        help="AAC bitrate applied alongside CRF/FPS in the multimodal sweep (default: 64).",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -669,6 +815,19 @@ def main() -> None:
                 log.warning("Audio model could not be loaded (%s) — skipping audio sweep.", exc)
                 run_audio = False
 
+    run_multimodal = args.multimodal
+    if run_multimodal:
+        if not os.environ.get("MULTIMODAL_CKPT_PATH"):
+            log.warning("MULTIMODAL_CKPT_PATH is not set — multimodal sweep will be skipped.")
+            run_multimodal = False
+        else:
+            log.info("Loading Multimodal model …")
+            try:
+                get_multimodal_model()
+            except ModelNotReadyError as exc:
+                log.warning("Multimodal model could not be loaded (%s) — skipping multimodal sweep.", exc)
+                run_multimodal = False
+
     # ── W&B initialisation ─────────────────────────────────────────────────────
     wandb.init(
         project=args.wandb_project,
@@ -683,6 +842,8 @@ def main() -> None:
             "n_test_videos": len(videos),
             "run_audio_sweep": run_audio,
             "run_upscale_sweep": not args.no_upscale_sweep,
+            "run_multimodal_sweep": run_multimodal,
+            "fixed_audio_bitrate_for_mm": args.fixed_audio_bitrate_for_mm,
         },
     )
 
@@ -784,6 +945,48 @@ def main() -> None:
         )
     else:
         log.info("Upscale sweep skipped (--no-upscale-sweep).")
+
+    # ── Multimodal sweep ───────────────────────────────────────────────────────
+    if run_multimodal:
+        log.info("Running multimodal baseline (clean) evaluation …")
+        baseline_mm_verdicts, baseline_mm_scores = _run_multimodal_baseline(videos)
+        valid_mm_idx = [i for i, v in enumerate(baseline_mm_verdicts) if v is not None]
+        if valid_mm_idx:
+            mm_verd = [baseline_mm_verdicts[i] for i in valid_mm_idx]
+            mm_scr = [baseline_mm_scores[i] for i in valid_mm_idx]
+            labels_mm_baseline = [videos[i]["label"] for i in valid_mm_idx]
+            baseline_mm_auc = _safe_auc(labels_mm_baseline, mm_scr)  # type: ignore[arg-type]
+            baseline_mm_accuracy = float(
+                np.mean([int((v == "FAKE") == bool(lbl)) for v, lbl in zip(mm_verd, labels_mm_baseline, strict=True)])
+            )
+            wandb.log(
+                {
+                    "baseline/multimodal_auc": baseline_mm_auc,
+                    "baseline/multimodal_accuracy": baseline_mm_accuracy,
+                }
+            )
+            log.info(
+                "Baseline multimodal — AUC: %.3f  Accuracy: %.3f",
+                baseline_mm_auc if not np.isnan(baseline_mm_auc) else -1.0,
+                baseline_mm_accuracy,
+            )
+        log.info(
+            "Starting multimodal sweep: %d CRF × %d FPS @ %d kbps …",
+            len(args.crf_grid),
+            len(args.fps_grid),
+            args.fixed_audio_bitrate_for_mm,
+        )
+        _run_multimodal_sweep(
+            videos,
+            baseline_mm_verdicts,
+            baseline_mm_scores,
+            args.crf_grid,
+            args.fps_grid,
+            args.fixed_audio_bitrate_for_mm,
+            summary_rows,
+        )
+    else:
+        log.info("Multimodal sweep skipped (enable with --multimodal).")
 
     # ── W&B summary table ──────────────────────────────────────────────────────
     if summary_rows:

@@ -526,6 +526,58 @@ auf die Platte (~650 GB nötig, 429 GB frei).
 > Full-Frame-Fallback (WARNING) für gesichtslose Clips. Paritäts-verifiziert gegen den
 > H5-Pfad (identische Max-Fake-Prob auf 12 Chunks). Details: `docs/audit_2026-06.md` §1.9.
 
+### 7.14 Phase 3 — Robustness-Sweep (Ergebnisse) — AUSSTEHEND
+
+> **Status:** Die Sweep-Infrastruktur ist vollständig (uni- und multimodal,
+> siehe [`commands.md`](commands.md) §7.1 und [`phase34_runbook.md`](phase34_runbook.md)).
+> Die folgenden Tabellen sind **nach** dem Ausführen der Sweeps auf den aktuellen
+> Daten (post-2026-06-11) mit den W&B-Zahlen zu füllen — Platzhalter `—`.
+
+**Forschungsfragen (zu beantworten):**
+1. Quantitativer **Breaking Point**: ab welchem CRF / unter welcher FPS bricht die
+   AUC signifikant ein?
+2. **Attention-Shift**: auf welche Regionen weicht das Modell bei schlechter
+   Qualität aus (Region-Scores vor/nach Degradation)?
+3. Ist der **Wav2Vec-Audio-Branch** kompressionsanfälliger als der VideoMAE-Branch?
+4. Hält der **fusionierte Detektor** unter *gemeinsamer* Video+Audio-Degradation
+   besser stand als die Einzel-Branches? (multimodaler Sweep)
+
+| Branch | CRF | FPS | Audio-kbps | AUC | Accuracy | Fooling Rate | Δfake |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Baseline (clean) | — | — | — | — | — | — | — |
+| video | … | … | — | — | — | — | — |
+| audio | — | — | … | — | — | — | — |
+| multimodal (joint) | … | … | … | — | — | — | — |
+
+### 7.15 Phase 4 — Adversarial-Sweep (Ergebnisse) — AUSSTEHEND
+
+> **Status:** FGSM/PGD (uni- & multimodal), UAP und adversariales Training sind
+> implementiert (siehe §5, [`commands.md`](commands.md) §7.2,
+> [`phase34_runbook.md`](phase34_runbook.md)). Die folgenden Tabellen sind nach den
+> Läufen zu füllen.
+
+**Forschungsfragen (zu beantworten):**
+1. Bei welchem **ε** lässt sich der Klassifikator deterministisch täuschen, ohne
+   sichtbare Perturbation? (Fooling-Rate-vs-ε-Kurve)
+2. **LRP-Heatmap-Shift**: verschiebt sich die Relevanz nach erfolgreichem Angriff
+   von Mund/Augen auf Hintergrund? (`mean_attention_shift`)
+3. Ist der **Audio-Branch** anfälliger für gezielte Perturbationen als der
+   Video-Branch? (`--attack-modalities audio` vs. `video` vs. `both`)
+4. *(Optional, RQ4)* Wie stark senkt **adversariales Fine-Tuning**
+   (`videomae_adv` / `multimodal_adv`, bereits vorhandene Checkpoints) die Fooling
+   Rate — und um welchen Preis bei der Clean-Accuracy? Phasen 3/4 trainieren sonst
+   nichts; die Hauptläufe bewerten ausschließlich die besten Phase-1/2-Checkpoints.
+
+| Setup | Methode | Modalität | ε | AUC | Accuracy | Fooling Rate | Δfake | Attn-Shift |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Baseline-Ckpt | FGSM | video | … | — | — | — | — | — |
+| Baseline-Ckpt | PGD | both | … | — | — | — | — | — |
+| Baseline-Ckpt | PGD | audio | … | — | — | — | — | — |
+| Adv-trainiert | PGD | both | … | — | — | — | — | — |
+
+**UAP (Transfer):** Baseline-AUC vs. Transfer-AUC, Fooling Rate, Target-Prob-Delta
+(`scripts/compute_uap.py`) — Tabelle nach dem Lauf einfügen.
+
 ## Weiterführende Recherche
 - "TimeSformer PyTorch Implementation"
 - "Cross-Modal Attention Networks for Lip-Sync Detection"

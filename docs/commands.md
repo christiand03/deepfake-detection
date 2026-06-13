@@ -503,10 +503,25 @@ python scripts/eval_robustness_sweep.py --no-upscale-sweep
 intern auf 360p und skalieren sie bilinear auf 720p hoch. Der Filter
 `scale=640:360,scale=1280:720` bildet genau diesen Artefakt nach.
 
+```bash
+# Multimodaler Sweep: fusionierter Detektor unter JOINT Video+Audio-Degradation
+# (benötigt MULTIMODAL_CKPT_PATH). Standardmäßig läuft er zusätzlich zu den
+# unimodalen Sweeps; mit --no-video-sweep/--no-audio-sweep isoliert ausführbar.
+python scripts/eval_robustness_sweep.py \
+    --multimodal --no-video-sweep --no-audio-sweep --no-upscale-sweep
+
+# Eigene Audio-Bitrate für den multimodalen Sweep (Default 64 kbps)
+python scripts/eval_robustness_sweep.py \
+    --multimodal --no-video-sweep --no-audio-sweep --no-upscale-sweep \
+    --fixed-audio-bitrate-for-mm 32
+```
+
 **Ausgabe:** W&B-Table `sweep_results` mit den Spalten
 `modality`, `crf`, `fps`, `audio_bitrate_kbps`, `auc`, `accuracy`,
 `fooling_rate`, `mean_fake_prob_delta`.
-Mögliche `modality`-Werte: `video`, `audio`, `video_upscale`.
+Mögliche `modality`-Werte: `video`, `audio`, `video_upscale`, `multimodal`.
+Die `multimodal`-Zeilen degradieren Video (CRF/FPS) **und** Audio (AAC) in einem
+Durchgang und bewerten den fusionierten Cross-Attention-Detektor.
 
 ### 7.2 Adversarial-Sweep – Phase 4 (FGSM & PGD über ε-Grid)
 
@@ -534,9 +549,24 @@ python scripts/eval_adversarial_sweep.py \
     --wandb-run-name adversarial-custom
 ```
 
+```bash
+# Multimodaler Angriff auf den fusionierten Detektor (benötigt MULTIMODAL_CKPT_PATH).
+# --attack-modalities wählt, welche Modalität perturbiert wird: video | audio | both.
+python scripts/eval_adversarial_sweep.py --multimodal --attack-modalities both
+python scripts/eval_adversarial_sweep.py --multimodal --attack-modalities audio
+python scripts/eval_adversarial_sweep.py --multimodal --attack-modalities video
+
+# Eigenes Audio-Budget (sonst spiegelt es den jeweiligen ε-Wert des Grids)
+python scripts/eval_adversarial_sweep.py \
+    --multimodal --attack-modalities both --audio-epsilon 0.02
+```
+
 **Ausgabe:** W&B-Table `adversarial_sweep_results` mit den Spalten
-`method`, `epsilon`, `pgd_steps`, `n_clips`, `auc`, `accuracy`,
-`fooling_rate`, `mean_fake_prob_delta`, `mean_attention_shift`.
+`method`, `attack_modalities`, `epsilon`, `pgd_steps`, `n_clips`, `auc`,
+`accuracy`, `fooling_rate`, `mean_fake_prob_delta`, `mean_attention_shift`.
+Im video-only-Modus ist `attack_modalities` = `video`; im `--multimodal`-Modus
+entspricht es der gewählten `--attack-modalities`. Ground-Truth ist `label_audio`
+bei reinen Audio-Angriffen, sonst das kombinierte `label`.
 
 ---
 
@@ -552,7 +582,9 @@ python scripts/eval_adversarial_sweep.py \
 | 6. xAI Audio | `python src/explain_audio.py experiment=train_audio ckpt_path=checkpoints/wav2vec2.ckpt` |
 | 7. Robustness-Sweep | `python scripts/eval_robustness_sweep.py --no-audio-sweep` |
 | 7a. Upscaling-Sweep | `python scripts/eval_robustness_sweep.py --no-video-sweep --no-audio-sweep` |
+| 7b. Robustness-Sweep multimodal | `python scripts/eval_robustness_sweep.py --multimodal --no-video-sweep --no-audio-sweep --no-upscale-sweep` |
 | 8. Adversarial-Sweep | `python scripts/eval_adversarial_sweep.py` |
+| 8a. Adversarial-Sweep multimodal | `python scripts/eval_adversarial_sweep.py --multimodal --attack-modalities both` |
 
 ---
 
