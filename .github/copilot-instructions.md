@@ -56,6 +56,7 @@ Einstiegspunkt: `docs/README.md` (Navigationsübersicht).
 | Datei | Inhalt |
 |---|---|
 | `docs/project.md` | Projektüberblick, Phasen, Methodik, Status, Roadmap (Phase 3/4), Teamaufteilung |
+| `docs/concepts.md` | Konzepte & Designentscheidungen ("was" + "warum" jeder Technik) — Prüfungsvorbereitung |
 | `docs/engineering.md` | Tech-Stack, Hardware, Projektstruktur, MLOps (W&B/DVC/Lightning), Testing, Frontend/API |
 | `docs/datasets.md` | Datensätze, Preprocessing-Pipeline, Fehlerquellen, QA |
 | `docs/model.md` | Architekturen (VideoMAE, Wav2Vec2, Cross-Attention), VRAM, Baselines, Ablation Studies |

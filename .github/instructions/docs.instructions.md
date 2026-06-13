@@ -24,6 +24,7 @@ Einstiegspunkt: `README.md` (Navigationsübersicht). Frühere Planungs-Docs unte
 |---|---|---|
 | `README.md` | Navigationsindex aller Docs | Neue/umbenannte Doc-Datei |
 | `project.md` | Überblick, Phasen, Team, Status, Roadmap | Änderung der Methodik/Phasen/Status |
+| `concepts.md` | Konzepte & Designentscheidungen ("was" + "warum") | Neue Technik/Methode eingeführt |
 | `engineering.md` | Tools, Hardware, Struktur, MLOps, Testing, Frontend | Neues Tool, Strukturänderung, Test-Pattern |
 | `datasets.md` | Datensätze, Preprocessing, QA | Neuer Datensatz, Pipeline-Änderung |
 | `model.md` | Architekturen, Training, Ablation | Modell-Änderung, neue Experimente |

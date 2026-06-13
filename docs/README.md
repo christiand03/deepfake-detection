@@ -16,6 +16,7 @@ Neu im Projekt? Lies in dieser Reihenfolge:
 | Datei | Inhalt |
 |---|---|
 | [`project.md`](project.md) | Projektüberblick, Forschungsphilosophie, 4 Phasen, Status, Roadmap, Teamaufteilung |
+| [`concepts.md`](concepts.md) | **Konzepte & Designentscheidungen** ("was" + "warum" jeder Technik: LoRA, Sampler, SDPA, AttnLRP, PGD, …) — Prüfungs-/Gesprächsvorbereitung |
 | [`engineering.md`](engineering.md) | Tech-Stack, Hardware, Projektstruktur, MLOps (W&B/DVC/Lightning), Code-Qualität & ML-Testing, Frontend/API |
 
 ## Daten, Modelle & Training
