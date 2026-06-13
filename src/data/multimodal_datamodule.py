@@ -30,6 +30,9 @@ class MultimodalDataModule(BaseDeepfakeDataModule):
         balanced_sampling: Draw ~50/50 class-balanced training batches via a
                      ``WeightedRandomSampler`` instead of shuffling.  Use with
                      ``model.class_weights=null``.  Default: ``False``.
+        prefetch_factor: Batches each worker pre-loads ahead (only applied when
+                     ``num_workers > 0``).  Default: ``2``.  Raising it hides I/O
+                     latency at a host-RAM cost — see ``configs/data`` comments.
     """
 
     def __init__(
@@ -42,6 +45,7 @@ class MultimodalDataModule(BaseDeepfakeDataModule):
         augment: bool = False,
         augment_strength: str = "standard",
         balanced_sampling: bool = False,
+        prefetch_factor: int = 2,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)

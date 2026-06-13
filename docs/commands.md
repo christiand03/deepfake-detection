@@ -147,6 +147,11 @@ Details und Messwerte: `docs/performance_roadmap.md` §1.8, `docs/model.md` §6.
 
 ### 4.1 Trainings-Läufe
 
+> **Durchsatz/DataLoader-Profiling:** wie man misst, ob GPU oder DataLoader der
+> Engpass ist (inkl. repräsentativem GPU-Lauf), steht in §4.2. `prefetch_factor`
+> ist nach Messung bereits auf 4 gesetzt (Video/Multimodal) — Werte in
+> `docs/performance_roadmap.md` §1.9.
+
 **Video-Modell (VideoMAE) – Phase 1 (Backbone eingefroren, nur Kopf):**
 
 ```bash
@@ -283,6 +288,70 @@ zeitgestempelten Run-Ordner durchsuchen zu müssen.
 - Zielordner ändern: Umgebungsvariable `DEEPFAKE_CKPT_DIR` (absolut) setzen –
   wichtig für W&B-Launch-Läufe, die in einem temporären Klon laufen (siehe
   `docs/launch.md`).
+
+---
+
+### 4.2 Durchsatz / DataLoader messen (Profiling)
+
+Misst, ob die GPU oder der DataLoader der Engpass ist. Vergleiche in der
+Profiler-Tabelle `[_TrainingEpochLoop].train_dataloader_next` (Warten auf Daten)
+gegen `run_training_batch` (GPU-Compute). Dominiert das Warten → I/O-bound →
+`data.prefetch_factor` (oder `data.num_workers`) anpassen (RAM-Regel + Messwerte:
+`docs/performance_roadmap.md` §1.9).
+
+> **Achtung Worker-Achse:** Mehr `num_workers` hilft NUR bei teurer Per-Item-
+> Dekodierung (Video). Bei billiger Dekodierung + großem Batch (Audio: 128
+> kleine Items) ist `num_workers=0` ~9× schneller als 4 — der Windows-Spawn-/
+> IPC-Overhead übersteigt die Dekodierarbeit (§1.9). Daher beim Profiling immer
+> auch `data.num_workers=0` gegentesten, nicht nur `prefetch_factor`.
+
+**Schnell, aber NICHT repräsentativ** (`debug=profiler` erzwingt CPU +
+`num_workers=0` — Compute dominiert dann immer, kein Prefetch messbar):
+
+```bash
+python src/train.py experiment=train_video debug=profiler
+```
+
+**Repräsentativ** (echter GPU-/SDPA-Pfad, konfigurierte `num_workers`/`prefetch_factor`,
+auf wenige Batches begrenzt statt voller Epoche):
+
+```bash
+python src/train.py experiment=train_video \
+    +trainer.profiler=simple \
+    +trainer.limit_train_batches=40 +trainer.limit_val_batches=0 \
+    trainer.max_epochs=1 test=false export_ckpt=false \
+    callbacks=none logger=csv extras.enforce_tags=false
+```
+
+**Einen anderen `prefetch_factor` gegentesten** (gleiche Batch-Zahl für einen
+fairen Vergleich; so wurde die §1.9-Entscheidung 2→4 getroffen):
+
+```bash
+python src/train.py experiment=train_video data.prefetch_factor=4 \
+    +trainer.profiler=simple \
+    +trainer.limit_train_batches=40 +trainer.limit_val_batches=0 \
+    trainer.max_epochs=1 test=false export_ckpt=false \
+    callbacks=none logger=csv extras.enforce_tags=false
+```
+
+> Hinweis: Beide Läufe tragen denselben einmaligen Worker-Spawn-Warmup (erster
+> Batch), das **Total-Delta** von `train_dataloader_next` isoliert daher den
+> reinen Prefetch-Effekt. Für Multimodal `experiment=train_multimodal` einsetzen.
+
+**Worker-Achse gegentesten** (so wurde für Audio `num_workers=0` gefunden — bei
+nw>0 viele Batches fahren, damit der Spawn amortisiert; nw=0 braucht nur wenige):
+
+```bash
+# synchron (kein Spawn/IPC) — wenige Batches reichen
+python src/train.py experiment=train_audio data.num_workers=0 \
+    +trainer.profiler=simple +trainer.limit_train_batches=20 +trainer.limit_val_batches=0 \
+    trainer.max_epochs=1 test=false export_ckpt=false callbacks=none logger=csv extras.enforce_tags=false
+
+# mit Workern — viele Batches, sonst dominiert der Spawn-Warmup die Mittelung
+python src/train.py experiment=train_audio data.num_workers=2 \
+    +trainer.profiler=simple +trainer.limit_train_batches=150 +trainer.limit_val_batches=0 \
+    trainer.max_epochs=1 test=false export_ckpt=false callbacks=none logger=csv extras.enforce_tags=false
+```
 
 ---
 

@@ -129,16 +129,22 @@ class BaseDeepfakeDataModule(LightningDataModule):
         sampler: Sampler | None = None,
         drop_last: bool = False,
     ) -> DataLoader:
+        num_workers = self.hparams.num_workers
         return DataLoader(
             dataset=dataset,
             batch_size=self.hparams.batch_size,
-            num_workers=self.hparams.num_workers,
+            num_workers=num_workers,
             pin_memory=self.hparams.pin_memory,
             # shuffle and sampler are mutually exclusive in DataLoader.
             shuffle=shuffle if sampler is None else False,
             sampler=sampler,
             drop_last=drop_last,
-            persistent_workers=self.hparams.num_workers > 0,
+            persistent_workers=num_workers > 0,
+            # prefetch_factor MUST be None when num_workers == 0 (PyTorch raises a
+            # ValueError otherwise). getattr keeps DataModules without the hparam
+            # (e.g. the MNIST template) on the library default — mirrors the
+            # balanced_sampling getattr in train_dataloader.
+            prefetch_factor=(getattr(self.hparams, "prefetch_factor", None) if num_workers > 0 else None),
         )
 
     def train_dataloader(self) -> DataLoader:

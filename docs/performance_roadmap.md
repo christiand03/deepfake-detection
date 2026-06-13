@@ -116,6 +116,83 @@ nötig; die Gewichte sind von der Attention-Implementierung unabhängig.
   Multimodal-Phase-2-Configs (Host-RAM-limitiert, §6.5/§6.6) wurden bewusst
   noch nicht hochgesetzt — erst auf der Box nachmessen.
 
+### 1.9 DataLoader-Tuning: prefetch_factor-Knopf + Profiling-Rezept
+
+Umgesetzt 2026-06-13. Seit SDPA (§1.8) den GPU-Durchsatz ~3× erhöht hat, ist
+der DataLoader zum Engpass geworden. Knopf + Mess-Rezept stehen bereit, und die
+Messung wurde für **beide** Pfade gefahren — mit gegensätzlichem Ergebnis:
+- **Video/Multimodal** (teure Per-Item-Dekodierung): `prefetch_factor` 2→4.
+- **Audio** (billige Per-Item-Dekodierung, großer Batch): `num_workers` 4→**0**
+  — Worker waren hier ~9× LANGSAMER (s. Audio-Messung unten).
+
+- **Knopf:** `data.prefetch_factor` in allen drei Daten-Configs, verdrahtet in
+  `BaseDeepfakeDataModule._make_loader`. Default **4** (Video/Multimodal); bei
+  Audio inaktiv (`num_workers=0`). Wird bei `num_workers=0` automatisch auf
+  `None` gesetzt (PyTorch verbietet sonst einen expliziten Wert).
+- **Messen:** `python src/train.py experiment=train_video debug=profiler`
+  (nutzt das bestehende `configs/debug/profiler.yaml`: 1 Epoche,
+  `Trainer(profiler="simple")`). Achtung: `debug=profiler` erzwingt
+  `accelerator=cpu` + `num_workers=0` — für eine **repräsentative** Messung
+  stattdessen den echten GPU-Pfad mit Profiler-Override fahren (s. §1.9-Messung
+  unten bzw. `docs/commands.md` §4.2). Die Profiler-Tabelle zeigt
+  `[_TrainingEpochLoop].train_dataloader_next` (= Warten auf Daten) gegen
+  `run_training_batch` (= GPU). Dominiert das Daten-Warten → I/O-bound.
+- **Entscheidungsregel bei I/O-bound:** zuerst `data.prefetch_factor` erhöhen,
+  dann erst `data.num_workers`. **RAM-Warnung:** In-Flight-Speicher ≈
+  `num_workers × prefetch_factor × batch_size × ~9,6 MB` (float32-Video-Sample);
+  2→4 verdoppelt ihn (~0,6 → ~1,2 GB). `num_workers` ist auf der 16-GB-Box knapp
+  (~1,5 GB pro Spawn-Worker — vgl. die ENOSPC-/Commit-Pressure-Vorfälle), daher
+  bewusst kein Auto-Detect.
+- Test: `tests/test_dataloader_config.py` (Knopf erreicht den DataLoader;
+  `num_workers=0` crasht nicht).
+
+**§1.9-Messung (2026-06-13, VideoMAE Phase 1, RTX 3060 Ti / SDPA, `num_workers=2`,
+batch_size 16, 40 Batches):**
+
+| Pro Batch | `prefetch_factor=2` | `prefetch_factor=4` | Δ |
+|---|---|---|---|
+| Data-Wait (`train_dataloader_next`) | 0,599 s | **0,347 s** | **−42 %** |
+| GPU-Compute (`run_training_batch`) | 0,305 s | 0,294 s | ~gleich (Rauschen) |
+| **Pro Step (Wall)** | **~0,90 s** | **~0,64 s** | **−29 %** |
+| Host-RAM in-flight (geschätzt) | ~0,6 GB | ~1,2 GB | +0,6 GB |
+
+Beide Läufe tragen denselben einmaligen Worker-Spawn-Warmup (erster Batch), das
+−10-s-Total-Delta isoliert also den reinen Prefetch-Effekt. Dass die tiefere
+Pufferung so viel bringt, zeigt: der Stall war **burst-/latenzgetrieben, nicht
+durchsatzgebunden** — d. h. `prefetch_factor` (nicht `num_workers`) ist der
+richtige Hebel. Bei 4 ist Data-Wait (0,347 s) ~ Compute (0,294 s), also nahezu
+balanciert → effektiv ~1,4× Trainings-Durchsatz. **6 nicht umgesetzt:**
+abnehmender Ertrag (Data-Wait ≈ Compute) bei steigendem RAM Richtung
+Commit-Pressure-Zone.
+
+**§1.9-Messung Audio (2026-06-13, Wav2Vec2 Phase 1, RTX 3060 Ti / SDPA,
+batch_size 128):**
+
+| Data-Wait pro Batch | `num_workers=0` | `num_workers=2` | `num_workers=4` |
+|---|---|---|---|
+| `train_dataloader_next` | **0,141 s** | 1,303 s | 2,016 s |
+| `run_training_batch` | 0,119 s | 0,172 s | 0,167 s |
+| Batches (gemessen) | 20 | 150 | 40 |
+
+**Kontraintuitiv: Worker schaden dem Audio-Pfad.** Die synchrone Last (nw=0,
+ohne Spawn/IPC) ist mit 0,141 s/Batch fast ausbalanciert mit dem Compute
+(0,119 s) — die Per-Item-Dekodierung ist also schon billig (~1,1 ms/Item).
+Mit Workern explodiert das Daten-Warten (nw=2 über 150 Batches, Spawn voll
+amortisiert: 1,30 s/Batch; ~9×). Ursache: der Windows-`spawn`-IPC-Overhead
+(jeder 5,24-MB-Batch wird gepickelt über die Prozessgrenze geschickt)
+übersteigt die billige Dekodierarbeit, die parallelisiert würde. Gegensatz
+zum Video-Pfad, wo die teure Dekodierung (2,4-MB-gzip + schwere Augmentation
+pro 9,6-MB-Sample) Worker lohnt. **Entscheidung: Audio `num_workers=0`** →
+Pro-Step ~0,26 s statt ~1,5-2,2 s (**~5-8× schneller**) und ~6 GB Host-RAM
+frei (keine 4 Spawn-Prozesse — entlastet die Commit-Pressure-Zone).
+`num_workers=1` nicht getestet: dessen Per-Batch-IPC (das nw=2 ~1,1 s
+kostete) würde den max. Overlap-Gewinn von 0,141 s/Step weit übersteigen.
+
+**Generelle Regel (für künftige Pfade):** Worker lohnen nur, wenn die
+Per-Item-Dekodierung teuer genug ist, um den Spawn-/IPC-Overhead zu
+amortisieren. Billige Dekodierung + großer Batch (viele kleine Items/Batch) →
+`num_workers=0`. Teure Dekodierung → Worker + `prefetch_factor`.
+
 ### Ablauf der Ablationen (vom Nutzer zu starten)
 
 ```bash
@@ -132,21 +209,22 @@ python src/train.py experiment=train_video_phase2_lora   # braucht videomae.ckpt
 
 ## 2. Zurückgestellt — hoher Nutzen, bewusste Entscheidung
 
-### 2.1 DataLoader-Tuning (erst messen!)
+### 2.1 DataLoader-Tuning — erledigt (gemessen & entschieden)
 
-Erst relevant, seit SDPA (§1.8) den GPU-Durchsatz ~3× erhöht hat — jetzt kann
-der DataLoader zum Engpass werden: 1 Epoche mit
-`Trainer(profiler="simple")` + GPU-Auslastung loggen. Falls I/O-bound:
-`prefetch_factor` erhöhen, `num_workers 2 → 3` (RAM-Budget! ~1,5 GB pro
-Spawn-Worker — vgl. die ENOSPC-/Commit-Pressure-Vorfälle auf der 16-GB-Box).
+Vollständig abgeschlossen (→ §1.9): Knopf verdrahtet, gemessen, `prefetch_factor`
+für Video/Multimodal auf 4 gesetzt (Audio bleibt 2). Nur noch **neu messen, wenn
+sich Hardware oder Daten ändern** (anderes RAM-Budget, geänderte Sample-Größe,
+mehr `num_workers`); Mess-Befehl in `docs/commands.md` §4.2.
 
 ### 2.2 HDF5-Repack gzip→lzf
 
-gzip-4-Dekompression der 2,4-MB-Video-Samples ist der größte
-Per-Item-CPU-Posten neben der Augmentation. `h5repack` auf den bestehenden
-Dateien (keine Neuverarbeitung nötig): ~2-3× schnellere Reads, ~30-50 %
-größere Dateien. Nur umsetzen, wenn 2.1-Messungen einen I/O-Bottleneck
-zeigen.
+gzip-4-Dekompression der 2,4-MB-Video-Samples ist der größte Per-Item-CPU-Posten
+neben der Augmentation. Die §1.9-Messung bestätigt den I/O-Bottleneck (Data-Wait
+> Compute bei `prefetch_factor=2`); `prefetch_factor=4` hat ihn auf ~ausgeglichen
+gebracht. lzf wäre der **nächste** Hebel, falls noch mehr Durchsatz nötig ist:
+`h5repack` auf den bestehenden Dateien (keine Neuverarbeitung nötig): ~2-3×
+schnellere Reads, ~30-50 % größere Dateien. Senkt die reine Decode-Zeit pro
+Sample (komplementär zu prefetch, das nur die Latenz puffert).
 
 ---
 

@@ -17,6 +17,7 @@ class VideoMAEDataModule(BaseDeepfakeDataModule):
         augment: bool = False,
         augment_strength: str = "standard",
         balanced_sampling: bool = False,
+        prefetch_factor: int = 2,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)

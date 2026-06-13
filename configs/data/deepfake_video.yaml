@@ -13,3 +13,10 @@ augment_strength: standard
 # nativen ~94/6-Verteilung. Alternative zu model.class_weights (dann auf null
 # setzen — nicht doppelt korrigieren!). Ablation: experiment=train_video_balanced
 balanced_sampling: false
+# Batches, die jeder Worker vorlädt (nur aktiv bei num_workers>0). Höher
+# versteckt I/O-Latenz, kostet aber Host-RAM: In-Flight ≈ num_workers ×
+# prefetch_factor × batch_size × ~9,6 MB (float32-Video-Sample) ≈ 1,2 GB bei 4.
+# Auf 4 gesetzt nach Profiling (Data-Wait 0,599→0,347 s/Batch, −42 %, ~1,4×
+# Durchsatz; Messung s. docs/performance_roadmap.md §1.9). 6 lohnt nicht
+# (Data-Wait ≈ Compute, RAM nähert sich der Commit-Pressure-Zone).
+prefetch_factor: 4

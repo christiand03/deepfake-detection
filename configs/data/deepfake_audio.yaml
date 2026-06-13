@@ -5,7 +5,14 @@ data_dir: ${paths.data_dir}/processed
 
 # Hyperparameter für den DataLoader
 batch_size: 128  # Phase-1-Wert (Backbone eingefroren, ~1,7 GB, ~3,4× schneller als 32). Phase 2 ggf. heruntersetzen.
-num_workers: 4   # von 8 reduziert: Windows-Spawn-Worker brauchen je ~1,5 GB Host-RAM; 8 sprengt die 16-GB-Box. Bei wenig RAM auf 2.
+# 0 (synchron) NACH MESSUNG: Audio-Samples decodieren extrem billig
+# (~0,14 s/Batch synchron für 128 Items), zu billig, um den Windows-Spawn-/IPC-
+# Overhead der Worker zu amortisieren — mit Workern war der DataLoader ~9×
+# LANGSAMER (nw=2: 1,30 s/Batch, nw=4: 2,0 s vs. nw=0: 0,14 s; s.
+# docs/performance_roadmap.md §1.9). nw=0 → ~5-8× schnelleres Audio-Training
+# UND ~6 GB Host-RAM frei (keine 4 Spawn-Prozesse). Gegensatz zum Video-Pfad,
+# wo die teure Per-Item-Dekodierung Worker lohnt (nw=2 dort).
+num_workers: 0
 pin_memory: True
 label_type: "label_audio"
 augment: true  # Train-only-Augmentation (Rauschen / Polaritäts-Flip) gegen Sprecher-Memorierung
@@ -15,3 +22,7 @@ augment_strength: standard
 # Balanced Sampling (WeightedRandomSampler) statt Shuffle; Alternative zu
 # model.class_weights (dann auf null setzen — nicht doppelt korrigieren!).
 balanced_sampling: false
+# Inaktiv bei num_workers=0 (oben): prefetch_factor greift nur mit Workern und
+# wird intern auf None gesetzt. Bleibt als Doku stehen, falls num_workers je >0
+# gesetzt wird (dann aber s. §1.9 — Worker lohnen sich für Audio nicht).
+prefetch_factor: 2

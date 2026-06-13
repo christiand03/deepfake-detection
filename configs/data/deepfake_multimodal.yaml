@@ -11,3 +11,10 @@ augment_strength: standard
 # Balanced Sampling (WeightedRandomSampler) statt Shuffle; Alternative zu
 # model.class_weights (dann auf null setzen — nicht doppelt korrigieren!).
 balanced_sampling: false
+# Batches, die jeder Worker vorlädt (nur aktiv bei num_workers>0). Höher
+# versteckt I/O-Latenz, kostet aber Host-RAM (jedes Sample trägt Video UND
+# Audio): In-Flight ≈ num_workers × prefetch_factor × batch_size × ~9,6 MB.
+# Auf 4 gesetzt analog zum Video-Modell (gleicher I/O-bound-Profil durch die
+# Video-Samples; Messung s. docs/performance_roadmap.md §1.9). 6 nicht — der
+# höhere Per-Sample-Speicher (Video+Audio) würde den RAM-Spielraum sprengen.
+prefetch_factor: 4
