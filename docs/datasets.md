@@ -41,11 +41,36 @@ Die vollständigen 404 GB von AV-Deepfake1M können im Rahmen dieses Projekts ni
 - Auswahl erfolgt auf Identitätsebene vor dem Split
 
 **Aktueller prozessierter Stand (Regenerierung 2026-06-11, s. `audit_2026-06.md` §3):**
-`run.max_videos=12000` von 29.247 lokal vorhandenen Videos (~30 von 75 Identitäten);
-Identity-Hash-Split (seed 11) → **9.959 / 861 / 1.180** Videos train/val/test. Vorher waren
-nur 3.976 Videos (12 Identitäten, val = 2 Identitäten) prozessiert — die dünne Validierung
-machte Checkpoint-Selektion über `val/auc_video` hochvariant. Die vollen 29.247 Videos
-würden ~650 GB HDF5 benötigen und passen nicht auf die Platte.
+`run.max_videos=12000` von 29.247 lokal vorhandenen Videos; Identity-Hash-Split (seed 11).
+Vorher waren nur 3.976 Videos (12 Identitäten, val = 2 Identitäten) prozessiert — die dünne
+Validierung machte Checkpoint-Selektion über `val/auc_video` hochvariant. Die vollen 29.247
+Videos würden ~650 GB HDF5 benötigen und passen nicht auf die Platte.
+
+**Tatsächlich realisierter Datensatz (gemessen aus `data/processed/{split}_metadata.csv`,
+deckungsgleich mit den `.h5`-Dateien, Stand 2026-06-13):**
+
+| Split | Unique Identitäten | Unique Videos | Records (16-Frame-Chunks) |
+|---|---|---|---|
+| train | **22** | 9.863 | 133.708 |
+| val   | **4**  | 854   | 9.477 |
+| test  | **6**  | 1.169 | 14.541 |
+| **Σ** | **32** | 11.886 | 157.726 |
+
+Die Splits sind **identitätsdisjunkt** (keine Person in mehr als einem Split) — bestätigt durch
+die deterministische Per-Identität-Hash-Zuordnung in `split_utils.assign_splits`.
+
+> **Hinweis zur Identitätszahl (75 vs. 32):** Der `data/train_metadata/`-Ordner enthält 75
+> Identitäten; wendet man den Hash-Split (seed 11) auf *alle* 75 an, ergäbe sich 54/8/13. In den
+> aktuellen Datensatz gelangten jedoch nur **32** Identitäten, weil der `run.max_videos=12000`-Cap
+> die Verarbeitung vor den übrigen Identitäten beendet hat. Die obige Tabelle (22/4/6) ist
+> maßgeblich, da sie aus den Chunk-Metadaten stammt, die den `.h5`-Inhalt exakt abbilden.
+
+> **Beobachtung — duplizierte Audio-Vektoren:** Ein Hash-Lauf über alle Audio-Zeilen ergab
+> 94.681/6.679/10.312 *unique* Audio-Vektoren (train/val/test), d.h. ~29 % der Zeilen teilen sich
+> einen identischen Audio-Vektor. Das ist erwartungsgemäß **kein Pipeline-Bug**: Die vier
+> `modify_type`-Varianten desselben Segments mit *echtem* Audio (`real`, `visual_modified`) teilen
+> dieselbe Audiospur, ebenso die beiden Varianten mit *gefälschtem* Audio (`audio_modified`,
+> `both_modified`). Records bleiben dennoch verschieden, da sich die Videospur unterscheidet.
 
 ## 2. Kritische Fehlerquellen & Checkliste (Vermeidung von "Silent Bugs")
 
