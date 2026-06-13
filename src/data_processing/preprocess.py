@@ -303,6 +303,13 @@ def _extract_video_chunks(
     """
     video_id: str = row.video_id  # type: ignore[attr-defined]
 
+    # Drop any cross-video tracking state before this video. No-op in IMAGE mode;
+    # in VIDEO mode it recreates the landmarker so the previous video's tracked
+    # face position cannot bias this video's first frames. Both the sequential
+    # loop and the parallel workers route every video through here, so this one
+    # call covers both paths.
+    extractor.reset_video_state()
+
     try:
         video_path = Path(row.video_path)  # type: ignore[attr-defined]
         split: str = row.split  # type: ignore[attr-defined]

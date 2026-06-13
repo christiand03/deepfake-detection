@@ -231,7 +231,14 @@ class FaceExtractor:
             )
             raise FileNotFoundError(msg)
 
-        base_options = mp.tasks.BaseOptions(model_asset_path=str(resolved))
+        self._resolved_model_path = resolved
+        self._face_landmarker = self._create_landmarker()
+
+    # ── Private ───────────────────────────────────────────────────────────────
+
+    def _create_landmarker(self) -> mp.tasks.vision.FaceLandmarker:
+        """Build a fresh FaceLandmarker for the configured running mode."""
+        base_options = mp.tasks.BaseOptions(model_asset_path=str(self._resolved_model_path))
         options = mp.tasks.vision.FaceLandmarkerOptions(
             base_options=base_options,
             running_mode=(
@@ -241,9 +248,24 @@ class FaceExtractor:
             ),
             num_faces=1,
         )
-        self._face_landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+        return mp.tasks.vision.FaceLandmarker.create_from_options(options)
 
-    # ── Private ───────────────────────────────────────────────────────────────
+    def reset_video_state(self) -> None:
+        """Drop per-video tracking state before a new video (VIDEO mode only).
+
+        MediaPipe VIDEO mode tracks faces across consecutive ``detect_for_video``
+        calls and requires strictly increasing timestamps on a given landmarker
+        instance.  Reusing one instance across independent videos would (a) carry
+        the previous video's tracking state into the next video's first frames,
+        biasing those bboxes, and (b) forbid restarting the timestamp clock.
+        Recreating the landmarker is the only reliable reset.  No-op in IMAGE
+        mode, where ``detect()`` is stateless and the timestamp is unused.
+        """
+        if self._running_mode != "video":
+            return
+        self._face_landmarker.close()
+        self._timestamp_ms = 0
+        self._face_landmarker = self._create_landmarker()
 
     def _detect_bbox(self, frame_rgb: np.ndarray) -> tuple[int, int, int, int] | None:
         """Run MediaPipe FaceLandmarker on a single RGB frame.

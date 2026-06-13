@@ -604,6 +604,9 @@ def test_preprocess_smoke(tmp_path: Path) -> None:
         def __exit__(self, *args: object) -> None:
             pass
 
+        def reset_video_state(self) -> None:
+            pass
+
         def __call__(self, frames: np.ndarray) -> np.ndarray:
             n = frames.shape[0]
             return np.zeros((n, 3, 224, 224), dtype=np.uint8)

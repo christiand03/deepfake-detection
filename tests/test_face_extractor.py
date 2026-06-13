@@ -150,6 +150,41 @@ class TestFaceExtractor:
         with pytest.raises(ValueError, match="uint8"):
             extractor(bad)
 
+    def test_reset_video_state_recreates_landmarker_in_video_mode(self) -> None:
+        # VIDEO mode tracks across frames; reset_video_state must drop that state
+        # (recreate the landmarker) and restart the timestamp clock between videos.
+        fd, model_path = tempfile.mkstemp(suffix=".task")
+        os.close(fd)
+        try:
+            with patch("src.data_processing.face_extractor.mp") as mock_mp:
+                mock_mp.tasks.vision.FaceLandmarker.create_from_options.side_effect = [MagicMock(), MagicMock()]
+                extractor = FaceExtractor(model_path=model_path, running_mode="video")
+                first_lm = extractor._face_landmarker
+                extractor._timestamp_ms = 6400  # simulate frames already consumed
+                extractor.reset_video_state()
+                first_lm.close.assert_called_once()
+                assert extractor._face_landmarker is not first_lm
+                assert extractor._timestamp_ms == 0
+                assert mock_mp.tasks.vision.FaceLandmarker.create_from_options.call_count == 2
+        finally:
+            os.unlink(model_path)
+
+    def test_reset_video_state_noop_in_image_mode(self) -> None:
+        # IMAGE mode is stateless (detect()); reset must not recreate or close anything.
+        fd, model_path = tempfile.mkstemp(suffix=".task")
+        os.close(fd)
+        try:
+            with patch("src.data_processing.face_extractor.mp") as mock_mp:
+                mock_mp.tasks.vision.FaceLandmarker.create_from_options.return_value = MagicMock()
+                extractor = FaceExtractor(model_path=model_path)  # default running_mode="image"
+                lm = extractor._face_landmarker
+                extractor.reset_video_state()
+                assert extractor._face_landmarker is lm
+                lm.close.assert_not_called()
+                assert mock_mp.tasks.vision.FaceLandmarker.create_from_options.call_count == 1
+        finally:
+            os.unlink(model_path)
+
     def test_context_manager_calls_close(self) -> None:
         fd, model_path = tempfile.mkstemp(suffix=".task")
         os.close(fd)
