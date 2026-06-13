@@ -10,7 +10,7 @@ Two modalities are supported:
     - ``video``       — δ* over the 16-frame VideoMAE input.
     - ``multimodal``  — a joint (δ_video, δ_audio) over MultimodalDeepfakeModule;
                         the audio component is a fixed-length snippet tiled across
-                        each clip's waveform.
+                        the clip's training-length (10,240-sample) audio window.
 
 Metrics on the eval set (clean baseline vs. perturbed) are logged to a W&B
 summary Table ("UAP Transfer"):
@@ -59,6 +59,7 @@ from src.api.inference import (  # noqa: E402
     get_video_model,
 )
 from src.api.uap import (  # noqa: E402
+    DEFAULT_AUDIO_UAP_SAMPLES,
     compute_multimodal_uap,
     compute_video_uap,
     evaluate_multimodal_uap,
@@ -303,8 +304,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--audio-uap-samples",
         type=int,
-        default=16000,
-        help="Length of the universal audio snippet in samples (multimodal; default: 16000 = 1 s).",
+        default=DEFAULT_AUDIO_UAP_SAMPLES,
+        help=(
+            "Length of the universal audio snippet in samples (multimodal). Must be "
+            f"<= {DEFAULT_AUDIO_UAP_SAMPLES} (one training window, 0.64 s); tiled across that window."
+        ),
     )
     parser.add_argument("--output-dir", type=Path, default=_PROJECT_ROOT / "artifacts/uap")
     parser.add_argument("--seed", type=int, default=42)

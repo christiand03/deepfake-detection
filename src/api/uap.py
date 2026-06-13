@@ -30,11 +30,11 @@ import torch.nn.functional as F
 from einops import reduce, repeat
 
 from src.api.inference import (
-    AUDIO_SAMPLE_RATE,
+    AUDIO_SAMPLES_PER_CHUNK,
     IMG_SIZE,
     NUM_FRAMES,
     _device,
-    _load_audio,
+    _preprocess_multimodal,
     _preprocess_video,
 )
 
@@ -50,8 +50,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Default length (in samples) of the universal audio snippet — 1 s at 16 kHz.
-DEFAULT_AUDIO_UAP_SAMPLES = AUDIO_SAMPLE_RATE
+# Default length (in samples) of the universal audio snippet — one training
+# window (0.64 s @ 16 kHz). Must be <= AUDIO_SAMPLES_PER_CHUNK (the model's fixed
+# audio window); the snippet is tiled across that window.
+DEFAULT_AUDIO_UAP_SAMPLES = AUDIO_SAMPLES_PER_CHUNK
 
 
 # ── Perturbation utilities ──────────────────────────────────────────────────────
@@ -93,20 +95,6 @@ def _fold_audio_grad(grad_tiled: Float[Tensor, "1 samples"], snippet_len: int) -
     if pad:
         grad_tiled = F.pad(grad_tiled, (0, pad))
     return reduce(grad_tiled, "1 (n s) -> 1 s", "sum", s=snippet_len)
-
-
-# ── Audio loading ───────────────────────────────────────────────────────────────
-
-
-def _load_audio_tensor(clip_path: Path) -> Float[Tensor, "1 samples"]:
-    """Load a clip's audio as a z-scored ``(1, T)`` waveform tensor on ``_device``.
-
-    Mirrors the normalisation used by the multimodal inference path in
-    :mod:`src.api.inference` so that δ* is fitted in the same input space.
-    """
-    waveform_np, _ = _load_audio(clip_path)
-    waveform = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
-    return (waveform - waveform.mean()) / (waveform.std() + 1e-7)
 
 
 # ── Video UAP ───────────────────────────────────────────────────────────────────
@@ -185,8 +173,10 @@ def compute_multimodal_uap(
     """Fit a joint universal perturbation ``(δ_video, δ_audio)`` over *clips*.
 
     A single joint forward pass per clip preserves cross-modal attention
-    gradients.  The fixed-length audio snippet is tiled across each clip's
-    waveform; its gradient is folded back onto the snippet via
+    gradients.  The (video, audio) pair is the training-identical one produced by
+    :func:`~src.api.inference._preprocess_multimodal` (first face chunk + the
+    chunk-aligned 10,240-sample audio window).  The fixed-length audio snippet is
+    tiled across that window; its gradient is folded back onto the snippet via
     :func:`_fold_audio_grad`.  ``attack_modalities`` gates which perturbation is
     updated, matching ``_pgd_attack_multimodal`` semantics.
 
@@ -200,14 +190,27 @@ def compute_multimodal_uap(
         step_size_audio:       Per-clip descent step size for audio.
         epochs:                Number of passes over the clip set.
         attack_modalities:     ``"video"``, ``"audio"``, or ``"both"``.
-        audio_snippet_samples: Length of the universal audio snippet in samples.
+        audio_snippet_samples: Length of the universal audio snippet in samples;
+                               must be ``<= AUDIO_SAMPLES_PER_CHUNK`` (the model's
+                               fixed audio window) since the snippet is tiled
+                               across that window.
         seed:                  Seed for the per-epoch shuffle (reproducibility).
 
     Returns:
         ``(δ_video, δ_audio)`` — both detached, on ``_device``.  δ_video has
         shape ``(1, NUM_FRAMES, 3, IMG_SIZE, IMG_SIZE)``; δ_audio has shape
         ``(1, audio_snippet_samples)``.
+
+    Raises:
+        ValueError: If ``audio_snippet_samples > AUDIO_SAMPLES_PER_CHUNK``.
     """
+    if audio_snippet_samples > AUDIO_SAMPLES_PER_CHUNK:
+        msg = (
+            f"audio_snippet_samples ({audio_snippet_samples}) must be <= the model's audio "
+            f"window ({AUDIO_SAMPLES_PER_CHUNK}); the snippet is tiled across that window."
+        )
+        raise ValueError(msg)
+
     attack_video = attack_modalities in ("video", "both")
     attack_audio = attack_modalities in ("audio", "both")
 
@@ -222,8 +225,10 @@ def compute_multimodal_uap(
         n_used = 0
         for clip_path in order:
             try:
-                x_v = _preprocess_video(clip_path).to(_device)  # (1, T, C, H, W)
-                x_a = _load_audio_tensor(clip_path)  # (1, T_samples)
+                # Training-identical aligned pair: the first face chunk and the
+                # 10,240-sample audio window for that chunk (z-scored), exactly as
+                # the per-clip multimodal attack / sweep baseline use it.
+                x_v, x_a, _, _ = _preprocess_multimodal(clip_path)
             except Exception:  # noqa: BLE001
                 log.warning("Skipping clip (preprocess failed): %s", clip_path)
                 continue
@@ -291,8 +296,7 @@ def evaluate_multimodal_uap(
     deltas yields the perturbed prediction.  Sharing one path keeps the clean
     baseline and perturbed eval on identical preprocessing *and* the same model.
     """
-    x_v = _preprocess_video(clip_path).to(_device)
-    x_a = _load_audio_tensor(clip_path)
+    x_v, x_a, _, _ = _preprocess_multimodal(clip_path)
     if delta_video is not None:
         x_v = x_v + delta_video
     if delta_audio is not None:

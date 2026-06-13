@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from src.api import uap
@@ -103,3 +104,72 @@ def test_compute_video_uap_shape_and_budget(monkeypatch):
     # Targeted descent toward class 0 (logits = [sum, -sum]) pushes the input sum
     # up, so the accumulated perturbation must be non-trivial.
     assert delta.abs().max().item() > 0.0
+
+
+# ── compute_multimodal_uap (dummy fused model, monkeypatched preprocessing) ──────
+
+
+class _DummyMultimodalModel:
+    """Differentiable fused stand-in: logits depend on both modality means."""
+
+    def __call__(self, pixel_values: torch.Tensor, input_values: torch.Tensor):
+        s_v = pixel_values.flatten(1).mean(dim=1, keepdim=True)  # (B, 1)
+        s_a = input_values.flatten(1).mean(dim=1, keepdim=True)  # (B, 1)
+        s = s_v + s_a
+        return torch.cat([s, -s], dim=1)  # (B, 2)
+
+
+def test_compute_multimodal_uap_uses_aligned_window(monkeypatch):
+    """δ_audio is the snippet length and tiles across the 10,240-sample window.
+
+    The aligned pair comes from _preprocess_multimodal (monkeypatched), so the
+    audio fed to the model is the training-length window — not the whole waveform.
+    """
+    # _preprocess_multimodal returns device tensors; mirror that contract.
+    fixed_v = torch.randn(1, uap.NUM_FRAMES, 3, uap.IMG_SIZE, uap.IMG_SIZE, device=uap._device)
+    window = torch.randn(1, uap.AUDIO_SAMPLES_PER_CHUNK, device=uap._device)  # one training window
+    monkeypatch.setattr(
+        uap,
+        "_preprocess_multimodal",
+        lambda _path: (fixed_v.clone(), window.clone(), window.cpu().numpy()[0], 16000),
+    )
+
+    eps, a_eps, snippet = 0.03, 0.05, 2048
+    delta_v, delta_a = uap.compute_multimodal_uap(
+        _DummyMultimodalModel(),
+        clips=[Path("a.mp4"), Path("b.mp4")],
+        target_class=0,
+        epsilon=eps,
+        audio_epsilon=a_eps,
+        step_size=eps / 4,
+        step_size_audio=a_eps / 4,
+        epochs=2,
+        attack_modalities="both",
+        audio_snippet_samples=snippet,
+        seed=0,
+    )
+
+    assert delta_v.shape == (1, uap.NUM_FRAMES, 3, uap.IMG_SIZE, uap.IMG_SIZE)
+    assert delta_a.shape == (1, snippet)  # snippet length, tiled across the window
+    assert delta_v.abs().max().item() <= eps + 1e-6
+    assert delta_a.abs().max().item() <= a_eps + 1e-6
+    assert delta_v.abs().max().item() > 0.0
+    assert delta_a.abs().max().item() > 0.0
+
+
+def test_compute_multimodal_uap_rejects_oversized_snippet():
+    """A snippet longer than the model's audio window is a hard error."""
+    with pytest.raises(ValueError, match="must be <="):
+        uap.compute_multimodal_uap(
+            _DummyMultimodalModel(),
+            clips=[Path("a.mp4")],
+            target_class=0,
+            epsilon=0.03,
+            audio_epsilon=0.03,
+            step_size=0.01,
+            step_size_audio=0.01,
+            epochs=1,
+            attack_modalities="both",
+            audio_snippet_samples=uap.AUDIO_SAMPLES_PER_CHUNK + 1,
+            seed=0,
+        )
