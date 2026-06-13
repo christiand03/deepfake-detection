@@ -64,7 +64,12 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
 from src.data_processing.face_extractor import FaceExtractor, iter_video_chunks
-from src.data_processing.ffmpeg_utils import extract_audio, normalize_av, probe_video
+from src.data_processing.ffmpeg_utils import (
+    extract_audio,
+    normalize_av,
+    probe_video,
+    remux_copy,
+)
 from src.data_processing.hdf5_writer import ChunkMetadata, H5Writer
 from src.data_processing.split_utils import assign_splits
 
@@ -314,13 +319,22 @@ def _extract_video_chunks(
         video_path = Path(row.video_path)  # type: ignore[attr-defined]
         split: str = row.split  # type: ignore[attr-defined]
 
-        # Read frames straight from the source when it is already at the target
-        # fps — re-encoding (even at crf 18) is a second generation of lossy
-        # compression on exactly the high-frequency band where forgery traces
-        # live. Only off-fps sources get the FFmpeg normalisation pass.
+        # Every processed video is materialised under data/normalized/ so the
+        # downstream consumers (eval/robustness/UAP sweeps, the demo API) can
+        # resolve a flat {video_id}.mp4. Sources already at the target fps are
+        # *stream-copied* (lossless remux, no re-encode) — re-encoding even at
+        # crf 18 would be a second generation of lossy compression on exactly
+        # the high-frequency band where forgery traces live. Only off-fps
+        # sources get the FFmpeg fps-normalisation pass.
+        normalized_dir = Path(cfg.data.normalized_dir)
+        normalized_dir.mkdir(parents=True, exist_ok=True)
+        normalized_path = normalized_dir / f"{video_id}.mp4"
         source_fps = float(probe_video(video_path)["fps"])
         if abs(source_fps - cfg.preprocessing.target_fps) < 0.01:  # noqa: PLR2004
-            chunk_source_path = video_path
+            # Lossless container copy (skip if already done) — decoded frames are
+            # byte-identical to the source, so the stored H5 chunks are unchanged.
+            if not normalized_path.exists():
+                remux_copy(video_path, normalized_path)
         else:
             log.info(
                 "Source fps %.3f != target %d — re-encoding %s",
@@ -328,9 +342,6 @@ def _extract_video_chunks(
                 cfg.preprocessing.target_fps,
                 video_id,
             )
-            normalized_dir = Path(cfg.data.normalized_dir)
-            normalized_dir.mkdir(parents=True, exist_ok=True)
-            normalized_path = normalized_dir / f"{video_id}.mp4"
             # Normalise video+audio in a single FFmpeg pass (skip if already done)
             if not normalized_path.exists():
                 normalize_av(
@@ -340,7 +351,7 @@ def _extract_video_chunks(
                     sample_rate=cfg.preprocessing.sample_rate,
                     crf=cfg.preprocessing.get("reencode_crf", 18),
                 )
-            chunk_source_path = normalized_path
+        chunk_source_path = normalized_path
 
         # Extract audio directly from the source MP4 — not from the AAC-normalised
         # intermediate — to avoid a second lossy encoding step (MP4→AAC→WAV).

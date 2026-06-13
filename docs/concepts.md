@@ -56,9 +56,10 @@ inkrementellem Preprocessing landete dieselbe Identität in unterschiedlichen
 Splits → Leakage. *(model.md §7.9.)*
 
 **Kein Re-Encode für 25-fps-Quellen; sonst CRF 18** — *Was:* fps wird geprobt; ist
-sie bereits 25 (alle AV-Deepfake1M-Videos), wird direkt aus der Quelle gelesen;
-off-fps-Quellen werden mit visuell verlustfreiem CRF 18 (statt libx264-Default 23)
-re-encodiert. *Warum:* Ein pauschaler Re-Encode legt eine **zweite verlustbehaftete
+sie bereits 25 (alle AV-Deepfake1M-Videos), wird die Quelle **verlustfrei** nach
+`data/normalized/` stream-kopiert (`ffmpeg -c copy` — kein Re-Encode, Frames
+byte-identisch); off-fps-Quellen werden mit visuell verlustfreiem CRF 18 (statt
+libx264-Default 23) re-encodiert. *Warum:* Ein pauschaler Re-Encode legt eine **zweite verlustbehaftete
 Kompressionsgeneration** über jedes Video und glättet genau das Hochfrequenzband,
 in dem Forgery-Artefakte leben. Kompression gehört kontrolliert in Phase 3, nicht
 unkontrolliert ins Preprocessing. *(Audit §1.1.)*

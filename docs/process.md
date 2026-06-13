@@ -85,10 +85,13 @@ Modell nicht „diese Person kenne ich aus dem Training" als Shortcut lernen kan
 Für jedes Video:
 
 1. **FPS-Check / Normalisierung.** Liegt das Video bereits bei `target_fps`
-   (25), wird es **direkt** gelesen — kein Re-Encode. Nur off-fps-Quellen
-   durchlaufen einen FFmpeg-Pass (`normalize_av`, CRF 18 = visuell verlustfrei).
-   Grund: Ein zweiter Lossy-Encode würde genau das hochfrequente Band
-   beschädigen, in dem die Forgery-Spuren liegen.
+   (25), wird es **verlustfrei** nach `data/normalized/` stream-kopiert
+   (`remux_copy`, `ffmpeg -c copy` — kein Re-Encode, Frames byte-identisch). Nur
+   off-fps-Quellen durchlaufen einen vollen FFmpeg-Pass (`normalize_av`, CRF 18 =
+   visuell verlustfrei). Grund: Ein zweiter Lossy-Encode würde genau das
+   hochfrequente Band beschädigen, in dem die Forgery-Spuren liegen. (Jedes
+   verarbeitete Video landet so unter `data/normalized/{video_id}.mp4` — die
+   Sweeps und die Demo-API lösen darüber die Quell-MP4 auf.)
 2. **Audio extrahieren.** Das Audio wird per FFmpeg **direkt aus der
    Quell-MP4** (nicht aus dem normalisierten Zwischenfile) als 16-kHz-Mono-WAV
    gezogen, um eine zweite Audio-Kompression zu vermeiden.

@@ -98,8 +98,9 @@ die deterministische Per-Identität-Hash-Zuordnung in `split_utils.assign_splits
   verlustbehaftete Kompressionsgeneration über *jedes* Video — und glättet genau die
   hochfrequenten Forgery-Artefakte, die das Modell erkennen soll. Still, ohne Crash.
 - **Vermeidung:** fps der Quelle erst proben; bei Treffer (AV-Deepfake1M ist durchgehend
-  25 fps) direkt aus der Quelle lesen, sonst mit CRF 18 (visuell verlustfrei) re-encodieren.
-  Kompression gehört kontrolliert in Phase 3 (Robustheit), nicht unkontrolliert ins Preprocessing.
+  25 fps) verlustfrei nach `data/normalized/` stream-kopieren (`ffmpeg -c copy`, kein
+  Re-Encode), sonst mit CRF 18 (visuell verlustfrei) re-encodieren. Kompression gehört
+  kontrolliert in Phase 3 (Robustheit), nicht unkontrolliert ins Preprocessing.
 
 ### F: Boundary-Overlap-Labelrauschen
 - **Problem:** Markiert man einen Chunk bei *jeder* zeitlichen Überlappung mit einem

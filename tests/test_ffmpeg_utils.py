@@ -7,7 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.data_processing.ffmpeg_utils import extract_audio, normalize_av, normalize_video, probe_video
+from src.data_processing.ffmpeg_utils import (
+    extract_audio,
+    normalize_av,
+    normalize_video,
+    probe_video,
+    remux_copy,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -302,3 +308,68 @@ class TestNormalizeAv:
         assert abs(fps_num / fps_den - 25.0) < 0.1
         assert int(audio_stream["sample_rate"]) == 16_000
         assert audio_stream["channels"] == 1
+
+
+# ── remux_copy ────────────────────────────────────────────────────────────────
+
+
+class TestRemuxCopy:
+    def test_missing_input_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError, match="not found"):
+            remux_copy("nonexistent.mp4", tmp_path / "out.mp4")
+
+    def test_returns_output_path(self, tmp_path: Path) -> None:
+        fake_input = tmp_path / "input.mp4"
+        fake_input.touch()
+        output = tmp_path / "out.mp4"
+        with patch("src.data_processing.ffmpeg_utils.ffmpeg") as mock_ffmpeg:
+            mock_stream = MagicMock()
+            mock_ffmpeg.input.return_value = mock_stream
+            mock_stream.output.return_value = mock_stream
+            mock_stream.overwrite_output.return_value = mock_stream
+            result = remux_copy(fake_input, output)
+        assert result == output
+
+    def test_creates_output_dir(self, tmp_path: Path) -> None:
+        fake_input = tmp_path / "input.mp4"
+        fake_input.touch()
+        output = tmp_path / "nested" / "out.mp4"
+        with patch("src.data_processing.ffmpeg_utils.ffmpeg") as mock_ffmpeg:
+            mock_stream = MagicMock()
+            mock_ffmpeg.input.return_value = mock_stream
+            mock_stream.output.return_value = mock_stream
+            mock_stream.overwrite_output.return_value = mock_stream
+            remux_copy(fake_input, output)
+        assert output.parent.exists()
+
+    def test_passes_copy_codec_to_ffmpeg(self, tmp_path: Path) -> None:
+        """Both streams must be copied verbatim (-c copy) — no re-encode args."""
+        fake_input = tmp_path / "input.mp4"
+        fake_input.touch()
+        output = tmp_path / "out.mp4"
+        with patch("src.data_processing.ffmpeg_utils.ffmpeg") as mock_ffmpeg:
+            mock_stream = MagicMock()
+            mock_ffmpeg.input.return_value = mock_stream
+            mock_stream.output.return_value = mock_stream
+            mock_stream.overwrite_output.return_value = mock_stream
+            remux_copy(fake_input, output)
+            mock_stream.output.assert_called_once_with(str(output), c="copy")
+
+    @requires_ffmpeg
+    @pytest.mark.slow
+    def test_output_is_lossless_copy(self, tmp_path: Path) -> None:
+        """The remuxed file keeps the source codec/fps/frame-count (no re-encode)."""
+        import ffmpeg as _ffmpeg
+
+        output = tmp_path / "copied.mp4"
+        remux_copy(DUMMY_VIDEO, output)
+        assert output.exists()
+
+        src = _ffmpeg.probe(str(DUMMY_VIDEO))
+        dst = _ffmpeg.probe(str(output))
+        src_v = next(s for s in src["streams"] if s["codec_type"] == "video")
+        dst_v = next(s for s in dst["streams"] if s["codec_type"] == "video")
+        # Same encoded video stream => identical codec and frame count (proves no
+        # re-encode); a re-encode would change at least the bit-exact frame data.
+        assert dst_v["codec_name"] == src_v["codec_name"]
+        assert dst_v.get("nb_frames") == src_v.get("nb_frames")

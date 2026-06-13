@@ -58,7 +58,7 @@ ruff format src tests
 ## Tests:
 
 pytest tests/                    # all tests
-pytest tests/test_dataset.py     # single file
+pytest tests/test_preprocess.py  # single file
 pytest -m "not slow"             # skip slow tests
 
 ---

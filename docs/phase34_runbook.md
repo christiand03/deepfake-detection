@@ -10,6 +10,17 @@ ordnet jede Ausgabespalte der zu beantwortenden Forschungsfrage zu.
 > Daten (`data/processed/test_metadata.csv` + `data/normalized/*.mp4`), GPU.
 > Die Sweeps sind langläufig — pro Grid-Punkt wird das gesamte Testset re-enkodiert
 > bzw. angegriffen.
+>
+> **Falls `data/normalized/` leer ist** (Datensätze, die vor der Stream-Copy-Policy
+> verarbeitet wurden — Audit §1.1-Nachtrag), die flachen `{video_id}.mp4` einmalig
+> nachziehen, bevor die Sweeps laufen (kein Re-Processing, verlustfreie Copies):
+>
+> ```powershell
+> python -m scripts.backfill_normalized --splits test     # nur das Testset reicht für die Sweeps
+> ```
+>
+> Die Loader loggen sonst eine Warnung „N video(s) missing from data/normalized" und
+> überspringen die fehlenden Clips.
 
 ## 0. Checkpoints setzen (PowerShell)
 

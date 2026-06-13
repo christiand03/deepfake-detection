@@ -214,5 +214,3 @@ darüber hinaus einzureihen.
 | 2 | `train_multimodal_phase2` (concat) | `multimodal_concat.ckpt` | `multimodal_concat_phase2.ckpt` |
 | 4 | `eval_adversarial_sweep.py` (Eval) | `*_phase2.ckpt` (eingefroren) | — (W&B-Table, kein ckpt) |
 | 4 | `compute_uap.py` (Eval) | `*_phase2.ckpt` (eingefroren) | — (W&B-Table, kein ckpt) |
-</content>
-</invoke>

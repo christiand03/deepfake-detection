@@ -57,6 +57,25 @@ Crops, daher **nur zusammen mit einer vollen Regenerierung** aktivieren und mit
 **Ausgaben:**
 - `data/processed/train.h5`, `val.h5`, `test.h5`
 - `data/processed/train_metadata.csv`, `val_metadata.csv`, `test_metadata.csv`
+- `data/normalized/{video_id}.mp4` — jede verarbeitete Quelle wird hier
+  materialisiert (on-fps verlustfrei stream-kopiert, off-fps CRF-18-re-encodiert).
+  Die Sweeps (`scripts/eval_*`) und die Demo-API lösen darüber die flache Quell-MP4 auf.
+
+---
+
+### `data/normalized/` nachfüllen (Datensätze vor der Stream-Copy-Policy)
+
+Wurde ein Datensatz verarbeitet, als das Preprocessing 25-fps-Quellen noch *direkt*
+las (leeres `data/normalized/`, Audit §1.1-Nachtrag), die flachen `{video_id}.mp4`
+einmalig aus den Rohvideos nachziehen — kein Re-Processing, verlustfreie Copies:
+
+```bash
+python -m scripts.backfill_normalized                 # alle Splits (~10 GB Rohdaten)
+python -m scripts.backfill_normalized --splits test   # nur das Testset (genügt für die Sweeps)
+python -m scripts.backfill_normalized --dry-run       # nur berichten, nichts schreiben
+```
+
+Nicht auflösbare `video_id`s (kein passendes Rohvideo) führen zu Exit-Code ≠ 0.
 
 ---
 

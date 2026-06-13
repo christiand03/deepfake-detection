@@ -121,6 +121,43 @@ def normalize_av(
     return output_path
 
 
+def remux_copy(
+    input_path: Path | str,
+    output_path: Path | str,
+) -> Path:
+    """Copy a video into the normalized layout without re-encoding any stream.
+
+    Remuxes both the video and audio streams verbatim (``-c copy``): the encoded
+    bitstream is rewritten into a new container, so the decoded frames are
+    byte-identical to the source and no second generation of lossy compression
+    is introduced. Used for sources that are already at the target frame rate
+    (see :func:`normalize_av` for the off-fps re-encode path).
+
+    Args:
+        input_path: Path to the source video file.
+        output_path: Destination path for the remuxed copy.
+
+    Returns:
+        Path to the written output file.
+
+    Raises:
+        FileNotFoundError: If ``input_path`` does not exist.
+        ffmpeg.Error: If FFmpeg processing fails.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    if not input_path.exists():
+        msg = f"Input video not found: {input_path}"
+        raise FileNotFoundError(msg)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    (ffmpeg.input(str(input_path)).output(str(output_path), c="copy").overwrite_output().run(quiet=True))
+
+    return output_path
+
+
 def extract_audio(
     video_path: Path | str,
     output_path: Path | str,

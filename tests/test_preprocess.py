@@ -321,6 +321,7 @@ class TestProcessVideo:
 
         with (
             _patch_probe(),
+            patch("src.data_processing.preprocess.remux_copy"),
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
             patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter(fake_chunks)),
@@ -357,6 +358,7 @@ class TestProcessVideo:
 
         with (
             _patch_probe(),
+            patch("src.data_processing.preprocess.remux_copy"),
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
             patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter(fake_frames)),
@@ -391,6 +393,7 @@ class TestProcessVideo:
 
         with (
             _patch_probe(),
+            patch("src.data_processing.preprocess.remux_copy"),
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
             patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter(fake_frames)),
@@ -430,6 +433,7 @@ class TestProcessVideo:
 
         with (
             _patch_probe(),
+            patch("src.data_processing.preprocess.remux_copy"),
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
             patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter(fake_frames)),
@@ -468,16 +472,22 @@ class TestProcessVideo:
         assert n_skipped == 0
         assert failed is True
 
-    def test_source_at_target_fps_skips_reencode(self, tmp_path: Path) -> None:
-        """A source already at target fps is read directly — no FFmpeg re-encode."""
+    def test_source_at_target_fps_stream_copies_to_normalized(self, tmp_path: Path) -> None:
+        """A source already at target fps is losslessly stream-copied — no re-encode.
+
+        It is still materialised under data/normalized/ (every processed video is),
+        and the chunks are read from that copy (decoded frames are byte-identical).
+        """
         cfg = _make_cfg(tmp_path)
         row = _make_row(video_path=str(tmp_path / "video.mp4"))
+        normalized_path = tmp_path / "normalized" / f"{row.video_id}.mp4"
 
         fake_audio = np.zeros(10240, dtype=np.float32)
 
         with (
             _patch_probe(fps=25.0),
             patch("src.data_processing.preprocess.normalize_av") as mock_norm,
+            patch("src.data_processing.preprocess.remux_copy") as mock_remux,
             patch("src.data_processing.preprocess.extract_audio"),
             patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
             patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter([])) as mock_iter,
@@ -490,9 +500,10 @@ class TestProcessVideo:
                 done_video_ids=set(),
             )
 
-        mock_norm.assert_not_called()
-        # Chunks must be read from the SOURCE file, not a normalized copy.
-        assert mock_iter.call_args[0][0] == Path(row.video_path)
+        mock_norm.assert_not_called()  # no re-encode for an on-fps source
+        mock_remux.assert_called_once_with(Path(row.video_path), normalized_path)
+        # Chunks are read from the normalized copy, not the raw source.
+        assert mock_iter.call_args[0][0] == normalized_path
 
     def test_reuses_normalized_file_if_exists(self, tmp_path: Path) -> None:
         """normalize_av must NOT be called again if the normalized file already exists."""
@@ -524,6 +535,39 @@ class TestProcessVideo:
             )
 
         mock_norm.assert_not_called()
+
+    def test_reuses_normalized_file_if_exists_on_fps(self, tmp_path: Path) -> None:
+        """remux_copy must NOT run again if the on-fps normalized file already exists."""
+        cfg = _make_cfg(tmp_path)
+        row = _make_row(video_path=str(tmp_path / "video.mp4"))
+
+        normalized_dir = tmp_path / "normalized"
+        normalized_dir.mkdir(parents=True, exist_ok=True)
+        normalized_path = normalized_dir / f"{row.video_id}.mp4"
+        normalized_path.touch()
+
+        fake_audio = np.zeros(10240, dtype=np.float32)
+
+        with (
+            _patch_probe(fps=25.0),  # on-fps source → stream-copy branch
+            patch("src.data_processing.preprocess.remux_copy") as mock_remux,
+            patch("src.data_processing.preprocess.normalize_av") as mock_norm,
+            patch("src.data_processing.preprocess.extract_audio"),
+            patch("src.data_processing.preprocess._load_audio_array", return_value=fake_audio),
+            patch("src.data_processing.preprocess.iter_video_chunks", return_value=iter([])) as mock_iter,
+        ):
+            _process_video(
+                row=row,
+                cfg=cfg,
+                extractor=MagicMock(),
+                writers={"train": MagicMock()},
+                done_video_ids=set(),
+            )
+
+        mock_remux.assert_not_called()
+        mock_norm.assert_not_called()
+        # Chunks are still read from the existing normalized copy.
+        assert mock_iter.call_args[0][0] == normalized_path
 
 
 # ── Slow integration test ─────────────────────────────────────────────────────
@@ -629,3 +673,7 @@ def test_preprocess_smoke(tmp_path: Path) -> None:
             assert f["video"].shape[1:] == (16, 3, 224, 224)
             assert f["video"].dtype == np.uint8
             assert n >= 0  # 0 is acceptable if no face detected in dummy video
+
+    # Every processed video is materialised under normalized/ (lossless
+    # stream-copy for this 25-fps sample, so the sweeps/API can resolve it).
+    assert (normalized_dir / "smoke__clip01__seg01__real.mp4").exists()

@@ -74,7 +74,9 @@ def _load_test_videos(
     Each record contains:
         ``video_id``, ``video_path``, ``label`` (int), ``label_audio`` (int).
 
-    Videos whose .mp4 is missing from *normalized_dir* are silently skipped.
+    Videos whose .mp4 is missing from *normalized_dir* are skipped and counted;
+    a non-zero miss count is logged as a warning (usually it means the normalized
+    files have not been generated — see scripts/backfill_normalized.py).
     """
     seen: dict[str, dict] = {}
     with metadata_path.open(newline="", encoding="utf-8") as fh:
@@ -84,10 +86,12 @@ def _load_test_videos(
                 seen[vid] = row
 
     records: list[dict] = []
+    n_missing = 0
     for vid, row in seen.items():
         video_path = normalized_dir / f"{vid}.mp4"
         if not video_path.exists():
             log.debug("Missing video file: %s — skipped.", video_path)
+            n_missing += 1
             continue
         records.append(
             {
@@ -100,7 +104,14 @@ def _load_test_videos(
         if max_videos is not None and len(records) >= max_videos:
             break
 
-    log.info("Loaded %d test videos.", len(records))
+    log.info("Loaded %d test videos (%d missing from %s).", len(records), n_missing, normalized_dir)
+    if n_missing:
+        log.warning(
+            "%d video(s) missing from %s — run scripts/backfill_normalized.py "
+            "if the normalized files have not been generated yet.",
+            n_missing,
+            normalized_dir,
+        )
     return records
 
 
