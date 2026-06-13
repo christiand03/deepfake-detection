@@ -1,82 +1,149 @@
-# Projektüberblick & Zielsetzung
+# Projektüberblick, Methodik & Roadmap
+
+> **Lebendiges Dokument.** Dies ist die kanonische Projektbeschreibung. Der
+> historische Planungsstand (Stand Mai 2026) liegt unverändert unter
+> [`archive/project.md`](archive/project.md); die Phase-3/4-Detailplanung unter
+> [`archive/adversarial.md`](archive/adversarial.md).
 
 ## 1. Executive Summary & Forschungsphilosophie
-Dieses Projekt, mit dem Arbeitstitel **"Unmasking Deception: Ein progressiver, multimodaler xAI-Ansatz zur Erkennung von Deepfakes in politischen Reden unter Berücksichtigung von Adversarial Robustness"**, verfolgt einen ambitionierten Ansatz zur Deepfake-Detektion.
-Im Gegensatz zu traditionellen Benchmark-Studien ("Breadth-over-Depth"), die viele Modelle oberflächlich vergleichen, fokussiert sich diese Arbeit auf **"Depth-over-Breadth"**. Es wird ein hochmodernes, Transformer-basiertes Modell eingesetzt und tiefgreifend analysiert. Der Fokus liegt dabei auf **Explainable AI (xAI)**: Es geht nicht nur darum, *ob* ein Deepfake erkannt wird, sondern *warum*.
+
+Dieses Projekt, mit dem Arbeitstitel **"Unmasking Deception: Ein progressiver,
+multimodaler xAI-Ansatz zur Erkennung von Deepfakes in politischen Reden unter
+Berücksichtigung von Adversarial Robustness"**, verfolgt einen
+**"Depth-over-Breadth"**-Ansatz: Statt viele Modelle oberflächlich zu
+vergleichen, wird ein modernes Transformer-Setup tiefgreifend analysiert. Der
+Fokus liegt auf **Explainable AI (xAI)** — es geht nicht nur darum, *ob* ein
+Deepfake erkannt wird, sondern *warum* (belegt durch Attention Rollout und
+AttnLRP-Heatmaps).
 
 ## 2. Motivation und Problemstellung
-- **Gesellschaftliche Relevanz:** Deepfakes, insbesondere bei politischen Reden (Talking-Head-Szenarien), haben das Potenzial, Desinformation in großem Stil zu verbreiten. Eine verlässliche, transparente Erkennung ist unerlässlich.
-- **Wissenschaftlicher Beitrag:** Traditionelle Convolutional Neural Networks (CNNs) stoßen bei komplexen, zeitlichen Inkonsistenzen (wie asynchronen Lippenbewegungen) an ihre Grenzen. Moderne Transformer-Architekturen bieten hier Vorteile, sind aber oft Black-Box-Modelle. Der Einsatz von xAI-Methoden wie Layer-wise Relevance Propagation (LRP) macht Transformer-Entscheidungen interpretierbar.
-- **Realer Anwendungsbezug:** Modelldetektionen scheitern oft an einfachen Social-Media-Kompressionen. Die Arbeit adressiert dies durch gezielte Robustheitstests (Adversarial Robustness und Kompressions-Simulation).
 
-## 3. Die 4 Phasen der Projektmethodik (Komplexitätssteigerung)
-Die Arbeit ist methodisch in vier aufeinander aufbauende Phasen gegliedert:
+- **Gesellschaftliche Relevanz:** Deepfakes politischer Reden
+  (Talking-Head-Szenarien) können Desinformation in großem Stil verbreiten. Eine
+  verlässliche, transparente Erkennung ist unerlässlich.
+- **Wissenschaftlicher Beitrag:** Klassische CNNs stoßen bei zeitlichen
+  Inkonsistenzen (asynchrone Lippenbewegungen) an Grenzen. Transformer bieten
+  hier Vorteile, sind aber Black-Boxes. xAI-Methoden wie Layer-wise Relevance
+  Propagation (LRP) machen ihre Entscheidungen interpretierbar.
+- **Realer Anwendungsbezug:** Detektoren scheitern oft an einfacher
+  Social-Media-Kompression. Die Arbeit adressiert dies durch gezielte
+  Robustheits- und Adversarial-Tests.
 
-### Phase 1: Unimodale Video-Erkennung (Die Baseline)
+## 3. Die 4 Phasen der Projektmethodik
+
+Die Arbeit ist methodisch in vier aufeinander aufbauende Phasen mit steigender
+Komplexität gegliedert.
+
+### Phase 1 — Unimodale Video-Erkennung (Baseline)
 - **Ziel:** Isolierte Untersuchung der visuellen Modalität.
-- **Aufgabe:** Training und Fine-Tuning eines Spatio-Temporal Video Transformers (z. B. ISTVT).
-- **Forschungsfrage:** Welche visuellen Artefakte (unnatürliche Ränder, fehlendes Blinzeln) werden vom Modell zur Unterscheidung von Fake/Real priorisiert?
+- **Umsetzung:** Fine-Tuning eines Spatio-Temporal Video Transformers. Statt des
+  ursprünglich präferierten **ISTVT** wird **VideoMAE** (`MCG-NJU/videomae-base`)
+  eingesetzt — massiver HuggingFace-Support, AttnLRP-kompatibel; ISTVT wurde nach
+  der VideoMAE-Evaluierung nicht mehr benötigt (s. [`model.md`](model.md) §1).
+- **Forschungsfrage:** Welche visuellen Artefakte (Blending-Kanten, fehlendes
+  Blinzeln) priorisiert das Modell zur Fake/Real-Unterscheidung?
 
-### Phase 2: Multimodale Erweiterung (Audio + Video)
-- **Ziel:** Integration der Tonspur zur Erkennung von Lip-Sync-Inkonsistenzen.
-- **Aufgabe:** Implementierung eines Cross-Modal Attention Heads zur Synchronisation von Video- und Audio-Embeddings (z.B. über Wav2Vec 2.0).
-- **Forschungsfrage:** Wie verbessert sich die Genauigkeit bei auditiv manipulierten Deepfakes? Verschiebt sich die "Aufmerksamkeit" (xAI) planmäßig auf die Mundpartie?
+### Phase 2 — Multimodale Erweiterung (Audio + Video)
+- **Ziel:** Erkennung von Lip-Sync-Inkonsistenzen durch Integration der Tonspur.
+- **Umsetzung:** Cross-Modal Attention Head (`CrossAttentionFusion`,
+  bidirektional) über VideoMAE- und **Wav2Vec 2.0**-Embeddings.
+- **Forschungsfrage:** Verbessert sich die Genauigkeit bei auditiv manipulierten
+  Deepfakes? Verschiebt sich die Attention (xAI) auf die Mundpartie?
 
-### Phase 3: Real-World Störfaktoren (Social Media Robustness)
-- **Ziel:** Evaluation unter Praxisbedingungen – quantitative Ermittlung des "Breaking Point" des Modells.
-- **Implementierungsstand:** Interaktives Robustness-Lab (Frontend) bereits vollständig umgesetzt. Ausstehend: systematische Batch-Auswertung und erweiterte Degradations-Modi.
-- **Aufgaben (erweitert):**
-  - *Basis (implementiert):* Simulation von H.264-Kompression (CRF), Framerate-Reduktion und Gaussian Noise via FFmpeg; FastAPI-Endpoint `/robustness`; interaktives Frontend-Panel mit Confidence-Delta und Breaking-Point-Anzeige.
-  - *Systematischer Robustness-Sweep → W&B:* Offline-Eval-Skript, das das gesamte Testset über ein Parameter-Grid (z.B. CRF ∈ {18,23,28,35,40,45,51} × FPS ∈ {25,15,10,5}) auswertet und AUC/Accuracy-Kurven pro Degradationsstufe in W&B loggt.
-  - *Audio-Kompressions-Robustheit:* Die aktuelle Pipeline kopiert die Audiospur unverändert (`acodec=copy`). Erweiterung: AAC/MP3-Reencoding bei niedrigen Bitraten (z.B. 32 kbps) um zu testen, wie Wav2Vec 2.0 auf typische Social-Media-Audiokompression reagiert.
-  - *xAI Attention-Shift unter Degradation:* Ergänzung der Phase-3-Ausgabe um eine quantitative `attentionShift`-Liste (analog zu Phase 4), die die Anomalie-Region-Scores vor/nach Degradation vergleicht. Beweist die "trügerische Merkmale"-Hypothese direkt.
-  - *Upscaling-Artefakte:* Downscale auf 360p, dann bilinear auf 720p hochskalieren via FFmpeg (`scale=640:360,scale=1280:720`). Simuliert TikTok/WhatsApp-Reencoding; dritte Degradations-Achse mit niedrigem Implementierungsaufwand.
+### Phase 3 — Real-World Störfaktoren (Social-Media-Robustheit)
+- **Ziel:** Quantitative Ermittlung des "Breaking Point" unter Praxisbedingungen.
 - **Forschungsfragen:**
-  - Wo liegt der quantitative Breaking Point (CRF-Schwellwert, FPS-Minimum), ab dem die Klassifikationsgenauigkeit signifikant einbricht?
-  - Auf welche (möglicherweise trügerischen) Merkmale weicht das Modell bei schlechter Bild- oder Tonqualität aus (xAI-Shift-Analyse)?
-  - Ist der Wav2Vec-Audio-Branch anfälliger für Kompressions-Artefakte als der VideoMAE-Video-Branch?
+  - Wo liegt der quantitative Breaking Point (CRF-Schwellwert, FPS-Minimum), ab
+    dem die Klassifikationsgenauigkeit signifikant einbricht?
+  - Auf welche (möglicherweise trügerischen) Merkmale weicht das Modell bei
+    schlechter Bild-/Tonqualität aus (xAI-Shift-Analyse)?
+  - Ist der Wav2Vec-Audio-Branch anfälliger für Kompression als der
+    VideoMAE-Video-Branch?
 
-### Phase 4: Adversarial Attacks
-- **Ziel:** Bewertung der Vulnerabilität gegenüber gezielten Angriffen und Ableitung von Gegenmaßnahmen.
-- **Implementierungsstand:** FGSM und PGD (L∞) nativ in PyTorch implementiert; FastAPI-Endpoint `/adversarial`; interaktives Frontend-Panel mit Frame-Triptych und Attention-Shift-Tabelle.
-- **Aufgaben (erweitert):**
-  - *Batch-Level Fooling Rate → W&B:* Offline-Eval-Skript, das den Angriff bei ε ∈ {0.01, 0.02, 0.03, 0.05, 0.1} über das gesamte Testset ausführt und Fooling Rate (Anteil korrekt klassifizierter Clips, die flippen) sowie mittleren Confidence-Drop pro ε in W&B loggt. Ergibt die "Adversarial Robustness Curve".
-  - *Multimodaler Adversarial Attack:* Erweiterung des Angriffs auf das `MultimodalDeepfakeModule` – entweder gemeinsamer Angriff auf Audio+Video oder isolierter Angriff nur auf die Audiospur (für das menschliche Ohr nicht wahrnehmbare Perturbation der Wellenform, die Wav2Vec verwirrt). Dies ist ein neuartiger Beitrag, da Angriffe auf multimodale Deepfake-Detektoren in der Literatur selten sind.
-  - *Adversarial Fine-Tuning als Verteidigung:* Kurzes PGD-augmentiertes Fine-Tuning (PGD-Beispiele on-the-fly generieren, mit sauberem Batch mischen) und Messung der Accuracy-Delta. Wandelt Phase 4 von einer reinen Angriffsanalyse in eine Angriff+Verteidigungs-Studie um.
-  - *Universal Adversarial Perturbation (UAP):* Berechnung einer clip-unabhängigen Perturbation δ*, die die Fooling Rate über alle Clips maximiert. Falls das Modell durch ein video-unabhängiges Rauschen täuschbar ist, werden systematische Schwächen in den spatio-temporalen Features aufgedeckt – starkes xAI-Narrativ.
+### Phase 4 — Adversarial Attacks
+- **Ziel:** Bewertung der Vulnerabilität gegenüber gezielten Angriffen und
+  Ableitung von Gegenmaßnahmen.
 - **Forschungsfragen:**
-  - Lässt sich der Klassifikator bei welchem Epsilon-Schwellwert deterministisch täuschen, ohne dass die Perturbation für das menschliche Auge sichtbar ist?
-  - Wie verschiebt sich die xAI-Heatmap (LRP) nach einem erfolgreichen Angriff – von semantisch relevanten Regionen (Mund, Augen) zu semantisch irrelevanten (Hintergrund, Schulter)?
-  - Ist der Audio-Branch des multimodalen Modells anfälliger für gezielte Perturbationen als der Video-Branch?
-  - Wie viel Adversarial Fine-Tuning ist nötig, um die Fooling Rate unter einen praxisrelevanten Schwellwert zu senken, ohne die Clean-Accuracy signifikant zu verschlechtern?
+  - Bei welchem Epsilon-Schwellwert lässt sich der Klassifikator deterministisch
+    täuschen, ohne dass die Perturbation sichtbar wird?
+  - Wie verschiebt sich die LRP-Heatmap nach einem erfolgreichen Angriff — von
+    semantisch relevanten Regionen (Mund, Augen) zu irrelevanten (Hintergrund)?
+  - Ist der Audio-Branch anfälliger für gezielte Perturbationen als der
+    Video-Branch?
+  - Wie viel Adversarial Fine-Tuning senkt die Fooling Rate unter einen
+    praxisrelevanten Schwellwert, ohne die Clean-Accuracy zu verschlechtern?
 
-## 4. Projektstatus (Stand Mai 2026)
+## 4. Projektstatus (Stand Juni 2026)
 
-Phasen 1 und 2 sind abgeschlossen. Das interaktive Frontend (ursprünglich als optionaler Prototyp geplant) wurde vollständig umgesetzt und übertrifft den ursprünglichen Scope erheblich.
+Phasen 1 und 2 sind abgeschlossen; das interaktive Frontend (ursprünglich als
+optionaler Prototyp geplant) wurde vollständig umgesetzt und übertrifft den
+ursprünglichen Scope. Phase 3 und 4 sind als interaktive Labs + Offline-Sweeps
+implementiert und werden über die ursprünglichen Ziele hinaus erweitert.
 
 | Phase | Status | Anmerkung |
 | --- | --- | --- |
-| Phase 1 – Unimodal Video | ✅ Abgeschlossen | VideoMAE fine-tuned, LRP & Attention Rollout funktionsfähig |
-| Phase 2 – Multimodal | ✅ Abgeschlossen | Cross-Modal Attention Head trainiert, Wav2Vec 2.0 LRP integriert |
-| Frontend (React + FastAPI) | ✅ Abgeschlossen | War ursprünglich optional; vollständiges xAI-Demo-Tool implementiert |
-| Phase 3 – Robustness | 🔄 In Arbeit | Interaktives Lab fertig; systematischer Batch-Sweep + Audio-Robustheit ausstehend |
-| Phase 4 – Adversarial | 🔄 In Arbeit | FGSM/PGD + Frontend fertig; Batch-Eval, multimodaler Angriff, UAP ausstehend |
+| Phase 1 — Unimodal Video | ✅ Abgeschlossen | VideoMAE fine-tuned; AttnLRP & Attention Rollout funktionsfähig |
+| Phase 2 — Multimodal | ✅ Abgeschlossen | Cross-Modal Attention Head trainiert, Wav2Vec 2.0 LRP integriert |
+| Frontend (React + FastAPI) | ✅ Abgeschlossen | Vollständiges xAI-Demo-Tool (war ursprünglich optional) |
+| Phase 3 — Robustness | 🔄 In Arbeit | Interaktives Lab + Offline-Sweep fertig; Audio-Robustheit & Attention-Shift ausstehend |
+| Phase 4 — Adversarial | 🔄 In Arbeit | FGSM/PGD + Sweep + adv. Training fertig; multimodaler Angriff & UAP ausstehend |
 
-Da das Projekt dem ursprünglichen Zeitplan voraus ist, werden Phase 3 und Phase 4 über die ursprünglichen Ziele hinaus erweitert (siehe Abschnitt 3 für Details).
+**Belastbare Metriken (leakage-bereinigt, Stand der dokumentierten Läufe):** Der
+multimodale Detektor erreicht in **Phase 2 ~0,77 test/auc** (Phase 1 ~0,65).
+Fusion schlägt Einzelmodalität klar, **aber Cross-Attention ≈ Concat innerhalb
+des Rauschens** — die "Cross-Attention ist zwingend"-Aussage ist mit den
+aktuellen Daten (~wenige Identitäten) **nicht** haltbar. Details, Tabellen und
+Vorbehalte: [`model.md`](model.md) §7.10/§7.11.
 
-## 5. Akademische Rahmenbedingungen & Projektalltag
+> **Wichtig — Daten-Stand:** Alle vor dem **2026-06-11** trainierten Checkpoints
+> stammen aus einer Pipeline mit verzerrten Crops, doppelter Kompression und
+> Boundary-Labelrauschen und sind **nicht** mit neuen Läufen vergleichbar. Die
+> Daten wurden mit der korrigierten Pipeline neu erzeugt (12.000 Videos, ~30
+> Identitäten, Split 9.959/861/1.180). Vollständige Begründung:
+> [`audit_2026-06.md`](audit_2026-06.md).
 
-- **Ressourcen:** 30 Credits, ca. 900 Projektstunden (verteilt auf 2 Personen), Laufzeit ca. 4 Monate.
-- **Aufgabenteilung (Vermeidung von Reibungsverlusten):**
-  - *Person A (Feature & Robustness Architect):* Datenbeschaffung, Preprocessing (Gesichtsextraktion, Audio-Separation), Phase 1 (Backbones), Phase 3 (Störfaktoren).
-  - *Person B (Fusion & xAI Specialist):* Phase 2 (Cross-Attention-Head, Multimodales Training), Validierung von xAI-Methoden (Attention Rollout, LRP), Phase 4 (Adversarial Attacks).
-- **Kollaborationsvorgaben:**
-  - Tägliches 10-Minuten-Standup.
-  - Pair-Programming beim Cross-Modal-Attention-Head (Phase 2), da beide das Fusionskonzept tiefgehend verstehen müssen.
-  - Dokumentation via Architecture Decision Records (ADRs) im Entwicklertagebuch zur Vorbereitung der Textausarbeitung.
-  - "Living Document"-Ansatz (Schreiben parallel zum Code).
+## 5. Roadmap: Erweiterungen Phase 3 & 4
 
-## 6. Weiterführende Recherche und Links
+Da das Projekt dem Zeitplan voraus ist, werden Phase 3 und 4 erweitert. Basis-
+Implementierung (interaktive Labs, FGSM/PGD, Offline-Sweep-Skripte) ist fertig;
+die folgende Priorisierung bündelt die geplanten Ausbaustufen. Befehle zu den
+Sweeps stehen in [`commands.md`](commands.md) §7; die Implementierung in
+`src/api/inference.py` und `scripts/eval_*_sweep.py`.
+
+| Priorität | Aufgabe | Aufwand | Akademischer Impact |
+| --- | --- | --- | --- |
+| 1 | Systematischer Robustness-Sweep → W&B (CRF × FPS-Grid) | Niedrig | Hoch (beantwortet RQ Phase 3 direkt) |
+| 2 | Attention-Shift in Phase 3 (Region-Scores vor/nach Degradation) | Mittel | Hoch (xAI-Kernhypothese) |
+| 3 | Batch-Level Fooling Rate → W&B (ε-Grid) | Niedrig | Hoch (beantwortet RQ Phase 4) |
+| 4 | Audio-Kompressions-Robustheit (AAC/MP3 @ niedrige Bitrate) | Mittel | Mittel-Hoch |
+| 5 | Multimodaler Adversarial Attack (Audio-only / Joint A+V) | Mittel-Hoch | Sehr hoch (novel) |
+| 6 | Adversarial Fine-Tuning als Verteidigung (PGD-augmentiert) | Hoch | Sehr hoch |
+| 7 | Universal Adversarial Perturbation (UAP) | Hoch | Hoch (eindrucksvolle Demo) |
+
+**Die zentrale xAI-Beweisführung bei Attacken:** Zeigt die LRP-Heatmap bei einem
+echten Fake-Frame auf den Mundbereich und nach FGSM-Rauschen auf Schulter/
+Hintergrund, ist direkt belegt, dass die Attacke die "Aufmerksamkeit" des
+Netzwerks manipuliert hat. Die Infrastruktur dafür (`AttentionShiftSchema`,
+`AttentionShiftTable`) existiert bereits und wird für die Erweiterungen
+(multimodaler Angriff, UAP) auf Audio-Regionen ausgeweitet.
+
+## 6. Akademische Rahmenbedingungen & Projektalltag
+
+- **Ressourcen:** 30 Credits, ca. 900 Projektstunden (2 Personen), Laufzeit ca.
+  4 Monate.
+- **Aufgabenteilung:**
+  - *Person A (Feature & Robustness Architect):* Datenbeschaffung, Preprocessing
+    (Gesichtsextraktion, Audio-Separation), Phase 1 (Backbones), Phase 3.
+  - *Person B (Fusion & xAI Specialist):* Phase 2 (Cross-Attention-Head,
+    multimodales Training), xAI-Validierung (Attention Rollout, LRP), Phase 4.
+- **Kollaborationsvorgaben:** Tägliches 10-Minuten-Standup; Pair-Programming beim
+  Cross-Modal-Attention-Head (Phase 2); Architecture Decision Records (ADRs) im
+  Entwicklertagebuch; "Living Document"-Ansatz (Schreiben parallel zum Code).
+
+## 7. Weiterführende Recherche
+
 - *Paper:* "Deepfake Detection using Spatio-Temporal Transformers"
-- *Paper:* "Transformer Interpretability Beyond Attention Visualization" (Chefer et al., Basis für LRP)
+- *Paper:* "Transformer Interpretability Beyond Attention Visualization" (Chefer
+  et al., Basis für LRP)
 - *Paper:* "Cross-Modal Synchronization for Deepfake Detection"
+- Begriffe & Grundlagen: [`explanations/`](explanations/) (Glossar)

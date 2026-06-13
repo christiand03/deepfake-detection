@@ -125,7 +125,7 @@ python src/train.py experiment=train_video_mixup
 python src/train.py experiment=train_video_robust
 python src/train.py experiment=train_video_phase2_lora   # braucht videomae.ckpt (Phase 1)
 
-# oder über W&B Launch (Desktop_PC-Queue, s. docs/mlops.md)
+# oder über W&B Launch (Desktop_PC-Queue, s. docs/launch.md)
 ```
 
 ---

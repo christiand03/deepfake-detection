@@ -1,66 +1,104 @@
 # Explainable AI (xAI) & Modell-Transparenz
 
-Der "Depth-over-Breadth" Leitgedanke fußt auf den xAI-Erkenntnissen des Systems. Das Projekt muss belegen, *warum* das Netz eine Fälschung identifiziert hat.
+Der "Depth-over-Breadth"-Leitgedanke fußt auf den xAI-Erkenntnissen: Das Projekt
+muss belegen, *warum* das Netz eine Fälschung identifiziert hat. Begriffe im
+Detail im Glossar [`explanations/xai_and_explainability.md`](explanations/xai_and_explainability.md).
 
-## 1. Technologische Ansätze: Abkehr von Grad-CAM
-- **Das Problem:** Algorithmen wie Grad-CAM wurden primär für Convolutional Neural Networks entwickelt. Sie machen sich die topologischen Informationen der finalen Convolution-Matrix zunutze. Transformer besitzen solche topographischen Restriktionen im Backend nicht (sie nutzen flache Token).
-- **Die Lösung 1 - Attention Rollout:** Eine intuitive SOTA-Methode. Man "rollt" die Attention-Weights (Softmax-Scores nach Q*K) Schicht für Schicht (Layer) hinunter auf den ersten Video-Patch zurück. Relativ leicht auf Backbones anwendbar, gibt einen ersten Indikator ("Guckt das Modell auf den Mund oder die Wand?").
-- **Die Lösung 2 - Layer-wise Relevance Propagation (LRP):** Der aktuelle Benchmark, insbesondere für den Einsatz in Transformern (vgl. die Arbeit von *Hila Chefer et al.*). Mathematisch anspruchsvoll: Es kalkuliert nicht nur, wo die Aufmerksamkeit lag, sondern explizit, ob dieses Pixel positiv (Richtung 'Fake') oder negativ zur Klassifikationsentscheidung beigetragen hat.
+## 1. Methoden: Abkehr von Grad-CAM
 
-## 2. Visualisierung & Darstellung der xAI-Daten
-Bilder und Graphen entscheiden maßgeblich über die visuelle Kompetenz der Diplom/Belegarbeit.
-- **Grid-Darstellung (Plotting):** Ein konsistentes, mehrspaltiges Plot-Grid bauen.
-  - Spalte 1: O-Ton/Original-Video-Frame (Grundlage)
-  - Spalte 2: (In Phase 3/4) Das veränderte Bild (Rauschen/FGSM-Angriff).
-  - Spalte 3: Die LRP-Heatmap überlagert (Overlay-Opazität 50%).
-- **Tracking:** Dieses Grid-Plot wird (via W&B) während des Trainings mit einem bestimmten Seed-Beispiel generiert. So beobachtet das Team, wie sich die Attention im Laufe der 50 Epochen von "wirrem Suchen am Rand" präzise auf den Mund "verschiebt".
+- **Das Problem:** Grad-CAM nutzt die topologische Struktur der finalen
+  Convolution-Matrix — Transformer besitzen solche Restriktionen nicht (flache
+  Token).
+- **Attention Rollout:** Rollt die Attention-Weights (Softmax nach Q·Kᵀ) Schicht
+  für Schicht auf die Eingabe-Patches zurück. Leichtgewichtiger Indikator
+  ("guckt das Modell auf den Mund oder die Wand?"). Beschreibt jedoch nur den
+  Informationsfluss, nicht die kausale Relevanz.
+- **AttnLRP (implementierte Primärmethode, Achtibat et al., ICML 2024):** Eine
+  für Transformer-Attention entwickelte LRP-Variante. Sie kalkuliert nicht nur
+  *wo* die Aufmerksamkeit lag, sondern explizit, ob ein Pixel positiv (Richtung
+  "Fake") oder negativ zur Entscheidung beigetragen hat. Implementiert über die
+  Bibliothek `lxt` (`src/utils/attnlrp.py`), angewandt auf VideoMAE
+  (Video-Heatmaps) und Wav2Vec 2.0 (Audio-Relevanz).
 
-## 3. Audio xAI Visualisierung (Phase 1 Audio & Phase 2 Vergleich)
+> **Constraint — Eager-Attention:** AttnLRP patcht `eager_attention_forward` auf
+> Modulebene; SDPAs fusionierte Kernel sind nicht patchbar. Deshalb laden alle
+> `explain*.py`-Skripte und die API ihre Checkpoints **immer** mit
+> `attn_implementation="eager"` (auch SDPA-trainierte Checkpoints funktionieren
+> unverändert), und `explain()` wirft einen `RuntimeError`, falls das Modell
+> nicht eager läuft. Trainiert wird mit SDPA (~2,8× Durchsatz). Details:
+> [`performance_roadmap.md`](performance_roadmap.md) §1.8, [`model.md`](model.md) §6.4.
 
-Für die Audio-Modalität (Wav2Vec2 + AttnLRP) wird eine **3-Layer Timeline** verwendet. Die Analogie zur Video-Heatmap ist bewusst: gleiche Methode (AttnLRP), gleiche Farbskala (seismic: rot = Fake-Evidenz, blau = Real-Evidenz), unterschiedliches Substrat.
+## 2. Video-Visualisierung
 
-**Layer 1 — Signed Waveform Overlay**
-- Wellenform als Graustufen-Plot im Hintergrund.
-- AttnLRP-Relevanz (normiert auf ±1, identisch zu Video) als Farb-Band darüber. Gleiche seismic-Colormap wie Video-Heatmaps.
-- Zeitachse in Sekunden. Lesbar ohne Vorwissen: rot = Modell sieht hier Fake-Signal.
+- **Grid-Darstellung:** Konsistentes, mehrspaltiges Plot-Grid —
+  Spalte 1: Original-Frame · Spalte 2 (Phase 3/4): das veränderte Bild
+  (Rauschen/FGSM) · Spalte 3: die LRP-Heatmap als Overlay (Opazität ~50 %).
+- **Tracking:** Dieses Grid wird (via W&B) während des Trainings mit einem festen
+  Seed-Beispiel geloggt — so beobachtet man, wie die Attention von "wirrem Suchen
+  am Rand" zur Mundpartie wandert.
+- **Anomalie-Regionen:** Die Frame-Heatmap wird auf anatomische Regionen (Mund,
+  Augen, Kiefer, Schulter, Hintergrund) aggregiert. Diese Region-Scores sind die
+  quantitative Grundlage der Attention-Shift-Analyse (Phase 3 & 4).
 
-**Layer 2 — Word-Level Aggregation (semantische Landmarks)**
-- WhisperX (Forced Aligner auf Whisper-Basis) liefert Wort-Zeitstempel. Einmalig offline berechnet und gecacht — kein Teil der Trainings-Pipeline.
-- Relevanz wird pro Wort-Token aufsummiert → Balkendiagramm unterhalb der Wellenform mit Wort-Beschriftung.
-- Macht die Visualisierung für jeden Leser verständlich: *"bei welchem Wort vermutet das Modell Manipulation?"* Synthese-Artefakte treten typisch an Plosiven, Sibilanten und Wortgrenzen auf.
-- Technische Umsetzung:
-  ```python
-  import whisperx
-  model = whisperx.load_model("base", device="cpu")
-  result = model.transcribe(audio_path)
-  result = whisperx.align(result["segments"], model_a, metadata, audio, device)
-  # result["word_segments"] → [{word, start, end}, ...]
-  ```
+## 3. Audio-xAI: 3-Layer Timeline (Wav2Vec2 + AttnLRP)
 
-**Layer 3 — Frequenzband-Zusammenfassung**
-- Kleines Balkendiagramm neben der Timeline: Relevanz aggregiert in drei Bändern.
-  - Low (0–500 Hz): Grundfrequenz / Prosodie
-  - Mid (500–4 kHz): Formanten / Vokale
-  - High (4–8 kHz): Frikative / Vocoder-Artefakte
-- Ersetzt das Mel-Spektrogramm für einen Nicht-Audio-Experten: *"welche Art von Artefakt erkennt das Modell?"*
+Bewusst analog zur Video-Heatmap: gleiche Methode (AttnLRP), gleiche Farbskala
+(seismic: rot = Fake-Evidenz, blau = Real-Evidenz), anderes Substrat.
+Implementierung in `src/utils/audio_xai.py`.
 
-**Warum kein rohes Mel-Spektrogramm als primäre Visualisierung?**
-Die ±1-Normierung der Relevanz ist für Audio identisch interpretierbar wie für Video. Das Problem ist das Fehlen semantischer Landmarks: eine Wellenform zeigt keinen "Mundbereich" wie ein Gesichts-Frame — Sample 4.231 (= 264 ms) hat ohne Kontext keine Bedeutung. Layer 2 löst das, indem Wort-Tokens dieselbe Rolle übernehmen wie Gesichtsregionen im Video.
+**Layer 1 — Signed Waveform Overlay:** Wellenform als Graustufen-Hintergrund,
+AttnLRP-Relevanz (normiert auf ±1, identisch zu Video) als seismic-Farbband
+darüber, Zeitachse in Sekunden.
 
-**Phase 1 → Phase 2 Vergleich (Kernbotschaft der Arbeit)**
+**Layer 2 — Word-Level Aggregation:** **WhisperX** (Forced Aligner) liefert
+Wort-Zeitstempel (einmalig offline gecacht, kein Teil der Trainings-Pipeline);
+Relevanz pro Wort-Token aufsummiert → Balkendiagramm. Beantwortet "bei welchem
+Wort vermutet das Modell Manipulation?". Synthese-Artefakte treten typisch an
+Plosiven, Sibilanten und Wortgrenzen auf.
+
+```python
+import whisperx
+model = whisperx.load_model("base", device="cpu")
+result = model.transcribe(audio_path)
+result = whisperx.align(result["segments"], model_a, metadata, audio, device)
+# result["word_segments"] → [{word, start, end}, ...]
+```
+
+**Layer 3 — Frequenzband-Zusammenfassung:** Relevanz aggregiert in drei Bändern —
+Low (0–500 Hz, Grundfrequenz/Prosodie), Mid (500 Hz–4 kHz, Formanten/Vokale),
+High (4–8 kHz, Frikative/Vocoder-Artefakte). Ersetzt das Mel-Spektrogramm für
+Nicht-Audio-Experten: "welche Art von Artefakt erkennt das Modell?".
+
+**Warum kein rohes Mel-Spektrogramm als primäre Visualisierung?** Die
+±1-Normierung der Relevanz ist für Audio identisch interpretierbar wie für Video;
+es fehlen nur semantische Landmarks (eine Wellenform hat keinen "Mundbereich").
+Layer 2 löst das, indem Wort-Tokens dieselbe Rolle übernehmen wie
+Gesichtsregionen im Video.
+
+## 4. Phase 1 → Phase 2 Vergleich (Kernbotschaft der Arbeit)
+
 | Phase | Video xAI | Audio xAI |
 |---|---|---|
 | Phase 1 | Räumliche Heatmap: *wo* im Gesicht | Word-Timeline: *wann* + Frequenzband: *welcher Artefakttyp* |
 | Phase 2 | Wie Phase 1 + Cross-Attention-Gewichte (Face–Audio-Alignment) | Wie Phase 1 |
 
-Zentrale Forschungsfrage Phase 2: Verschiebt sich die Video-Heatmap auf die Mundpartie *genau bei den Wörtern*, die das Audio-Modell als manipuliert markiert?
+Zentrale Forschungsfrage Phase 2: Verschiebt sich die Video-Heatmap auf die
+Mundpartie *genau bei den Wörtern*, die das Audio-Modell als manipuliert markiert?
 
-## 4. Plotting-Standards (`plot_style.py`)
-- Python-Dateien zum Generieren der Graphen (Loss, Accuracy, Precision/Recall, Heatmaps) sollten an Tag 1 in einer `src/utils/plot_style.py` zentral definiert werden.
-- Nutzt etablierte SOTA-Styles, beispielsweise die Bibliothek **SciencePlots**. Dies liefert Layouts ähnlich formatierter IEEE-/CVPR-Wissenschaftspapers (inkl. korrekter CMYK-Farben ohne bunte Hintergrundgitter).
-- Ergänzend ist eine `plot_style.md` beizulegen, die Farbcodes und Schriftarten für mögliche Frontend-Tools oder KI-Assistenten bereitstellt.
+## 5. Plotting-Standards
 
-## Weiterführende Recherche
-- "Transformer Interpretability Beyond Attention Visualization" (Chefer)
-- "LRP for Deepfake Detection"
+- Graphen (Loss, Accuracy, Precision/Recall, Heatmaps) sollten einem zentralen,
+  konsistenten Plot-Style folgen.
+- Empfohlen ist ein etablierter SOTA-Style wie **SciencePlots** (IEEE-/CVPR-
+  ähnliche Layouts, korrekte CMYK-Farben, keine bunten Hintergrundgitter).
+- Eine begleitende Style-Referenz (Farbcodes, Schriftarten) erleichtert die
+  konsistente Nutzung in Frontend-Tools und durch KI-Assistenten.
+
+## 6. Weiterführende Recherche
+
+- "AttnLRP: Attention-Aware Layer-wise Relevance Propagation for Transformers"
+  (Achtibat et al., ICML 2024)
+- "Transformer Interpretability Beyond Attention Visualization" (Chefer et al.)
+- "Quantifying Attention Flow in Transformers" (Abnar & Zuidema, Attention Rollout)
 - "matplotlib-scienceplots repository"
+- xAI-Befehle: [`commands.md`](commands.md) §6 · Begriffe: [`explanations/xai_and_explainability.md`](explanations/xai_and_explainability.md)

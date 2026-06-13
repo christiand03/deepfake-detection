@@ -7,7 +7,7 @@
 **Depth-over-Breadth:** Wenige Modelle, dafür tiefgreifende Analyse mit Explainable AI (xAI). Nicht nur *ob* ein Deepfake erkannt wird, sondern *warum* – belegt durch Attention Maps und LRP-Heatmaps.
 
 ## Die 4 Phasen
-1. **Phase 1 – Unimodal Video:** Spatio-Temporal Video Transformer (ISTVT) als Baseline.
+1. **Phase 1 – Unimodal Video:** Spatio-Temporal Video Transformer (VideoMAE; ISTVT war ursprünglich präferiert) als Baseline.
 2. **Phase 2 – Multimodal (Audio+Video):** Cross-Modal Attention Head, Wav2Vec 2.0 für Audio.
 3. **Phase 3 – Robustness:** Social-Media-Simulation (Kompression, Rauschen, Framerate-Drops).
 4. **Phase 4 – Adversarial Attacks:** FGSM/PGD White-Box Angriffe, xAI-Analyse der Auswirkungen.
@@ -51,18 +51,21 @@ All generated code **must pass all pre-commit hooks without errors**. The projec
 ## Dokumentation (docs/)
 Detaillierte Projektdokumentation liegt in `docs/`. Verwende diese Dateien als Kontext:
 
+Einstiegspunkt: `docs/README.md` (Navigationsübersicht).
+
 | Datei | Inhalt |
 |---|---|
-| `docs/project.md` | Projektüberblick, Phasen, Teamaufteilung, Methodik |
+| `docs/project.md` | Projektüberblick, Phasen, Methodik, Status, Roadmap (Phase 3/4), Teamaufteilung |
+| `docs/engineering.md` | Tech-Stack, Hardware, Projektstruktur, MLOps (W&B/DVC/Lightning), Testing, Frontend/API |
 | `docs/datasets.md` | Datensätze, Preprocessing-Pipeline, Fehlerquellen, QA |
-| `docs/tech.md` | Tech-Stack, Tool-Vergleiche, Hardware, Projektstruktur |
-| `docs/model.md` | Architekturen (ISTVT, Wav2Vec, Cross-Attention), Ablation Studies |
-| `docs/xai.md` | Attention Rollout, LRP, Plotting-Standards, Visualisierung |
-| `docs/mlops.md` | W&B, DVC, PyTorch Lightning, CI/CD |
-| `docs/code_quality.md` | Testing-Strategien, Linting, Type Hinting, Workflow |
-| `docs/frontend.md` | React+TS GUI, FastAPI Backend, xAI-Visualisierung |
-| `docs/adversarial.md` | FGSM/PGD, Robustness-Tests, Tooling |
-| `docs/todo.md` | Meilensteine und Aufgabenliste |
+| `docs/model.md` | Architekturen (VideoMAE, Wav2Vec2, Cross-Attention), VRAM, Baselines, Ablation Studies |
+| `docs/xai.md` | Attention Rollout, AttnLRP, Audio-3-Layer-Timeline, Plotting-Standards |
+| `docs/commands.md` | Befehls-Referenz (Preprocessing → Training → Eval → xAI → Sweeps → Server) |
+| `docs/performance_roadmap.md` | Umgesetzte SOTA-Features (Sampling, Mixup, SWA, LoRA, SDPA, ...) |
+| `docs/launch.md` | W&B Launch — Queue & Agent (inkl. Windows-Shim) |
+| `docs/audit_2026-06.md` | Silent-Failure-Audit: Fixes, Daten-Regenerierung, geprüfte False Alarms |
+| `docs/explanations/` | Glossar aller Fachbegriffe |
+| `docs/archive/` | Frühere Planungs-Docs (nicht als aktuelle Quelle verwenden) |
 
 ## Ordnerspezifische Instructions
 Für detaillierten Kontext pro Verzeichnis siehe `.github/instructions/`:

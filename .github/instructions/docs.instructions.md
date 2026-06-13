@@ -14,21 +14,25 @@ Jede Datei in docs/ folgt einem einheitlichen Aufbau:
 
 ## Querverweise
 - Verweise auf andere docs/-Dateien im Format: `Siehe docs/model.md` oder `Details in docs/xai.md`.
-- Verweise auf Code-Dateien: `Implementierung in src/models/istvt.py`.
+- Verweise auf Code-Dateien: `Implementierung in src/models/VideoMAE_module.py`.
 
 ## Datei-Übersicht
+Einstiegspunkt: `README.md` (Navigationsübersicht). Frühere Planungs-Docs unter
+`archive/` werden **nicht** weiter gepflegt.
+
 | Datei | Thema | Aktualisieren bei... |
 |---|---|---|
-| `project.md` | Projektüberblick, Phasen, Team | Änderung der Methodik/Phasen |
+| `README.md` | Navigationsindex aller Docs | Neue/umbenannte Doc-Datei |
+| `project.md` | Überblick, Phasen, Team, Status, Roadmap | Änderung der Methodik/Phasen/Status |
+| `engineering.md` | Tools, Hardware, Struktur, MLOps, Testing, Frontend | Neues Tool, Strukturänderung, Test-Pattern |
 | `datasets.md` | Datensätze, Preprocessing, QA | Neuer Datensatz, Pipeline-Änderung |
-| `tech.md` | Tools, Hardware, Projektstruktur | Neues Tool, Strukturänderung |
 | `model.md` | Architekturen, Training, Ablation | Modell-Änderung, neue Experimente |
 | `xai.md` | xAI-Methoden, Plotting | Neue Visualisierung, Plot-Style |
-| `mlops.md` | W&B, DVC, Lightning, CI/CD | Infrastruktur-Änderung |
-| `code_quality.md` | Testing, Linting, Workflow | Neue Test-Patterns, Tool-Wechsel |
-| `frontend.md` | React GUI, FastAPI | Frontend-Entwicklung |
-| `adversarial.md` | FGSM/PGD, Robustness | Phase 3/4 Implementierung |
-| `todo.md` | Meilensteine, Tasks | Regelmäßig (Task abgeschlossen) |
+| `commands.md` | Befehls-Referenz | Neuer/geänderter Befehl oder Flag |
+| `performance_roadmap.md` | Umgesetzte Performance-Features | Neues SOTA-Feature |
+| `launch.md` | W&B Launch (Queue/Agent) | Infrastruktur-Änderung |
+| `audit_2026-06.md` | Silent-Failure-Audit | Neuer Audit-Befund |
+| `explanations/` | Glossar | Neuer Fachbegriff |
 
 ## Formatierung
 - **Tabellen** für Vergleiche und Übersichten nutzen.
