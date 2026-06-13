@@ -7,9 +7,10 @@ Einstiegspunkt und Navigationsübersicht für alle Dokumente.
 
 Neu im Projekt? Lies in dieser Reihenfolge:
 1. [`project.md`](project.md) — Was, Warum, die 4 Phasen, Status & Roadmap.
-2. [`engineering.md`](engineering.md) — Tech-Stack, Projektstruktur, MLOps, Testing.
-3. [`commands.md`](commands.md) — Befehle von Rohdaten bis xAI.
-4. [`explanations/`](explanations/) — Glossar aller Fachbegriffe.
+2. [`process.md`](process.md) — **End-to-End-Pipeline** Schritt für Schritt (Preprocessing → Training → Eval/xAI).
+3. [`engineering.md`](engineering.md) — Tech-Stack, Projektstruktur, MLOps, Testing.
+4. [`commands.md`](commands.md) — Befehle von Rohdaten bis xAI.
+5. [`explanations/`](explanations/) — Glossar aller Fachbegriffe.
 
 ## Überblick & Konzept
 
@@ -23,6 +24,7 @@ Neu im Projekt? Lies in dieser Reihenfolge:
 
 | Datei | Inhalt |
 |---|---|
+| [`process.md`](process.md) | **End-to-End-Prozess**: Rohvideos → Preprocessing → Datenladen → Training → Eval/xAI, Schritt für Schritt mit Code-Verweisen |
 | [`datasets.md`](datasets.md) | Datensätze (AV-Deepfake1M, SWAN-DF), Preprocessing-Pipeline, Fehlerquellen, JSON-Sidecar-Referenz, QA |
 | [`model.md`](model.md) | Architekturen (VideoMAE, Wav2Vec2, Cross-Attention), VRAM-Optimierung, Baselines & Läufe, Ablationen |
 | [`commands.md`](commands.md) | Vollständige Befehls-Referenz (Preprocessing → Training → Eval → xAI → Sweeps → Server) |
