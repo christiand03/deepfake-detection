@@ -28,5 +28,21 @@
       "command": "uvx",
       "args": ["mcp-server-fetch"]
     }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "& \"$env:CLAUDE_PROJECT_DIR/.claude/hooks/lint-python.ps1\"",
+            "shell": "powershell",
+            "timeout": 60,
+            "statusMessage": "Running ruff on edited Python file..."
+          }
+        ]
+      }
+    ]
   }
 }
