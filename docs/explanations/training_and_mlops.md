@@ -24,7 +24,7 @@ AdamW ist eine Variante des Adam-Optimizers mit entkoppelter Gewichtsabnahme (We
 
 ### Learning-Rate-Scheduler / ReduceLROnPlateau
 
-Ein Learning-Rate-Scheduler passt die Lernrate während des Trainings dynamisch an eine Policy an, um das Konvergenzverhalten zu verbessern. `ReduceLROnPlateau` überwacht eine Validierungsmetrik (`val/loss`) und reduziert die Lernrate um einen konfigurierbaren Faktor, wenn sich die Metrik über eine definierte Anzahl von Epochen (Patience) nicht verbessert. Dadurch wird verhindert, dass der Optimizer in späten Trainingsphasen über das Verlustminimum hinausschießt.
+Ein Learning-Rate-Scheduler passt die Lernrate während des Trainings dynamisch an eine Policy an, um das Konvergenzverhalten zu verbessern. `ReduceLROnPlateau` überwacht eine Validierungsmetrik und reduziert die Lernrate um einen konfigurierbaren Faktor, wenn sich die Metrik über eine definierte Anzahl von Epochen (Patience) nicht verbessert. In diesem Projekt überwacht der Scheduler `val/auc_video` (`mode: max`) — dieselbe Metrik wie Checkpointing und Early Stopping (s. `base_module.py`) —, sodass die LR sinkt, wenn die Ranking-Qualität auf dem Validierungsset stagniert.
 
 ### Early Stopping
 

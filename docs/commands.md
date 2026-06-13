@@ -276,7 +276,8 @@ python src/train.py experiment=train_multimodal ckpt_path=logs/train/runs/<times
 Checkpoints werden automatisch in `logs/train/runs/<timestamp>/checkpoints/` gespeichert.
 
 **Automatischer Export für die API/Frontend:** Nach jedem Training wird der beste
-Checkpoint (niedrigster `val/loss`) zusätzlich an einen stabilen Pfad kopiert –
+Checkpoint (höchste `val/auc_video`, `mode: max` — s. `configs/callbacks/default.yaml`)
+zusätzlich an einen stabilen Pfad kopiert –
 standardmäßig `checkpoints/<name>.ckpt` (`videomae`, `wav2vec2`, `multimodal`
 bzw. `videomae_adv`/`multimodal_adv` für die Adversarial-Varianten). Damit zeigen
 die API-Umgebungsvariablen (`VIDEOMAE_CKPT_PATH`, `WAV2VEC2_CKPT_PATH`,
