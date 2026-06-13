@@ -28,6 +28,7 @@ Neu im Projekt? Lies in dieser Reihenfolge:
 | [`datasets.md`](datasets.md) | Datensätze (AV-Deepfake1M, SWAN-DF), Preprocessing-Pipeline, Fehlerquellen, JSON-Sidecar-Referenz, QA |
 | [`model.md`](model.md) | Architekturen (VideoMAE, Wav2Vec2, Cross-Attention), VRAM-Optimierung, Baselines & Läufe, Ablationen |
 | [`commands.md`](commands.md) | Vollständige Befehls-Referenz (Preprocessing → Training → Eval → xAI → Sweeps → Server) |
+| [`full_run_runbook.md`](full_run_runbook.md) | **Runbook Vollständiger Lauf**: alle `wandb launch`-Befehle Phase 1 → 2 → 4 + SOTA-Track, in Abhängigkeitsreihenfolge, inkl. Checkpoint-Linien |
 | [`phase34_runbook.md`](phase34_runbook.md) | **Runbook Phase 3 & 4**: exakte Sweep-Befehle (inkl. multimodal) + Zuordnung W&B-Spalte → Forschungsfrage |
 | [`performance_roadmap.md`](performance_roadmap.md) | Umgesetzte SOTA-Features (Balanced Sampling, Mixup, SWA, LoRA, Robust-Aug, paralleles Preprocessing, SDPA-Training) |
 | [`launch.md`](launch.md) | W&B Launch — Queue & Agent für Trainings auf dem Desktop-PC (inkl. Windows-Shim) |

@@ -3,7 +3,7 @@
 defaults:
   - override /hydra/sweeper: optuna
 
-optimized_metric: "val/loss"
+optimized_metric: "val/auc_video"
 
 hydra:
   mode: "MULTIRUN"
@@ -15,7 +15,7 @@ hydra:
     study_name: null
     n_jobs: 1
 
-    direction: minimize
+    direction: maximize
     n_trials: 10
 
     sampler:
