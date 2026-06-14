@@ -1,0 +1,746 @@
+# Frontend-Fixes-Roadmap
+
+Dieses Dokument hält für jedes identifizierte Problem drei Dinge fest:
+
+1. **Gewollter Zustand** — wie es sein soll (Kombination aus den niedergeschriebenen
+   Annahmen in `docs/kapitel/00AA_Projektverständnis.md` und den Klärungen aus der
+   Code-Analyse).
+2. **Ist-Zustand** — was aktuell tatsächlich implementiert ist, mit Code-Referenz.
+3. **To-Do** — was konkret getan werden muss, um den gewollten Zustand zu erreichen.
+
+Die Probleme sind thematisch gruppiert. Jeder Block ist durch Trennlinien klar
+abgegrenzt. Datei-Referenzen verweisen auf den Stand zum Zeitpunkt der Analyse.
+
+**Gliederung**
+
+- A. Video-Panel
+  - A1. Zwei Timelines: Per-Chunk-Konfidenz + signierte Relevanz (Hybrid)
+  - A2. Heatmap: mitwandernde Bounding Box + seamless Darstellung
+- B. Audio-Panel (3 Layer)
+  - B1. Layer 2 — Wort-Aggregation liefert Balken nahe null
+  - B2. Layer 2 — Wort-Highlighting aktualisiert zu langsam
+  - B3. Layer 2 — Wort-Beschriftung der X-Achse
+  - B4. Confidence-/Relevance-Toggle (panel-weit für L1–L3)
+  - B5. Layer 1 — Relevanz-Band fast nie eingefärbt (Normierung)
+- C. Verdict-Panel
+  - C1. Multimodal-Verdict-Panel zu groß (UI)
+- D. Phasen-übergreifende xAI-Konsistenz (Vergleichbarkeit)
+  - D1. Adversarial-`explain()` ohne `target_class=1`
+  - D2. Robustheits-Audio-`explain()` mit argmax statt fix FAKE
+  - D3. Layer-3-Audio-Metrik unterscheidet sich zwischen Phase 1/2 und 3/4
+  - D4. Video-Heatmap-Normierung: unimodal „global" vs. multimodal „per-frame"
+  - D5. Adversarial läuft auf einem einzelnen Chunk statt dem ganzen Clip
+  - D6. Adversarial-Heatmaps: keine Upprojektion + Doppel-Normierung
+- E. Daten / Registry
+  - E1. `chunk00000`-Inkonsistenz im unimodalen H5-Video-Verdict
+  - E2. `normalized/`-Ordner ohne Fallback
+- F. Allgemeine Darstellung / Erklärbarkeit
+  - F1. Erklärtexte zu jeder Visualisierung
+  - F2. Tiefes Blau schlecht lesbar auf dunkelgrauem Hintergrund
+- G. Offener Untersuchungspunkt (kein reiner Frontend-Fix)
+  - G1. Layer-3-Vorzeichen-Inversion im multimodalen Modell
+- H. Clip-Auswahl & Vorschau
+  - H1. Auswahl: Identität → Segment → 2×2-Varianten-Matrix
+  - H2. Thumbnails (erster Frame) für die Auswahl-Karten
+
+---
+---
+
+## A. Video-Panel
+
+---
+
+### A1. Zwei Timelines: Per-Chunk-Konfidenz + signierte Relevanz (Hybrid)
+
+**Gewollter Zustand**
+
+Unterhalb des Videoplayers sollen **zwei** gestapelte Timelines liegen, damit beide
+Interpretationsachsen sichtbar sind:
+
+1. **Konfidenz-Timeline** — zeigt die **Klassifikation jedes einzelnen Chunks**
+   (REAL ↔ FAKE), damit man den *Zeitpunkt* einer Manipulation lokalisieren kann.
+   Je näher am Extrem, desto sicherer das Modell. Wenn nur ein kurzer Abschnitt
+   manipuliert wurde, darf **nur dieser Abschnitt** als FAKE erscheinen, der Rest
+   als REAL. Eine Aggregation auf den „most suspicious chunk" (ein konstanter Wert
+   über die ganze Timeline) ist hier ausdrücklich **nicht** erwünscht — der dient
+   nur dem Gesamt-Verdict.
+2. **Relevanz-Timeline (Hybrid)** — zeigt, **welche Chunks besonders einflussreich**
+   auf die finale Modellentscheidung waren. Darstellung als Hybrid: **Höhe = Einfluss**
+   (Magnitude `mean(|Relevanz|)` pro Chunk), **Farbe = Richtung** (Vorzeichen der
+   Netto-Relevanz: rot = fake-stützend, blau = real-stützend). So sieht man
+   gleichzeitig *wie stark* und *in welche Richtung* ein Chunk beigetragen hat.
+
+So hat man Konfidenz (WAS/WIE-fake) und Relevanz (WO/WIE-einflussreich + Richtung)
+nebeneinander und kann beides interpretieren.
+
+**Ist-Zustand**
+
+- Geplottet wird `perFrameScores` = **mittlere absolute LRP-Relevanz pro Frame**,
+  also eine Magnitude ≥ 0 ([inference.py:688](../src/api/inference.py#L688),
+  [1339](../src/api/inference.py#L1339)) — keine signierte Real/Fake-Klassifikation.
+- Die **Farbe der gesamten Linie** wird vom *einen globalen* `verdict` bestimmt
+  (FAKE → rot, REAL → blau, [FrameTimeline.tsx:27-29](../frontend/src/components/video/FrameTimeline.tsx#L27-L29)).
+  Es ist also weder per-chunk noch „most suspicious chunk", sondern
+  **Relevanz-Stärke, global eingefärbt**.
+- Eine Per-Chunk-Klassifikation existiert in der API-Antwort **gar nicht**: Die
+  Per-Fenster-Wahrscheinlichkeiten werden in `_chunked_fake_prob`
+  ([inference.py:397-410](../src/api/inference.py#L397-L410)) berechnet, aber durch
+  das Max-Pooling verworfen.
+
+**To-Do**
+
+1. API: Pro 16-Frame-Fenster **drei** Werte als Arrays ausgeben (statt sie im
+   Max-Pool zu verwerfen): `perChunkConfidence` (Fake-Wahrscheinlichkeit),
+   `perChunkRelevanceMagnitude` (`mean(|Relevanz|)`) und `perChunkRelevanceSign`
+   (signierter Mittelwert für die Richtung). Per-Fenster-Wahrscheinlichkeiten
+   liegen bereits in `_chunked_fake_prob` vor.
+2. Schema (`schemas.py` + `types/analysis.ts`) um die drei Arrays erweitern.
+3. **Konfidenz-Timeline** (`FrameTimeline.tsx` oder neue Komponente): Wertebereich
+   −1…1 bzw. 0…1 mit Mittellinie bei 0,5, Farbe **pro Segment** nach Klassifikation,
+   nicht global.
+4. **Relevanz-Timeline** (neue Komponente): Höhe = `perChunkRelevanceMagnitude`,
+   Farbe = Vorzeichen aus `perChunkRelevanceSign` (seismic: rot/blau).
+5. Beide Timelines gestapelt anordnen, gemeinsamer Playhead.
+
+---
+
+### A2. Heatmap wandert nicht mit der Bounding Box mit
+
+**Gewollter Zustand**
+
+Die Heatmap soll über dem **gesamten** Clip (nicht nur dem ausgeschnittenen
+Gesicht) liegen und dabei **immer exakt an der Position**, an der der Crop bei der
+Heatmap-Generierung entnommen wurde. Da sich die Person im Bild bewegt, muss die
+Box — und damit die Heatmap — **pro Chunk/Frame mitwandern**. Andernfalls schwebt
+die Heatmap neben dem Gesicht und verliert ihre Aussagekraft.
+
+**Ist-Zustand**
+
+- Es wird **eine einzige statische Box** für den ganzen Clip benutzt
+  ([inference.py:680-695](../src/api/inference.py#L680-L695)).
+- Upload-Pfad: Mittelwert aller Chunk-Boxen
+  ([inference.py:385-386](../src/api/inference.py#L385-L386)) — die per-Chunk-Boxen
+  werden live berechnet, aber weggemittelt.
+- H5-Pfad: nur die Box von `chunk00000`
+  ([clip_registry.py:184-194](../src/api/clip_registry.py#L184-L194)).
+- Das Frontend ([HeatmapCanvas.tsx](../frontend/src/components/video/HeatmapCanvas.tsx))
+  legt das fertige PNG nur global per `objectFit:contain` über das Video — die
+  Position ist ins PNG eingebrannt.
+- **Die Daten sind vorhanden**: pro Chunk stehen `crop_x1, crop_y1, crop_x2,
+  crop_y2, orig_w, orig_h` in der CSV (geschrieben in
+  [preprocess.py:384-399](../src/data_processing/preprocess.py#L384-L399)).
+
+**To-Do**
+
+1. Upload-Pfad: Per-Chunk-Boxen behalten statt mitteln
+   ([inference.py:385-386](../src/api/inference.py#L385-L386)).
+2. H5-Pfad: alle Chunk-Zeilen desselben `video_id` lesen (nicht nur `chunk00000`),
+   um pro Fenster die zugehörige Box zu erhalten.
+3. Upprojektion pro Frame mit der **jeweils gültigen** Chunk-Box durchführen.
+4. API-Schema: `cropBox` von einem Einzelobjekt auf ein **Array pro Chunk/Frame**
+   erweitern (`schemas.py` + `types/analysis.ts`).
+5. `HeatmapCanvas.tsx`: die Box pro Frame anwenden, sodass die Heatmap mit dem
+   Gesicht mitwandert.
+
+**Zusätzlich — seamless Darstellung (kein harter Rand)**
+
+*Gewollter Zustand:* Ein cleaner Look, bei dem nur die roten/blauen Patches der
+Heatmap sichtbar sind und der Übergang zum Video „seamless" ausblendet — keine
+sichtbare rechteckige Kante des Crop-Bereichs.
+
+*Ist-Zustand:* Im seismic-Colormap ist der Wert 0 = **weiß**
+([seismicColormap.ts:13](../frontend/src/lib/seismicColormap.ts#L13)). Aktuell
+bekommt der **gesamte** Crop-Bereich Alpha 0.85, sobald überhaupt Relevanz da ist
+([inference.py:490-491](../src/api/inference.py#L490-L491)) → relevanzarme Ränder
+werden als halbtransparentes Weiß gerendert = sichtbares weißes Rechteck mit
+scharfer Kante. Verstärkt durch `mixBlendMode: 'screen'`
+([HeatmapCanvas.tsx:55](../frontend/src/components/video/HeatmapCanvas.tsx#L55)).
+
+*To-Do:*
+6. In `_array_to_data_uri` Alpha **proportional zur Relevanz-Magnitude** setzen
+   (`alpha = clip(|heatmap| * gain, 0, max_alpha)`) statt der binären Maske → 0 wird
+   vollständig transparent, nur Patches bleiben sichtbar (automatisch seamless).
+   **Kein Blur** (als Overkill verworfen).
+7. Der Intensitäts-Slider bleibt und wirkt als Multiplikator auf `gain`/`max_alpha`.
+8. Blend-Modus prüfen: `'screen'` lässt dunkles Blau auf dunklem Video verschwinden
+   (hängt mit F2 zusammen). **Offene Unterentscheidung:** `'screen'` beibehalten vs.
+   `'normal'` vs. kräftigeres Blau — beim Umsetzen visuell vergleichen.
+
+---
+---
+
+## B. Audio-Panel (3 Layer)
+
+---
+
+### B1. Layer 2 — Wort-Aggregation liefert Balken nahe null
+
+**Gewollter Zustand**
+
+Pro Wort (via WhisperX-Zeitstempel) soll ein aussagekräftiger Real/Fake-Wert
+dargestellt werden. Ein Wort kann über mehrere Modell-Chunks laufen, daher muss
+sinnvoll aggregiert werden. Offene Designfrage (beide Varianten legitim):
+entweder gegenseitiges Aufheben uneindeutiger Chunks oder der „most suspicious
+chunk" pro Wort. Zusätzlich offen: anteilige Gewichtung von Chunks, die in zwei
+Wörter fallen (nur mit Ergebnis-Aggregation, nicht mit reinem Max möglich).
+
+**Ist-Zustand**
+
+- Die Aggregation ist der **Mittelwert** der signierten Relevanz über die
+  Sample-Spanne des Wortes, normiert durch das globale `max_abs`
+  ([inference.py:1112-1119](../src/api/inference.py#L1112-L1119)).
+- Folge: Der Mittelwert *signierter* Relevanz hebt sich über viele Samples
+  gegenseitig auf, danach Division durch den globalen Maximalwert → Balken fast
+  immer nahe null. Das ist die beobachtete Schwäche.
+
+**To-Do**
+
+1. Aggregations-Strategie festlegen (Designentscheidung dokumentieren):
+   - Option A: `mean(|Relevanz|)` pro Wort (Stärke, vorzeichenlos), oder
+   - Option B: „most suspicious"-Wert pro Wort (max signierte Relevanz), oder
+   - Option C: Per-Fenster-Konfidenz statt Relevanz aggregieren (passt zum
+     geplanten Confidence-Toggle, siehe B4).
+2. Normierung überdenken (nicht zwingend global durch `max_abs`, sondern ggf. pro
+   Wort robuster skalieren).
+3. Implementierung in `_compute_word_segments`
+   ([inference.py:1071-1122](../src/api/inference.py#L1071-L1122)) anpassen.
+
+---
+
+### B2. Layer 2 — Wort-Highlighting aktualisiert zu langsam
+
+**Gewollter Zustand**
+
+Beim Abspielen soll das aktuell gesprochene Wort flüssig und korrekt hervorgehoben
+werden — ohne übersprungene oder verspätet markierte Wörter.
+
+**Ist-Zustand**
+
+- Die Zeitquelle hängt am nativen `timeupdate`-Event, das nur ~4×/s feuert (~250 ms)
+  ([useVideoTime.ts:22-26](../frontend/src/hooks/useVideoTime.ts#L22-L26)).
+- Wörter kürzer als ~250 ms werden übersprungen, das Highlight hinkt nach.
+- Der aktive Index wird aus `currentTime` bestimmt
+  ([WordTokenChart.tsx:97-99](../frontend/src/components/audio/WordTokenChart.tsx#L97-L99)).
+
+**To-Do**
+
+1. `useVideoTime` (oder eine Variante davon) auf `requestAnimationFrame`-Polling
+   umstellen, sodass `currentTime` ~60×/s aktualisiert wird.
+2. Sicherstellen, dass die höhere Update-Frequenz die Canvas-/Recharts-Renders
+   nicht überlastet (ggf. nur den aktiven Index, nicht die gesamte Datenstruktur,
+   neu berechnen).
+
+---
+
+### B3. Layer 2 — Wort-Beschriftung der X-Achse
+
+**Gewollter Zustand**
+
+Alle Wörter sollen lesbar zugeordnet werden können, auch lange Wörter, ohne dass
+sich Labels überlappen.
+
+**Ist-Zustand**
+
+- Alle Wörter sind als Balken vorhanden; die X-Achsen-Labels stammen von Recharts
+  und überlappen bei langen Wörtern
+  ([WordTokenChart.tsx:127-132](../frontend/src/components/audio/WordTokenChart.tsx#L127-L132)).
+
+**To-Do** (eine der Varianten wählen)
+
+1. Labels schräg/vertikal darstellen (angewinkelte X-Achsen-Ticks), oder
+2. Labels weglassen und das Wort nur im Hover-Tooltip zeigen (Tooltip existiert
+   bereits), oder
+3. Labels ausdünnen (nur jedes n-te Wort).
+
+---
+
+### B4. Confidence-/Relevance-Toggle (panel-weit für L1–L3)
+
+**Gewollter Zustand**
+
+Die signierte Relevanz (wie stark/in welche Richtung etwas den Output beeinflusst
+hat) ist wertvoll und soll erhalten bleiben. Zusätzlich soll **ein einziger Toggle**
+das **gesamte Audio-Panel auf einmal** zwischen **Confidence** (wie fake ist dieser
+Abschnitt) und **Relevance** (warum) umschalten — also L1, L2 **und** L3 gemeinsam,
+nicht pro Visualisierung einzeln. Beides wird bei der Analyse einmal berechnet und
+ist dann clientseitig frei umschaltbar.
+
+**Ist-Zustand**
+
+- Layer 1–3 zeigen ausschließlich **Relevanz**:
+  - L1 per-Bucket-Mittel der signierten Relevanz
+    ([WaveformRelevanceLayer.tsx:58-93](../frontend/src/components/audio/WaveformRelevanceLayer.tsx#L58-L93)),
+  - L2 Wort-Relevanz (siehe B1),
+  - L3 Band-Ablation (`_band_confidence`, signiert, entscheidungs-fundiert).
+- Eine Per-Fenster-Konfidenz wird intern berechnet
+  (`_windowed_audio_fake_prob`, [inference.py:1130-1160](../src/api/inference.py#L1130-L1160)),
+  aber nicht pro Fenster ausgegeben.
+
+**To-Do**
+
+1. API: pro Audio-Fenster **beide** Größen ausgeben — signierte Relevanz (vorhanden)
+   und Per-Fenster-Konfidenz (neu, als Array).
+2. Schema + Typen erweitern.
+3. Frontend: **ein** Toggle-State im Audio-Panel-Header, der L1, L2 **und** L3
+   gemeinsam umschaltet; jede Layer-Komponente liest je nach Toggle die
+   entsprechende Datenquelle (Relevanz vs. Confidence).
+
+---
+
+### B5. Layer 1 — Relevanz-Band fast nie eingefärbt (Normierung)
+
+**Gewollter Zustand**
+
+Das Relevanz-Band in Layer 1 (und analog die Wort-Balken in L2) soll deutlich
+eingefärbt sein und den Verlauf sichtbar machen — nicht durchgehend nahe null.
+
+**Ist-Zustand**
+
+Zwei sich addierende Effekte:
+
+1. Das Band zeigt den **Mittelwert** signierter Relevanz pro Bucket
+   ([WaveformRelevanceLayer.tsx:59](../frontend/src/components/audio/WaveformRelevanceLayer.tsx#L59))
+   → Aufhebungs-Effekt (wie bei den Wörtern in B1).
+2. `normalize_relevance` normiert über das **globale Abs-Maximum** des ganzen Clips
+   → ein einzelner Ausschlag dominiert, alles andere wird ≈ 0 → seismic mappt das
+   auf Weiß, Alpha minimal (`alpha = 0.75 * min(1, |rel|*2 + 0.15)`,
+   [WaveformRelevanceLayer.tsx:65](../frontend/src/components/audio/WaveformRelevanceLayer.tsx#L65)).
+
+**To-Do**
+
+1. Normierung robuster machen: statt globalem Max eine **Perzentil-Normierung**
+   (z. B. Division durch das 95./99.-Perzentil), damit der Großteil der Werte den
+   Farbbereich tatsächlich nutzt. Gemeinsame Wurzel mit B1 — dort konsistent
+   anwenden.
+2. Für die Band-Intensität `|rel|` statt signiertem Mittel erwägen bzw. (via B4)
+   wahlweise Per-Fenster-Confidence anzeigen.
+3. Alpha-Gain leicht anheben.
+
+---
+---
+
+## C. Verdict-Panel
+
+---
+
+### C1. Multimodal-Verdict-Panel zu groß (reine UI-Sache)
+
+**Gewollter Zustand**
+
+Das Multimodal-Verdict-Panel soll genauso groß sein wie die unimodalen
+Verdict-Panels.
+
+**Ist-Zustand**
+
+- Unimodal zeigt **zwei** Gauges nebeneinander (VISUAL + AUDIO), Multimodal **einen**
+  fusionierten Gauge
+  ([VerdictPanel.tsx:94-178](../frontend/src/components/verdict/VerdictPanel.tsx#L94-L178)).
+- Strukturell/datenseitig kein Unterschied — reine Layout-/CSS-Frage.
+- Der Verdict-Wert selbst ist korrekt: Max-Pool über alle Chunks („most suspicious
+  chunk"), siehe Video [inference.py:404-409](../src/api/inference.py#L404-L409),
+  Audio [inference.py:1154-1159](../src/api/inference.py#L1154-L1159), Multimodal
+  [inference.py:1315](../src/api/inference.py#L1315).
+
+**To-Do**
+
+1. CSS/Layout des Multimodal-Gauges an die Größe der unimodalen Panels angleichen.
+
+---
+---
+
+## D. Phasen-übergreifende xAI-Konsistenz (Vergleichbarkeit)
+
+> Diese Punkte betreffen die wissenschaftliche **Vergleichbarkeit** der xAI-Ergebnisse
+> über die vier Projektphasen hinweg. Inkonsistente Vorzeichen-Konventionen,
+> Normierungen oder Aggregationen machen Heatmaps/Relevanzen zwischen den Phasen
+> nicht direkt vergleichbar.
+
+---
+
+### D1. Adversarial-`explain()` ohne `target_class=1`
+
+**Gewollter Zustand**
+
+Alle xAI-Pfade erklären konsistent die **FAKE-Klasse (1)**, damit positive Relevanz
+immer „fake-stützend" bedeutet (rot) — unabhängig vom Verdict.
+
+**Ist-Zustand**
+
+- Phase 1/2 fixieren `target_class=1`
+  ([inference.py:654](../src/api/inference.py#L654),
+  [1193](../src/api/inference.py#L1193),
+  [1321](../src/api/inference.py#L1321)).
+- Die Adversarial-Pfade rufen `model.explain(...)` **ohne** `target_class` auf →
+  argmax (vorhergesagte Klasse):
+  [inference.py:1676](../src/api/inference.py#L1676),
+  [1757](../src/api/inference.py#L1757),
+  [1779](../src/api/inference.py#L1779),
+  [1967-1970](../src/api/inference.py#L1967-L1970),
+  [1979-1982](../src/api/inference.py#L1979-L1982).
+- Folge: Bei REAL-Vorhersagen invertiert sich das Vorzeichen gegenüber Phase 1/2.
+
+**To-Do**
+
+1. An allen genannten Adversarial-`explain()`-Aufrufen `target_class=1` setzen.
+
+---
+
+### D2. Robustheits-Audio-`explain()` mit argmax statt fix FAKE
+
+**Gewollter Zustand**
+
+Wie D1 — die Audio-Relevanz im Robustheits-Pfad erklärt fix die FAKE-Klasse.
+
+**Ist-Zustand**
+
+- `_run_audio_for_robustness` ruft `model.explain(..., target_class=1 if fake_prob
+  > 0.5 else 0)` ([inference.py:1454-1457](../src/api/inference.py#L1454-L1457)).
+- Folge: Bei REAL-Clips umgekehrtes Vorzeichen gegenüber Phase 1/2.
+
+**To-Do**
+
+1. `target_class=1` fest setzen.
+
+---
+
+### D3. Layer-3-Audio-Metrik unterscheidet sich zwischen Phase 1/2 und 3/4
+
+**Gewollter Zustand**
+
+Die Frequenzband-Auswertung (Layer 3) soll über alle Phasen **dieselbe Metrik und
+dieselbe Vorzeichen-Semantik** verwenden, damit Bänder vergleichbar sind. Der
+Ausschlag soll bedeuten, wie sicher das Modell ist, dass der Bereich real/fake ist
+(entscheidungs-fundiert).
+
+**Ist-Zustand**
+
+- Phase 1/2: `_band_confidence` (Band-Ablation, entscheidungs-fundiertes Vorzeichen)
+  ([inference.py:1027-1068](../src/api/inference.py#L1027-L1068)).
+- Phase 3/4: `_compute_frequency_bands` (energie-gewichtete Relevanz, anderes
+  Vorzeichen-Konzept) ([inference.py:933-975](../src/api/inference.py#L933-L975),
+  aufgerufen in [1472](../src/api/inference.py#L1472),
+  [2028-2029](../src/api/inference.py#L2028-L2029)).
+
+**To-Do**
+
+1. Phase 3/4 ebenfalls auf `_band_confidence` (Band-Ablation) umstellen, oder
+   bewusst eine einzige Metrik projektweit festlegen und überall verwenden.
+2. `_compute_frequency_bands` nur behalten, wenn sie an keiner verglichenen Stelle
+   mehr genutzt wird (sonst entfernen).
+
+---
+
+### D4. Video-Heatmap-Normierung: unimodal „global" vs. multimodal „per-frame"
+
+**Gewollter Zustand**
+
+Video-Heatmaps werden in Phase 1 (unimodal) und Phase 2 (multimodal) **identisch**
+normiert, damit Heatmaps und daraus abgeleitete Per-Frame-Werte vergleichbar sind.
+
+**Ist-Zustand**
+
+- Unimodal: `normalize_mode="global"` (alle 16 Frames zusammen normiert, zeitliche
+  Dynamik erhalten) ([VideoMAE_module.py:250-255](../src/models/VideoMAE_module.py#L250-L255)).
+- Multimodal: **per-frame** normiert (jeder Frame einzeln auf Max 1), obwohl der
+  Docstring „identical to VideoMAEModule.explain" behauptet
+  ([multimodal_module.py:629-636](../src/models/multimodal_module.py#L629-L636)).
+- Folge: `perFrameScores = mean(|heatmap|)` bedeutet in Phase 1 „relative zeitliche
+  Relevanz", in Phase 2 „alle Frames ~gleich stark" — die Video-Timeline misst pro
+  Phase etwas anderes.
+
+**To-Do**
+
+1. Multimodal-`explain()` auf dieselbe globale Normierung umstellen wie unimodal
+   (bzw. beide über denselben `normalize_mode` steuerbar machen).
+2. Docstring korrigieren.
+
+---
+
+### D5. Adversarial läuft auf einem einzelnen Chunk statt dem ganzen Clip
+
+**Gewollter Zustand**
+
+Der Adversarial-Pfad arbeitet auf derselben Datengrundlage wie Phase 1/2 — ganzer
+Clip, gleiche Aggregation —, damit Verdicts und Heatmaps vergleichbar sind.
+
+**Ist-Zustand**
+
+- Adversarial nutzt `_preprocess_video_chunked` → nur den **ersten** Gesichts-Chunk
+  ([inference.py:1916](../src/api/inference.py#L1916),
+  [422-424](../src/api/inference.py#L422-L424)).
+- Verdict/Heatmap basieren auf 16 Frames statt dem ganzen Clip.
+
+**To-Do**
+
+1. Entscheiden, ob Adversarial pro Clip über alle Chunks laufen soll (teurer, aber
+   vergleichbar) oder bewusst auf einem definierten „verdächtigsten" Chunk.
+2. Dokumentieren, falls bewusst auf Einzel-Chunk reduziert wird.
+
+---
+
+### D6. Adversarial-Heatmaps: keine Upprojektion + Doppel-Normierung
+
+**Gewollter Zustand**
+
+Adversarial-Heatmaps werden genauso dargestellt wie Phase 1/2/3: in den
+Originalrahmen upprojiziert mit Alpha-Maske, und ohne zusätzliche Re-Normierung
+einer bereits normierten Heatmap.
+
+**Ist-Zustand**
+
+- Adversarial gibt die rohe 224×224-Heatmap aus (keine Upprojektion, keine
+  Alpha-Maske): [inference.py:1682](../src/api/inference.py#L1682),
+  [1991](../src/api/inference.py#L1991).
+- Zusätzlich wird die bereits in `explain()` normierte Heatmap **erneut** durch
+  `/ (max(abs)+1e-8)` skaliert: [inference.py:1678](../src/api/inference.py#L1678),
+  [1759](../src/api/inference.py#L1759), [1990](../src/api/inference.py#L1990).
+- Phase 1/2 tun beides nicht ([inference.py:691-695](../src/api/inference.py#L691-L695)).
+
+**To-Do**
+
+1. Upprojektion + Alpha-Maske wie in `_video_result_with_heatmaps` anwenden.
+2. Die doppelte Normierung entfernen (Output von `explain()` ist bereits normiert).
+
+---
+---
+
+## E. Daten / Registry
+
+---
+
+### E1. `chunk00000`-Inkonsistenz im unimodalen H5-Video-Verdict
+
+**Gewollter Zustand**
+
+Der unimodale Video-Verdict soll die Manipulation im Clip tatsächlich „sehen"
+können, d. h. konsistent über den ganzen Clip aggregiert werden (wie Audio und
+Multimodal). Ein FAKE-Clip soll im Video-Panel als FAKE erscheinen, auch wenn die
+Manipulation nicht im ersten Chunk liegt.
+
+**Ist-Zustand**
+
+- In `clips.json` ist `h5ChunkId` immer `chunk00000` (Sekunde 0–0,64).
+- Beispiel clip_01: Manipulation bei 3,28–3,46 s ≈ Chunk 5 — `chunk00000` ist also
+  echtes Material, obwohl der Clip FAKE ist (Label korrekt, siehe Sidecar
+  `modify_type: both_modified`).
+- Der unimodale H5-Video-Verdict wird aus genau diesem einen (realen) Chunk
+  berechnet ([inference.py:828-836](../src/api/inference.py#L828-L836)).
+- Folge: Der Video-Verdict kann fälschlich „REAL" zeigen, weil er die Manipulation
+  nie sieht. Audio und Multimodal poolen über den ganzen Clip und sind nicht
+  betroffen. (Die Video-Heatmap deckt ohnehin alle Frames ab — nur die
+  *Verdict-Zahl* hängt am Einzel-Chunk.)
+- Hinweis: Die Demo-Labels selbst sind **korrekt** (gegen die Sidecars geprüft) —
+  es ist kein Labelfehler, sondern eine Registry-/Aggregations-Inkonsistenz.
+
+**To-Do**
+
+1. Den unimodalen H5-Video-Verdict über **alle** Chunks des Clips poolen (Max-Pool),
+   analog zu Audio/Multimodal — statt nur `chunk00000` auszuwerten.
+2. Alternativ/zusätzlich: in `clips.json` den verdächtigsten Chunk referenzieren.
+3. Sicherstellen, dass alle Chunk-Zeilen eines `video_id` zugänglich sind (hängt mit
+   A2-To-Do #2 zusammen).
+
+---
+
+### E2. `normalized/`-Ordner ohne Fallback
+
+**Gewollter Zustand**
+
+Das zur Heatmap-Visualisierung und Audio-Inferenz verwendete Video muss immer in
+demselben (normalisierten) Zustand vorliegen wie bei der Heatmap-Generierung —
+sonst stimmen fps/Format nicht und die Heatmap läuft nicht mehr synchron. Es muss
+sichergestellt sein, dass das passende Video immer auffindbar ist (Fallback, falls
+es nicht unter `data/normalized/` liegt).
+
+**Ist-Zustand**
+
+- Das Preprocessing schreibt **kein** `normalized/`-File, wenn die Quelle bereits
+  bei 25 fps liegt ([preprocess.py:314-336](../src/data_processing/preprocess.py#L314-L336)).
+- `clip_registry` setzt den Pfad jedoch **hart** auf
+  `data/normalized/{video_id}.mp4` ([clip_registry.py:193](../src/api/clip_registry.py#L193)).
+- Dieser Pfad wird im unimodalen H5-Pfad für **Heatmap-Frames**
+  (`_load_all_frames_cropped`) **und** Audio-Inferenz gebraucht
+  ([analyze.py:137-138, 155](../src/api/routers/analyze.py#L137-L155)).
+- Alle Demo-Clips haben `fps: 25.0` ([clips.json](../conf/clips.json)) → für sie
+  wird kein `normalized/`-File erzeugt; fehlt es, schlägt die Analyse mit 500/404
+  fehl. Es gibt **keinen** Fallback.
+
+**To-Do**
+
+1. Fallback einbauen: Wenn `data/normalized/{video_id}.mp4` fehlt, auf die
+   Originalquelle zurückgreifen (und ggf. on-the-fly normalisieren, analog zu
+   `_ensure_target_fps`).
+2. Alternativ: Preprocessing dazu bringen, für die als Demo verwendeten Clips immer
+   ein `normalized/`-File abzulegen (auch bei 25-fps-Quellen), oder den
+   Registry-Pfad auf die tatsächlich vorhandene Datei zeigen lassen.
+3. Sicherstellen, dass das im Frontend angezeigte Video (`videoSrc`) und das zur
+   Heatmap-Erzeugung benutzte Video (`videoPath`) dieselbe Auflösung/fps haben.
+
+---
+---
+
+## F. Allgemeine Darstellung / Erklärbarkeit
+
+---
+
+### F1. Erklärtexte zu jeder Visualisierung
+
+**Gewollter Zustand**
+
+Im Frontend soll bei jeder Visualisierung erklärt sein, **was** dargestellt wird und
+**wie** man es interpretiert (z. B. Unterschied Relevanz vs. Confidence, Bedeutung
+von Rot/Blau, Bedeutung der Bänder). Hintergrund: Relevanz (WO/WARUM) und Confidence
+(WAS/WIE-fake) sind komplementär, nicht austauschbar — das muss für Betrachter klar
+sein.
+
+**Ist-Zustand**
+
+- Keine erklärenden Hilfetexte; die Bedeutung der Achsen/Farben ist nur implizit.
+
+**To-Do**
+
+1. Pro Visualisierung kurze Erklärung ergänzen (Tooltip, Info-Icon oder Begleittext).
+2. Insbesondere klarstellen: signierte Relevanz (rot = fake-stützend, blau =
+   real-stützend) vs. Klassifikations-Konfidenz; passt zum Toggle aus B4.
+
+---
+
+### F2. Tiefes Blau schlecht lesbar auf dunkelgrauem Hintergrund
+
+**Gewollter Zustand**
+
+Alle Visualisierungen sollen auch im blauen (real-stützenden) Bereich gut lesbar
+sein.
+
+**Ist-Zustand**
+
+- Tiefes Blau der seismic-Colormap ist auf dem dunkelgrauen Hintergrund schwer
+  erkennbar (betrifft mehrere Visualisierungen).
+
+**To-Do**
+
+1. Colormap/Alpha bzw. Hintergrund-Kontrast anpassen (separat von den
+   Logik-Fixes).
+
+---
+---
+
+## G. Offener Untersuchungspunkt (kein reiner Frontend-Fix)
+
+---
+
+### G1. Layer-3-Vorzeichen-Inversion im multimodalen Modell
+
+**Gewollter Zustand**
+
+Die Frequenzbänder (Layer 3) zeigen im multimodalen Fall dasselbe, korrekte
+Vorzeichen wie im unimodalen Fall.
+
+**Ist-Zustand / Analyse**
+
+- Im Test der Multimodal-Fusion sind alle drei Bänder mit dem gegensätzlichen
+  Vorzeichen als erwartet; unimodal funktioniert Layer 3.
+- **Eingegrenzt**: Frontend ausgeschlossen (`FrequencyBandChart` rendert uni und
+  multi byte-identisch). API/Band-Code ausgeschlossen (uni und multi laufen durch
+  dieselbe `_band_confidence` mit identischer Vorzeichenkonvention; nur die
+  `margin_fn` unterscheidet sich, beide definieren `margin = logit_fake −
+  logit_real`).
+- **Demo-Labels geprüft und korrekt** (gegen die Sidecars in
+  `data/train_metadata/.../00001|00002/*.json`).
+- **Verbleibende wahrscheinliche Ursache**: das multimodale Modell selbst
+  (untertrainiert/overfittet, laut Config `train 0.37 << val 1.03`,
+  [multimodal.yaml:9](../configs/model/multimodal.yaml#L9)) — verstärkt dadurch, dass
+  die Manipulationen winzig sind (~0,16–0,18 s in ~10–15 s Clip), sodass die
+  Band-Ablation über fast vollständig echtes Audio mittelt und das Vorzeichen
+  schwach/instabil wird.
+
+**To-Do**
+
+1. Kein Code-Fix im Frontend/API nötig — Modellseite prüfen: Training des
+   multimodalen Modells (Overfitting, Konfiguration), idealerweise mit einem
+   verfügbaren Concat-Checkpoint gegenprüfen (aktuell nicht testbar).
+2. Nach E1/A2-Fixes erneut bewerten, ob die Demo besser einen manipulations-nahen
+   Chunk/Abschnitt verwendet, damit Layer 3 ein stärkeres Signal sieht.
+
+---
+---
+
+## H. Clip-Auswahl & Vorschau
+
+---
+
+### H1. Auswahl: Identität → Segment → 2×2-Varianten-Matrix
+
+**Gewollter Zustand**
+
+Statt nur 5 fest verdrahteter Demo-Clips soll man frei aus dem Testset wählen
+können, in drei intuitiven Schritten:
+
+1. **Identität wählen** — als **scrollbares Dropdown mit Thumbnail-Grid** (Grid für
+   die schöne Optik, im Dropdown gekapselt, damit es wenig Platz braucht). Alle
+   Test-Identitäten sind wählbar (es sind nicht viele). Das Identitäts-Thumbnail ist
+   einfach der erste Frame ihres ersten Videos — rein repräsentativ, damit man
+   schnell die gesuchte Person findet.
+2. **Segment wählen** — Auswahl des konkreten Clips/Segments der Identität.
+3. **Variante wählen — als 2×2-Matrix** (Video Real/Fake × Audio Real/Fake), selbst
+   als kleines Thumbnail-Grid dargestellt. Nicht vorhandene Kombinationen werden
+   **ausgegraut**.
+
+Die vier Varianten mappen exakt auf die Matrix:
+
+| | Audio Real | Audio Fake |
+|---|---|---|
+| **Video Real** | `real` | `real_video_fake_audio` |
+| **Video Fake** | `fake_video_real_audio` | `fake_video_fake_audio` |
+
+**Ist-Zustand**
+
+- Registry ist **statisch**: nur 5 Einträge in [clips.json](../conf/clips.json).
+- Auswahl ist eine flache horizontale Liste von Karten
+  ([DemoSelector.tsx](../frontend/src/components/video/DemoSelector.tsx)).
+- Es gibt keine Identitäts-/Segment-/Varianten-Hierarchie und keinen Zugriff auf
+  das volle Testset.
+
+**To-Do**
+
+1. Backend: Registry **dynamisch** aus den Test-Split-Metadaten (`*_metadata.csv` +
+   Sidecars) aufbauen statt aus der statischen JSON.
+2. Neue Endpoints, z. B. `/identities` (Test-Identitäten) und
+   `/identities/{id}/clips` (Segmente + jeweils verfügbare Varianten).
+3. `videoSrc` / `videoPath` / `h5ChunkId` pro Auswahl on-demand auflösen/erzeugen
+   (verzahnt mit dem `normalized/`-Fallback aus E2 und der Per-Chunk-Box aus A2).
+4. Frontend: dreistufige Auswahl — (1) Identitäts-Dropdown mit Thumbnail-Grid,
+   (2) Segment-Auswahl, (3) 2×2-Varianten-Matrix mit Ausgrauen nicht vorhandener
+   Kombinationen.
+
+---
+
+### H2. Thumbnails (erster Frame) für die Auswahl-Karten
+
+**Gewollter Zustand**
+
+Jede Auswahl-Karte (Identität, Segment, Variante) zeigt als Vorschau den **ersten
+Frame** des jeweiligen Videos, damit es professionell aussieht und man Clips schnell
+wiedererkennt. Das vorhandene untere Gradient-Banner + REAL/FAKE-Badge werden
+beibehalten, damit der Text auf dem Thumbnail gut lesbar bleibt.
+
+**Ist-Zustand**
+
+- Die Karten sind schwarz, weil `posterSrc` leer ist
+  ([clips.json](../conf/clips.json)); das `<img>` wird bei Fehler ausgeblendet
+  ([DemoSelector.tsx:47-53](../frontend/src/components/video/DemoSelector.tsx#L47-L53)).
+- Das gewünschte Layout existiert bereits: unteres Gradient-Banner
+  ([DemoSelector.tsx:56-62](../frontend/src/components/video/DemoSelector.tsx#L56-L62))
+  und REAL/FAKE-Badge oben rechts
+  ([DemoSelector.tsx:64-75](../frontend/src/components/video/DemoSelector.tsx#L64-L75))
+  — es fehlt nur das Bild.
+
+**To-Do**
+
+1. Backend: Endpoint `/thumbnail/{clip_id}` (oder pro Identität/Segment), der den
+   ersten Frame per ffmpeg extrahiert und **auf Platte cached** — kein erneutes
+   Preprocessing nötig, nur der erste Aufruf ist langsam, danach aus dem Cache.
+2. Frontend: `posterSrc` auf den Thumbnail-Endpoint setzen; Banner + Badge wie
+   gehabt übernehmen.
+
+---
