@@ -1,0 +1,8 @@
+{
+  "alwaysUpdateLinks": true,
+  "useMarkdownLinks": false,
+  "newLinkFormat": "relative",
+  "attachmentFolderPath": "Research/deepfake-detection/_attachments",
+  "showInlineTitle": true,
+  "promptDelete": false
+}

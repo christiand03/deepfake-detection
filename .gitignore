@@ -84,3 +84,18 @@ docs/kapitel/
 !src/data/
 !src/models/
 !configs/data/
+
+# ============================================================
+# Obsidian Vault (team-shared KB under vault/)
+# ============================================================
+# Shared config (.obsidian/app.json, appearance.json, core-plugins.json,
+# graph.json, daily-notes.json) IS committed. Per-user UI state is not:
+vault/.obsidian/workspace.json
+vault/.obsidian/workspace-mobile.json
+vault/.obsidian/cache
+vault/.obsidian/*.bak
+vault/.trash/
+
+# Claude KB binding layer: machine-specific absolute paths.
+# Each teammate binds their own clone (see vault/README.md).
+.claude/project-memory/

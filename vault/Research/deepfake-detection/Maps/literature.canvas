@@ -1,0 +1,47 @@
+{
+  "nodes": [
+    {"id":"thesis","type":"text","text":"# Unmasking Deception\nMultimodal (video+audio) **explainable** deepfake detector,\n**robustness-tested** on political talking-heads.\n→ [[00-Literature-Hub]]","x":-260,"y":-80,"width":520,"height":160,"color":"6"},
+    {"id":"gapG4","type":"text","text":"**Gap G4 (contribution)**\nDoes an adversarial attack move a *faithful* explanation?\nUnaddressed across sources.\n→ [[Knowledge/Research Gaps]]","x":-260,"y":160,"width":520,"height":120,"color":"1"},
+
+    {"id":"h_det","type":"text","text":"## Detection & Datasets","x":-1120,"y":-560,"width":300,"height":50,"color":"4"},
+    {"id":"ff","type":"file","file":"Research/deepfake-detection/Sources/Papers/faceforensics-plusplus.md","x":-1200,"y":-470,"width":300,"height":60},
+    {"id":"avdf","type":"file","file":"Research/deepfake-detection/Sources/Papers/av-deepfake1m.md","x":-1200,"y":-390,"width":300,"height":60,"color":"4"},
+    {"id":"tol","type":"file","file":"Research/deepfake-detection/Sources/Papers/tolosana-2020-survey.md","x":-1200,"y":-310,"width":300,"height":60},
+    {"id":"istvt","type":"file","file":"Research/deepfake-detection/Sources/Papers/istvt-2023.md","x":-1200,"y":-230,"width":300,"height":60,"color":"1"},
+
+    {"id":"h_back","type":"text","text":"## Backbones","x":820,"y":-560,"width":300,"height":50,"color":"5"},
+    {"id":"vmae","type":"file","file":"Research/deepfake-detection/Sources/Papers/videomae-tong-2022.md","x":900,"y":-470,"width":300,"height":60,"color":"5"},
+    {"id":"w2v","type":"file","file":"Research/deepfake-detection/Sources/Papers/wav2vec2-baevski-2020.md","x":900,"y":-390,"width":300,"height":60,"color":"5"},
+    {"id":"vit","type":"file","file":"Research/deepfake-detection/Sources/Papers/vit-dosovitskiy-2021.md","x":900,"y":-310,"width":300,"height":60},
+    {"id":"attn","type":"file","file":"Research/deepfake-detection/Sources/Papers/attention-is-all-you-need.md","x":900,"y":-230,"width":300,"height":60},
+
+    {"id":"h_xai","type":"text","text":"## Explainability (xAI)","x":-1120,"y":360,"width":300,"height":50,"color":"3"},
+    {"id":"alrp","type":"file","file":"Research/deepfake-detection/Sources/Papers/attnlrp-achtibat-2024.md","x":-1200,"y":450,"width":300,"height":60,"color":"3"},
+    {"id":"roll","type":"file","file":"Research/deepfake-detection/Sources/Papers/attention-rollout-abnar-2020.md","x":-1200,"y":530,"width":300,"height":60},
+    {"id":"lrp","type":"file","file":"Research/deepfake-detection/Sources/Papers/lrp-bach-2015.md","x":-1200,"y":610,"width":300,"height":60},
+    {"id":"chefer","type":"file","file":"Research/deepfake-detection/Sources/Papers/chefer-2021-transformer-interpretability.md","x":-1200,"y":690,"width":300,"height":60},
+
+    {"id":"h_adv","type":"text","text":"## Adversarial Robustness","x":820,"y":360,"width":300,"height":50,"color":"2"},
+    {"id":"pgd","type":"file","file":"Research/deepfake-detection/Sources/Papers/pgd-madry-2018.md","x":900,"y":450,"width":300,"height":60,"color":"2"},
+    {"id":"fgsm","type":"file","file":"Research/deepfake-detection/Sources/Papers/fgsm-goodfellow-2015.md","x":900,"y":530,"width":300,"height":60},
+    {"id":"uap","type":"file","file":"Research/deepfake-detection/Sources/Papers/uap-moosavi-2017.md","x":900,"y":610,"width":300,"height":60},
+    {"id":"cw","type":"file","file":"Research/deepfake-detection/Sources/Papers/carlini-wagner-2017.md","x":900,"y":690,"width":300,"height":60}
+  ],
+  "edges": [
+    {"id":"e_det","fromNode":"avdf","toNode":"thesis","fromSide":"right","toSide":"left","label":"dataset used (supported)","color":"4"},
+    {"id":"e_tol","fromNode":"tol","toNode":"thesis","fromSide":"right","toSide":"left","label":"taxonomy (strong)"},
+    {"id":"e_istvt","fromNode":"istvt","toNode":"thesis","fromSide":"right","toSide":"left","label":"closest prior art — video-only (metadata-only)","color":"1"},
+    {"id":"e_vmae","fromNode":"vmae","toNode":"thesis","fromSide":"left","toSide":"right","label":"Phase 1 video backbone (supported)","color":"5"},
+    {"id":"e_w2v","fromNode":"w2v","toNode":"thesis","fromSide":"left","toSide":"right","label":"Phase 2 audio backbone (supported)","color":"5"},
+    {"id":"e_alrp","fromNode":"alrp","toNode":"thesis","fromSide":"right","toSide":"left","label":"primary xAI (supported)","color":"3"},
+    {"id":"e_roll_alrp","fromNode":"roll","toNode":"alrp","fromSide":"top","toSide":"bottom","label":"attention unreliable → relevance (supported)"},
+    {"id":"e_lrp_alrp","fromNode":"lrp","toNode":"alrp","fromSide":"top","toSide":"bottom","label":"extends LRP (strong)"},
+    {"id":"e_chefer_alrp","fromNode":"chefer","toNode":"alrp","fromSide":"top","toSide":"bottom","label":"predecessor (supported)"},
+    {"id":"e_pgd","fromNode":"pgd","toNode":"thesis","fromSide":"left","toSide":"right","label":"Phase 4 attack + adv. training (strong)","color":"2"},
+    {"id":"e_alrp_gap","fromNode":"alrp","toNode":"gapG4","fromSide":"bottom","toSide":"left","label":"faithful map","color":"3"},
+    {"id":"e_pgd_gap","fromNode":"pgd","toNode":"gapG4","fromSide":"bottom","toSide":"right","label":"attack","color":"2"},
+    {"id":"e_cw_pgd","fromNode":"cw","toNode":"pgd","fromSide":"top","toSide":"bottom","label":"eval guardrail (strong)"},
+    {"id":"e_avdf_back","fromNode":"vmae","toNode":"avdf","fromSide":"top","toSide":"top","label":"fine-tuned on"},
+    {"id":"e_vit_vmae","fromNode":"vit","toNode":"vmae","fromSide":"left","toSide":"right","label":"patch basis"}
+  ]
+}
