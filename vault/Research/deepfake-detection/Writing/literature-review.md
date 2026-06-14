@@ -1,0 +1,33 @@
+---
+title: Literature Review — Multimodal Explainable Robust Deepfake Detection
+type: writing/literature-review
+status: draft-abstract-grounded
+created: 2026-06-14
+tags: [LiteratureReview, DeepfakeDetection, xAI, Adversarial, Multimodal]
+---
+
+# Literature Review (Draft)
+
+> [!warning] Evidence level & scope
+> Abstract/preprint-grounded draft from the Zotero group `Paper Belegarbeit`. The 16 foundational sources have [[Claim Map|Evidence Records]]; the ~20 papers added on 2026-06-14 are cited at **abstract level** (full source notes pending — generate via `/zotero-notes`). Replace `(Author Year)` with the final citation style; cross-check every entry against the group library before export. Numbers are quoted only where the abstract states them.
+
+## 1. Datasets and benchmarks
+Face-manipulation detection is anchored by a progression of benchmarks. FaceForensics++ (Rössler et al. 2019, >1.8M images, four manipulation families) and Celeb-DF (Li et al. 2020, 5,639 high-quality fake videos, arXiv:1909.12962) established image/video benchmarks; the DeepFake Detection Challenge dataset (Dolhansky et al. 2020, arXiv:2006.07397) added scale and diversity. The current frontier is content-driven and audio-visual: AV-Deepfake1M (Cai et al. 2024, >1M videos) reports that SOTA methods drop sharply, motivating this project's setting. DeepfakeBench (Yan et al. 2023, arXiv:2307.01426) standardizes evaluation across ~20 detectors and documents the central problem of **cross-dataset generalization collapse** — detectors strong in-domain degrade badly under new forgeries.
+
+## 2. Detection methods and the generalization problem
+Two ideas dominate recent generalizable detection: (i) **blending-artifact** cues — Face X-ray (Li et al. 2020, arXiv:1912.13458) targets blending boundaries, and Self-Blended Images (Shiohara & Yamasaki 2022, arXiv:2204.08376) synthesizes training fakes from single pristine images, reporting cross-dataset gains (e.g., DFDC +4.90, DFDCP +11.78 points per abstract); (ii) **temporal/identity consistency** — ISTVT (Zhao et al. 2023) uses decomposed spatio-temporal attention, and VideoMAE (Tong et al. 2022) supplies a data-efficient video backbone. For talking-heads specifically, LipForensics (Haliassos et al. 2021, arXiv:2012.07657) exploits mouth-region irregularities for robust, generalisable detection.
+
+## 3. Multimodal (audio-visual) detection
+Because political talking-head fakes manipulate speech and lip-sync, audio-visual cues are central. RealForensics (Haliassos et al. 2022, arXiv:2201.07131) learns cross-modal video representations self-supervised from real talking faces, then uses them as auxiliary targets for robust detection. Emotions Don't Lie (Mittal et al. 2020, arXiv:2003.06711) compares affective cues across modalities; Audio-Visual Person-of-Interest detection (Cozzolino et al. 2023, arXiv:2204.03083) models identity-specific AV behavior; and Lips Are Lying (2024, arXiv:2401.15668) targets audio-visual temporal inconsistency in lip-syncing fakes. These motivate the project's wav2vec 2.0 (Baevski et al. 2020) + VideoMAE cross-attention fusion.
+
+## 4. Explainability (xAI) and its reliability
+The project requires explanations that reflect the true decision. Raw attention is an unreliable explanation (Abnar & Zuidema 2020); relevance propagation is more faithful: LRP (Bach et al. 2015) → transformer relevance (Chefer et al. 2021) → AttnLRP (Achtibat et al. 2024). But explanation *reliability itself* is contested: interpretations are fragile under small perturbations (Ghorbani et al. 2017/2019, arXiv:1710.10547) and some saliency methods fail basic sanity checks (Adebayo et al. 2018, arXiv:1810.03292); faithfulness must be measured, e.g. via (in)fidelity/sensitivity (Yeh et al. 2019, arXiv:1901.09392). For the domain specifically, ExDDV (2025, arXiv:2503.14421) introduces a dataset for *explainable* deepfake detection in video, signalling growing interest in the why, not just the what.
+
+## 5. Adversarial robustness — attacks and defenses
+Detectors are attackable. Beyond the foundational attacks (FGSM, Goodfellow 2015; PGD, Madry 2018; UAP, Moosavi-Dezfooli 2017; C&W, Carlini & Wagner 2017), deepfake-specific work shows adversarial perturbations cut detector accuracy from >95% to <27% (Gandhi & Jain 2020, arXiv:2003.10596), with further evasion via trace removal (Liu et al. 2022, arXiv:2203.11433), metamorphic-testing attacks (2022, arXiv:2204.08612), and robustness audits of AI-generated-image detectors (Fake It Until You Break It, 2024, arXiv:2410.01574). On the defense/interpretability side, certifiably robust interpretation (Wang et al. 2019, arXiv:1905.12105) and simple defenses for heatmap explanations (2020, arXiv:2007.06381) aim to stabilize attributions under attack — directly relevant to hardening *explanations*, not just predictions.
+
+## 6. Synthesis and positioning
+The literature treats four strands — generalizable detection, multimodality, faithful explanation, and adversarial robustness — largely separately. The closest interpretable deepfake detector (ISTVT) is video-only with attention-visualization, not relevance propagation, and without adversarial analysis. Adversarial-vs-explanation interactions are studied on generic classifiers (Ghorbani; Adebayo) but **not** on a multimodal deepfake detector with faithful attribution. This intersection — *does an attack that flips the prediction also move a faithful explanation, and can adversarial training stabilize both?* — is the project's distinctive contribution (see [[research-question-card]] Card A and [[../Knowledge/Research Gaps#G4 — Interaction of adversarial robustness and explanation faithfulness core contribution|Gap G4]]).
+
+## Coverage note
+Foundational sources (16) have full Evidence Records ([[../Knowledge/Claim Map]]). New sources (2026-06-14): imported to the group so far — Celeb-DF, DFDC, DeepfakeBench, Face X-ray, SBI, RealForensics, LipForensics; **pending import (arXiv rate-limit, retry queued):** Emotions Don't Lie, AV-POI, Lips Are Lying, Gandhi & Jain, Interpretation-is-Fragile, Sanity-Checks, ExDDV, trace-removal, metamorphic-attack, Fake-It-Until-You-Break-It, (In)fidelity, certifiably-robust-interpretation, heatmap-defense, robust-detection review. All new-source claims here are abstract-level pending full-text reading.

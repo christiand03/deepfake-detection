@@ -1,34 +1,4 @@
 {
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["@playwright/mcp@latest"]
-    },
-    "memory": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"]
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "c:\\Users\\Debbertin\\Downloads\\Belegarbeit\\deepfake-detection"
-      ]
-    },
-    "sqlite": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sqlite",
-        "c:\\Users\\Debbertin\\Downloads\\Belegarbeit\\deepfake-detection\\data\\results.db"
-      ]
-    },
-    "fetch": {
-      "command": "uvx",
-      "args": ["mcp-server-fetch"]
-    }
-  },
   "hooks": {
     "PostToolUse": [
       {
