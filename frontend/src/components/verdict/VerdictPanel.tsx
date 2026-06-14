@@ -13,7 +13,8 @@ import type { AnalysisResult, ClipMeta } from '../../types/analysis'
 
 interface VerdictPanelProps {
   result: AnalysisResult | null
-  clip: ClipMeta | null
+  /** Reserved for future per-clip metadata display. */
+  clip?: ClipMeta | null
   isScanning: boolean
 }
 
@@ -59,7 +60,7 @@ function Section({
 
 // ── Main component ───────────────────────────────────────────────────────────
 
-export function VerdictPanel({ result, clip: _clip, isScanning }: VerdictPanelProps) {
+export function VerdictPanel({ result, isScanning }: VerdictPanelProps) {
   return (
     <div className="flex flex-col gap-4">
       {/* ── VERDICT GAUGE ──────────────────────────────────────────────── */}
@@ -90,7 +91,41 @@ export function VerdictPanel({ result, clip: _clip, isScanning }: VerdictPanelPr
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
             >
-              {result.audio ? (
+              {result.modelMode === 'multimodal' ? (
+                /* ── Single fused gauge (multimodal) ── */
+                <div>
+                  <div
+                    style={{
+                      textAlign: 'center',
+                      fontSize: 9,
+                      fontFamily: 'monospace',
+                      letterSpacing: '0.18em',
+                      color: '#a855f7',
+                      marginBottom: 4,
+                    }}
+                  >
+                    MULTIMODAL VERDICT
+                  </div>
+                  <VerdictGauge
+                    confidence={result.confidence}
+                    verdict={result.verdict}
+                    isScanning={false}
+                  />
+                  <div
+                    style={{
+                      textAlign: 'center',
+                      fontSize: 9,
+                      fontFamily: 'monospace',
+                      letterSpacing: '0.14em',
+                      color: '#4d5470',
+                      marginTop: 6,
+                    }}
+                  >
+                    FUSION ·{' '}
+                    {result.fusionMode === 'concat' ? 'CONCATENATION' : 'CROSS-ATTENTION'}
+                  </div>
+                </div>
+              ) : result.audio ? (
                 /* ── Side-by-side: visual + audio ── */
                 <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>

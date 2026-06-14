@@ -37,13 +37,22 @@ export async function fetchClips(): Promise<ClipMeta[]> {
 
 export async function analyzeClip(
   clipId: string,
+  opts?: { useMultimodal?: boolean; fusionMode?: 'cross_attention' | 'concat' },
 ): Promise<AnalysisResult> {
-  const res = await fetch(`/api/analyze/${clipId}`, {
+  // Mode is passed as query params (the endpoint reads them, not the body).
+  const params = new URLSearchParams()
+  if (opts?.useMultimodal) {
+    params.set('use_multimodal', 'true')
+    params.set('fusion_mode', opts.fusionMode ?? 'cross_attention')
+  }
+  const query = params.toString()
+  const url = `/api/analyze/${clipId}${query ? `?${query}` : ''}`
+  const res = await fetch(url, {
     method: 'POST',
   })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`POST /api/analyze/${clipId} → ${res.status}: ${text}`)
+    throw new Error(`POST ${url} → ${res.status}: ${text}`)
   }
   return res.json() as Promise<AnalysisResult>
 }

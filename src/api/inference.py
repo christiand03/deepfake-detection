@@ -3,8 +3,10 @@
 Models are loaded lazily on first request from checkpoints specified via
 environment variables::
 
-    VIDEOMAE_CKPT_PATH   path to a VideoMAEModule .ckpt file
-    WAV2VEC2_CKPT_PATH   path to a Wav2Vec2DeepfakeModule .ckpt file
+    VIDEOMAE_CKPT_PATH          path to a VideoMAEModule .ckpt file
+    WAV2VEC2_CKPT_PATH          path to a Wav2Vec2DeepfakeModule .ckpt file
+    MULTIMODAL_CKPT_PATH        path to a cross-attention MultimodalDeepfakeModule .ckpt
+    MULTIMODAL_CONCAT_CKPT_PATH path to a concat-fusion MultimodalDeepfakeModule .ckpt
 
 If a required checkpoint is not set, :class:`ModelNotReadyError` is raised,
 which the router translates to HTTP 503.
@@ -39,6 +41,8 @@ from torchvision import transforms
 from src.utils.vision_constants import IMAGENET_MEAN, IMAGENET_STD
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from src.api.clip_registry import ClipH5Metadata as ClipH5Metadata
     from src.models.multimodal_module import MultimodalDeepfakeModule
     from src.models.VideoMAE_module import VideoMAEModule
@@ -74,11 +78,19 @@ class ModelNotReadyError(RuntimeError):
 
 _video_model: VideoMAEModule | None = None
 _audio_model: Wav2Vec2DeepfakeModule | None = None
-_multimodal_model: MultimodalDeepfakeModule | None = None
+# Multimodal models are cached per fusion mode ("cross_attention" | "concat"),
+# each loaded from its own checkpoint env var (see _MULTIMODAL_CKPT_ENV).
+_multimodal_models: dict[str, MultimodalDeepfakeModule] = {}
 _video_model_lock = threading.Lock()
 _audio_model_lock = threading.Lock()
 _multimodal_model_lock = threading.Lock()
 _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Fusion mode → checkpoint environment variable.
+_MULTIMODAL_CKPT_ENV: dict[str, str] = {
+    "cross_attention": "MULTIMODAL_CKPT_PATH",
+    "concat": "MULTIMODAL_CONCAT_CKPT_PATH",
+}
 
 # Register safe globals once at module import time
 torch.serialization.add_safe_globals([functools.partial, AdamW, ReduceLROnPlateau])
@@ -132,27 +144,53 @@ def get_audio_model() -> Wav2Vec2DeepfakeModule:
     return _audio_model
 
 
-def get_multimodal_model() -> MultimodalDeepfakeModule:
-    """Return the loaded MultimodalDeepfakeModule; load from checkpoint on first call."""
-    global _multimodal_model
-    if _multimodal_model is None:
+def get_multimodal_model(
+    fusion_mode: Literal["cross_attention", "concat"] = "cross_attention",
+) -> MultimodalDeepfakeModule:
+    """Return the loaded MultimodalDeepfakeModule for *fusion_mode*.
+
+    Fusion mode is baked into each trained checkpoint, so cross-attention and
+    concat fusion are distinct checkpoints located via separate env vars
+    (see :data:`_MULTIMODAL_CKPT_ENV`).  Loaded models are cached per mode.
+
+    Raises:
+        ModelNotReadyError: If the checkpoint env var for *fusion_mode* is unset
+                            or the file does not exist.
+    """
+    if fusion_mode not in _MULTIMODAL_CKPT_ENV:
+        raise ValueError(f"Unknown fusion_mode: {fusion_mode!r}")
+
+    if fusion_mode not in _multimodal_models:
         with _multimodal_model_lock:
-            if _multimodal_model is None:  # re-check after acquiring lock
-                ckpt = os.environ.get("MULTIMODAL_CKPT_PATH")
+            if fusion_mode not in _multimodal_models:  # re-check after acquiring lock
+                env_var = _MULTIMODAL_CKPT_ENV[fusion_mode]
+                ckpt = os.environ.get(env_var)
                 if not ckpt:
                     raise ModelNotReadyError(
-                        "MULTIMODAL_CKPT_PATH is not set. Train the multimodal model first, then set this environment variable."
+                        f"{env_var} is not set. Train the {fusion_mode} multimodal model "
+                        "first, then set this environment variable."
                     )
                 if not Path(ckpt).exists():
-                    raise ModelNotReadyError(f"Multimodal checkpoint not found: {ckpt}")
+                    raise ModelNotReadyError(f"Multimodal ({fusion_mode}) checkpoint not found: {ckpt}")
                 from src.models.multimodal_module import MultimodalDeepfakeModule as _MM
 
-                log.info("Loading MultimodalDeepfakeModule from %s …", ckpt)
-                _multimodal_model = _MM.load_from_checkpoint(ckpt, weights_only=False, attn_implementation="eager")
-                _multimodal_model.eval()
-                _multimodal_model = _multimodal_model.to(_device)
-                log.info("MultimodalDeepfakeModule loaded on %s", _device)
-    return _multimodal_model
+                log.info("Loading MultimodalDeepfakeModule (%s) from %s …", fusion_mode, ckpt)
+                model = _MM.load_from_checkpoint(ckpt, weights_only=False, attn_implementation="eager")
+                model.eval()
+                model = model.to(_device)
+                loaded_mode = getattr(model.fusion, "fusion_mode", None)
+                if loaded_mode != fusion_mode:
+                    log.warning(
+                        "Checkpoint %s has fusion_mode=%r but was requested as %r — "
+                        "check the %s env var points at the right checkpoint.",
+                        ckpt,
+                        loaded_mode,
+                        fusion_mode,
+                        env_var,
+                    )
+                _multimodal_models[fusion_mode] = model
+                log.info("MultimodalDeepfakeModule (%s) loaded on %s", fusion_mode, _device)
+    return _multimodal_models[fusion_mode]
 
 
 def models_status() -> dict:
@@ -160,11 +198,16 @@ def models_status() -> dict:
     return {
         "video_model_loaded": _video_model is not None,
         "audio_model_loaded": _audio_model is not None,
-        "multimodal_model_loaded": _multimodal_model is not None,
+        "multimodal_model_loaded": len(_multimodal_models) > 0,
+        "multimodal_modes_loaded": sorted(_multimodal_models.keys()),
         "device": str(_device),
         "videomae_ckpt_configured": bool(os.environ.get("VIDEOMAE_CKPT_PATH")),
         "wav2vec2_ckpt_configured": bool(os.environ.get("WAV2VEC2_CKPT_PATH")),
-        "multimodal_ckpt_configured": bool(os.environ.get("MULTIMODAL_CKPT_PATH")),
+        # Per-fusion-mode checkpoint availability (drives the frontend toggle).
+        "multimodal_cross_attention_configured": bool(os.environ.get(_MULTIMODAL_CKPT_ENV["cross_attention"])),
+        "multimodal_concat_configured": bool(os.environ.get(_MULTIMODAL_CKPT_ENV["concat"])),
+        # Back-compat alias (cross-attention is the default multimodal model).
+        "multimodal_ckpt_configured": bool(os.environ.get(_MULTIMODAL_CKPT_ENV["cross_attention"])),
     }
 
 
@@ -605,7 +648,10 @@ def _compute_heatmaps_chunked(
                 chunk_idx + 1,
                 n_chunks,
             )
-        heatmap_tensor, _ = model.explain(pixel_values=pv)
+        # Explain the FAKE class (1) so the seismic heatmap's sign is consistent
+        # across REAL and FAKE clips (red = fake-supporting). Defaulting to the
+        # predicted class would invert the colours on every REAL clip.
+        heatmap_tensor, _ = model.explain(pixel_values=pv, target_class=1)
         hm = heatmap_tensor.detach().cpu().numpy()[0]  # (16, H, W)
         heatmap_np[chunk_start:chunk_end] = hm[: chunk_end - chunk_start]
         log.debug("Heatmap chunk %d/%d processed.", chunk_idx + 1, n_chunks)
@@ -885,12 +931,20 @@ def _load_audio(clip_path: Path) -> tuple[np.ndarray, int]:
 
 
 def _compute_frequency_bands(waveform_np: np.ndarray, relevance: np.ndarray, sample_rate: int) -> dict:
-    """Aggregate LRP relevance into three perceptually-motivated frequency bands via Butterworth filtering.
+    """Aggregate LRP relevance into three perceptually-motivated frequency bands.
 
-    Each band is isolated with a 5th-order zero-phase Butterworth filter (sosfiltfilt),
-    then dotted with the raw per-sample relevance signal. The dot product captures how
-    much energy was in each frequency band at time steps where the model detected Fake
-    evidence. Each band determines its own sign independently.
+    Each band is isolated with a 5th-order zero-phase Butterworth filter
+    (sosfiltfilt) and its per-sample energy envelope ``filtered**2`` is used to
+    take the **energy-weighted mean of the relevance** within that band:
+    ``sum(energy * relevance) / sum(energy)``.  This answers "while this band
+    is active, how fake-supporting (positive) is the model's attribution?" —
+    an intensity that is independent of how loud the band is.
+
+    A plain dot product of the band-filtered *waveform* with relevance (the
+    previous implementation) is dominated by raw spectral energy: speech energy
+    sits almost entirely in Low + Mid, so High collapsed to ~0 and the split was
+    a near-constant ~0.43 / 0.56 regardless of content.  Dividing by the band's
+    own energy removes that bias.
 
     Bands:
         Low  (0–500 Hz)   — Prosody / fundamental frequency
@@ -908,12 +962,110 @@ def _compute_frequency_bands(waveform_np: np.ndarray, relevance: np.ndarray, sam
     raw_scores: list[float] = []
     for _key, sos in band_defs:
         filtered = sosfiltfilt(sos, waveform_np).astype(np.float32)
-        raw_scores.append(float((filtered * relevance).sum()))
-    # Normalize relative to each other: sum of abs = 1, sign preserved.
+        energy = filtered * filtered  # per-sample band energy envelope
+        weight = float(energy.sum()) + 1e-8
+        # Energy-weighted mean relevance: relevance attribution per unit of
+        # band activity, so a quiet band (e.g. High) is no longer forced to ~0.
+        raw_scores.append(float((energy * relevance).sum()) / weight)
+    # Normalize relative to each other for the comparative bar chart: sum of
+    # abs = 1, sign preserved.
     total = sum(abs(s) for s in raw_scores) + 1e-8
     return {
         key: float(np.clip(score / total, -1.0, 1.0)) for (key, _), score in zip(band_defs, raw_scores, strict=True)
     }
+
+
+def _audio_mean_fake_margin(model: Wav2Vec2DeepfakeModule, waveform_np: np.ndarray) -> float:
+    """Mean fake logit-margin ``logit_fake - logit_real`` over 0.64-s windows.
+
+    Used as the baseline for band-ablation attribution.  The margin is used in
+    preference to the softmax probability because the verdict is often saturated
+    (prob ~1.0): a saturated probability barely moves when a band is removed, so
+    probability deltas collapse to ~0, whereas the unbounded logit margin stays
+    sensitive.
+    """
+    n_windows = len(waveform_np) // AUDIO_SAMPLES_PER_CHUNK
+    if n_windows == 0:
+        windows_np = waveform_np[None, :].copy()
+    else:
+        windows_np = (
+            waveform_np[: n_windows * AUDIO_SAMPLES_PER_CHUNK].reshape(n_windows, AUDIO_SAMPLES_PER_CHUNK).copy()
+        )
+    windows = torch.from_numpy(windows_np)
+    windows = (windows - windows.mean(dim=1, keepdim=True)) / torch.sqrt(windows.var(dim=1, keepdim=True) + 1e-7)
+    margins: list[torch.Tensor] = []
+    with torch.no_grad():
+        for start in range(0, windows.shape[0], _AUDIO_WINDOW_BATCH):
+            batch = windows[start : start + _AUDIO_WINDOW_BATCH].to(_device)
+            logits = model.net(batch).logits  # (B, 2)
+            margins.append(logits[:, 1] - logits[:, 0])
+    return float(torch.cat(margins).mean().item())
+
+
+def _multimodal_mean_fake_margin(
+    model: MultimodalDeepfakeModule,
+    pv_windows: list[torch.Tensor],
+    waveform_np: np.ndarray,
+) -> float:
+    """Mean fused fake logit-margin over (video window, audio window) pairs.
+
+    Each video window in *pv_windows* is re-paired with the time-aligned audio
+    window sliced from *waveform_np*, so band-ablation attribution reflects the
+    multimodal fusion model that actually produces the verdict.  Returns the
+    logit margin (not softmax probability) so it stays sensitive when the fused
+    verdict is saturated near certainty.
+    """
+    margins: list[float] = []
+    with torch.no_grad():
+        for window_idx, pv in enumerate(pv_windows):
+            iv = _audio_window_tensor(waveform_np, window_idx)  # (1, 10240)
+            logits = model(pixel_values=pv, input_values=iv)  # (1, 2)
+            margins.append((logits[0, 1] - logits[0, 0]).item())
+    return float(np.mean(margins)) if margins else 0.0
+
+
+def _band_confidence(
+    waveform_np: np.ndarray,
+    sample_rate: int,
+    margin_fn: Callable[[np.ndarray], float],
+) -> dict:
+    """Signed per-band contribution to the FAKE decision via band ablation.
+
+    For each band, the band is removed from the waveform with a zero-phase
+    Butterworth filter and the model is re-scored via *margin_fn* (a fake
+    measure: higher = more fake).  ``score = base - ablated``:
+
+      * positive → removing the band lowered the fake measure → the band
+        carried **fake-supporting** evidence (red),
+      * negative → removing it raised the fake measure → the band pulled toward
+        **real** (blue).
+
+    Unlike the relevance-energy metric, the sign is grounded in the model's
+    actual decision and is therefore directionally reliable.  Scores are
+    normalised by the strongest band's magnitude for the comparative bar chart;
+    the sign is preserved.
+
+    Bands:
+        Low  (0–500 Hz)   — Prosody / fundamental frequency
+        Mid  (500–4 kHz)  — Formants / vowels
+        High (4–8 kHz)    — Fricatives / vocoder artefacts
+    """
+    from scipy.signal import butter, sosfiltfilt  # lazy import — scipy optional
+
+    nyq = sample_rate / 2.0
+    # Each filter REMOVES the named band (low→highpass, mid→bandstop, high→lowpass).
+    removers = [
+        ("low", butter(5, 500.0 / nyq, btype="high", output="sos")),
+        ("mid", butter(5, [500.0 / nyq, 4000.0 / nyq], btype="bandstop", output="sos")),
+        ("high", butter(5, 4000.0 / nyq, btype="low", output="sos")),
+    ]
+    base = margin_fn(waveform_np)
+    raw: dict[str, float] = {}
+    for key, sos in removers:
+        ablated = sosfiltfilt(sos, waveform_np).astype(np.float32)
+        raw[key] = base - margin_fn(ablated)
+    maxabs = max((abs(v) for v in raw.values()), default=0.0) + 1e-8
+    return {key: float(np.clip(v / maxabs, -1.0, 1.0)) for key, v in raw.items()}
 
 
 def _compute_word_segments(
@@ -1034,9 +1186,13 @@ def run_audio_inference(clip_path: Path) -> dict | None:
 
     model.eval()
     try:
+        # Always explain the FAKE class (1) so positive relevance consistently
+        # means "fake-supporting" — the fixed sign convention the frontend
+        # assumes (seismic colormap, L1–L3, heatmap overlay).  Explaining the
+        # predicted class instead inverts the sign on every REAL clip.
         relevance_tensor, _ = model.explain(
             input_values=waveform_tensor,
-            target_class=1 if fake_prob > 0.5 else 0,
+            target_class=1,
         )
         relevance = relevance_tensor.detach().cpu().squeeze(0).numpy()
         import transformers.models.wav2vec2.modeling_wav2vec2 as _w2v_mod
@@ -1055,7 +1211,9 @@ def run_audio_inference(clip_path: Path) -> dict | None:
     relevance_norm = relevance.tolist()  # normalize_relevance() already called inside explain()
     amplitude = waveform_np.tolist()
 
-    frequency_bands = _compute_frequency_bands(waveform_np, relevance, sample_rate)
+    # Frequency-band evidence via band ablation (signed by the model's decision),
+    # not relevance-energy — the latter's sign is not a reliable fake/real cue.
+    frequency_bands = _band_confidence(waveform_np, sample_rate, lambda w: _audio_mean_fake_margin(model, w))
     cache_dir = Path(__file__).parents[2] / ".whisperx_cache"
     word_segments = _compute_word_segments(waveform_np, sample_rate, relevance, cache_dir)
 
@@ -1070,6 +1228,160 @@ def run_audio_inference(clip_path: Path) -> dict | None:
         "sampleRate": sample_rate,
         "wordSegments": word_segments,
         "frequencyBands": frequency_bands,
+    }
+
+
+# ── Multimodal inference ──────────────────────────────────────────────────────
+
+
+def _audio_window_tensor(waveform_np: np.ndarray, window_idx: int) -> torch.Tensor:
+    """Return the z-score-normalised audio window aligned to video window *window_idx*.
+
+    Video window ``w`` (frames ``[w*16, (w+1)*16)`` at 25 fps) aligns to audio
+    samples ``[w*10240, (w+1)*10240)``.  Short/empty slices (clip end or missing
+    audio) are right-padded with zeros to the fixed training window length.
+    """
+    start = window_idx * AUDIO_SAMPLES_PER_CHUNK
+    window = waveform_np[start : start + AUDIO_SAMPLES_PER_CHUNK]
+    if len(window) < AUDIO_SAMPLES_PER_CHUNK:
+        window = np.pad(window, (0, AUDIO_SAMPLES_PER_CHUNK - len(window)))
+    tensor = torch.from_numpy(window.copy()).unsqueeze(0).to(_device)  # (1, 10240)
+    return (tensor - tensor.mean()) / (tensor.std() + 1e-7)
+
+
+def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attention") -> dict:
+    """Run multimodal deepfake detection with joint AttnLRP xAI.
+
+    Pairs each 16-frame video window with its time-aligned 10240-sample audio
+    window and runs ``MultimodalDeepfakeModule`` (cross-attention or concat
+    fusion).  The fused fake probability is max-pooled over windows (same
+    aggregation as the unimodal paths); per-frame video heatmaps and a stitched
+    full-clip audio-relevance timeline come from a single shared backward pass
+    per window so cross-modal attention gradients are preserved.
+
+    Returns a dict shaped like :func:`run_video_inference` (``verdict``,
+    ``confidence``, ``perFrameScores``, ``heatmapFrames``, ``anomalyRegions``,
+    ``cropBox``) plus an ``audio`` sub-dict shaped like
+    :func:`run_audio_inference`.  The fused verdict drives the single multimodal
+    gauge; the ``audio`` block mirrors it.
+
+    Raises:
+        ModelNotReadyError: If the multimodal checkpoint for *fusion_mode* is
+                            not configured.
+        RuntimeError:       If no face is detectable or audio cannot be loaded
+                            (multimodal requires both modalities).
+    """
+    model = get_multimodal_model(fusion_mode)  # type: ignore[arg-type]
+
+    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is None:
+        raise RuntimeError(
+            f"No face detected in {clip_path.name}; multimodal analysis requires a "
+            "face crop. Use unimodal mode for face-less clips."
+        )
+
+    try:
+        waveform_np, sample_rate = _load_audio(prepared.video_path)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"Audio extraction failed for {clip_path.name}; multimodal analysis requires an audio track."
+        ) from exc
+
+    cx1, cy1, cx2, cy2 = prepared.crop_box
+    all_frames = _load_all_frames_cropped(prepared.video_path, cx1, cy1, cx2, cy2)
+    n_frames = all_frames.shape[0]
+
+    heatmap_np = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    audio_relevance_full = np.zeros(len(waveform_np), dtype=np.float32)
+    fused_fake_prob = 0.0
+    # Per-window video tensors, reused by the band-ablation pass so it pairs each
+    # band-stopped audio window with the same video the verdict saw.
+    pv_windows: list[torch.Tensor] = []
+
+    for window_idx, frame_start in enumerate(range(0, n_frames, NUM_FRAMES)):
+        frame_end = min(frame_start + NUM_FRAMES, n_frames)
+        chunk = all_frames[frame_start:frame_end]  # (k, C, H, W)
+        if chunk.shape[0] < NUM_FRAMES:
+            # Pad the last (partial) window by repeating the final frame.
+            pad = chunk[-1:].expand(NUM_FRAMES - chunk.shape[0], -1, -1, -1)
+            chunk = torch.cat([chunk, pad], dim=0)
+        pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
+        pv_windows.append(pv)
+        iv = _audio_window_tensor(waveform_np, window_idx)  # (1, 10240)
+
+        # Fused verdict contribution (max-pool over windows).
+        with torch.no_grad():
+            logits = model(pixel_values=pv, input_values=iv)  # (1, 2)
+        fused_fake_prob = max(fused_fake_prob, torch.softmax(logits, dim=-1)[0, 1].item())
+
+        # Joint AttnLRP — single shared backward pass over both modalities.
+        # Explain the FAKE class (1) for a sign convention consistent with the
+        # unimodal paths (positive = fake-supporting), regardless of verdict.
+        try:
+            video_hm, audio_rel, _ = model.explain(pixel_values=pv, input_values=iv, target_class=1)
+            hm = video_hm.detach().cpu().numpy()[0]  # (16, H, W)
+            heatmap_np[frame_start:frame_end] = hm[: frame_end - frame_start]
+            rel = audio_rel.detach().cpu().numpy()[0]  # (10240,)
+        except Exception:  # noqa: BLE001
+            log.exception("Multimodal AttnLRP failed for window %d of %s", window_idx, clip_path.name)
+            rel = np.zeros(AUDIO_SAMPLES_PER_CHUNK, dtype=np.float32)
+
+        # Stitch the window's audio relevance into the full-clip timeline.
+        a_start = window_idx * AUDIO_SAMPLES_PER_CHUNK
+        a_end = min(a_start + AUDIO_SAMPLES_PER_CHUNK, len(audio_relevance_full))
+        if a_end > a_start:
+            audio_relevance_full[a_start:a_end] = rel[: a_end - a_start]
+
+    verdict: Literal["FAKE", "REAL"] = "FAKE" if fused_fake_prob > 0.5 else "REAL"
+    confidence = fused_fake_prob if verdict == "FAKE" else 1.0 - fused_fake_prob
+
+    # ── Video panel: per-frame scores + upprojected heatmaps + anomaly regions ──
+    per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
+    heatmap_frames: list[str] = []
+    for i in range(n_frames):
+        full_frame = _upproject_heatmap(heatmap_np[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        alpha_mask = np.abs(full_frame) > 1e-6
+        heatmap_frames.append(_array_to_data_uri(full_frame, alpha_mask=alpha_mask))
+    anomaly_regions = _extract_anomaly_regions(heatmap_np)
+
+    # ── Audio panel: relevance timeline + frequency bands + word segments ───────
+    # Band evidence via ablation on THE FUSION MODEL itself (signed, decision-
+    # grounded): each band-stopped audio window is re-paired with the same video
+    # the verdict saw, so L3 reflects the multimodal model that gives the verdict
+    # — consistent with the heatmap and L1/L2 relevance above.
+    frequency_bands = _band_confidence(
+        waveform_np,
+        sample_rate,
+        lambda w: _multimodal_mean_fake_margin(model, pv_windows, w),
+    )
+    cache_dir = Path(__file__).parents[2] / ".whisperx_cache"
+    word_segments = _compute_word_segments(waveform_np, sample_rate, audio_relevance_full, cache_dir)
+
+    audio_block = {
+        "verdict": verdict,
+        "confidence": confidence,
+        "waveformRelevance": audio_relevance_full.tolist(),
+        "waveformAmplitude": waveform_np.tolist(),
+        "sampleRate": sample_rate,
+        "wordSegments": word_segments,
+        "frequencyBands": frequency_bands,
+    }
+
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "perFrameScores": per_frame_scores,
+        "heatmapFrames": heatmap_frames,
+        "anomalyRegions": anomaly_regions,
+        "cropBox": {
+            "x1": cx1,
+            "y1": cy1,
+            "x2": cx2,
+            "y2": cy2,
+            "origW": prepared.orig_w,
+            "origH": prepared.orig_h,
+        },
+        "audio": audio_block,
     }
 
 

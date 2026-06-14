@@ -73,6 +73,7 @@ desktop.ini
 /data
 .whisperx_cache/
 docs/kapitel/
+.playwright-mcp/
 
 # ============================================================
 # Ausnahmen (Exceptions)

@@ -15,7 +15,7 @@ import { useAnalysis } from '../../hooks/useAnalysis'
 import { useVideoSync } from '../../hooks/useVideoSync'
 import { fetchClips } from '../../api/client'
 import { useErrorToast } from '../../context/ErrorToastContext'
-import type { AnalysisResult, ClipMeta } from '../../types/analysis'
+import type { AnalysisResult, ClipMeta, FusionMode, ModelMode } from '../../types/analysis'
 
 interface VideoPanelProps {
   videoRef: React.RefObject<HTMLVideoElement | null>
@@ -33,6 +33,8 @@ export function VideoPanel({
   const [clips, setClips] = useState<ClipMeta[]>([])
   const [selectedId, setSelectedId] = useState<string>('')
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.55)
+  const [modelMode, setModelMode] = useState<ModelMode>('unimodal')
+  const [fusionMode, setFusionMode] = useState<FusionMode>('cross_attention')
 
   const { state, analyze, reset } = useAnalysis()
   const { showError } = useErrorToast()
@@ -80,13 +82,32 @@ export function VideoPanel({
     if (selectedClip) onClipChange?.(selectedClip)
   }, [selectedClip, onClipChange])
 
+  // Multimodal requires an audio track; force unimodal for audio-less clips.
+  const multimodalDisabled = !selectedClip?.hasAudio
+
   function handleSelect(id: string) {
     setSelectedId(id)
+    reset()
+    // A clip without audio can't run multimodal — fall back to unimodal.
+    if (!clips.find(c => c.id === id)?.hasAudio) setModelMode('unimodal')
+  }
+
+  function handleModelModeChange(mode: ModelMode) {
+    setModelMode(mode)
+    reset() // stale result no longer matches the selected mode
+  }
+
+  function handleFusionModeChange(mode: FusionMode) {
+    setFusionMode(mode)
     reset()
   }
 
   function handleAnalyze() {
-    if (selectedId) analyze(selectedId)
+    if (!selectedId) return
+    analyze(selectedId, {
+      useMultimodal: modelMode === 'multimodal' && !multimodalDisabled,
+      fusionMode,
+    })
   }
 
   if (!selectedClip) return null
@@ -123,6 +144,11 @@ export function VideoPanel({
         isDone={isDone}
         heatmapOpacity={heatmapOpacity}
         onOpacityChange={setHeatmapOpacity}
+        modelMode={modelMode}
+        onModelModeChange={handleModelModeChange}
+        fusionMode={fusionMode}
+        onFusionModeChange={handleFusionModeChange}
+        multimodalDisabled={multimodalDisabled}
       />
 
       {state.status === 'error' && (

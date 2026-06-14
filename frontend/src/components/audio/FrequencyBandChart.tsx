@@ -1,9 +1,12 @@
 /**
  * FrequencyBandChart — Layer 3 of the audio xAI stack.
  *
- * Three horizontal bars showing AttnLRP relevance aggregated per frequency
- * band. Positive values indicate fake-supporting evidence (red), negative
- * values indicate real-supporting evidence (blue).
+ * Three horizontal bars showing each band's contribution to the model's FAKE
+ * decision, measured by band ablation (removing the band and re-scoring).
+ * Positive = removing the band lowers the fake score, i.e. the band carried
+ * fake-supporting evidence (red); negative = it pulled toward real (blue).
+ * The magnitude reflects how much the decision depends on that band, not its
+ * raw energy. Values are normalised by the strongest band.
  *
  * Bands:
  *   Low   0–500 Hz    — Prosody / fundamental frequency

@@ -111,6 +111,9 @@ class AnalysisResultSchema(BaseModel):
     phase3: Phase3ResultSchema | None = None
     phase4: Phase4ResultSchema | None = None
     cropBox: CropBoxSchema | None = None
+    # Which model produced this result. ``fusionMode`` is set only for multimodal.
+    modelMode: Literal["unimodal", "multimodal"] = "unimodal"
+    fusionMode: Literal["cross_attention", "concat"] | None = None
 
 
 # ── Request bodies ────────────────────────────────────────────────────────────
