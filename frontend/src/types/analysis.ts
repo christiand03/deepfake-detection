@@ -106,7 +106,14 @@ export interface AnalysisResult {
   cropBox: CropBox | null
   phase3: Phase3Result | null
   phase4: Phase4Result | null
+  /** Which model produced this result. Defaults to 'unimodal' when absent. */
+  modelMode?: 'unimodal' | 'multimodal'
+  /** Active fusion mode — only meaningful when modelMode === 'multimodal'. */
+  fusionMode?: 'cross_attention' | 'concat' | null
 }
+
+export type FusionMode = 'cross_attention' | 'concat'
+export type ModelMode = 'unimodal' | 'multimodal'
 
 export type AnalysisState =
   | { status: 'idle' }

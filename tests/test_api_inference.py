@@ -13,10 +13,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import torch
 
+import src.api.inference as inf
 from src.api.inference import (
     AUDIO_SAMPLES_PER_CHUNK,
     NUM_FRAMES,
     _chunked_fake_prob,
+    _compute_frequency_bands,
     _ensure_target_fps,
     _normalize_uint8_frames,
     _prepare_uploaded_video,
@@ -238,3 +240,116 @@ def test_windowed_audio_short_clip_uses_whole_waveform():
     expected = torch.softmax(torch.tensor([0.0, 1.0]), dim=-1)[1].item()
     assert abs(fake_prob - expected) < 1e-6
     assert model.calls == [(1, 5000)]  # single whole-waveform pass
+
+
+# ── _compute_frequency_bands ──────────────────────────────────────────────────
+
+
+def _tone(freq: float, sr: int, n: int) -> np.ndarray:
+    t = np.arange(n, dtype=np.float32) / sr
+    return np.sin(2 * np.pi * freq * t).astype(np.float32)
+
+
+def test_frequency_bands_localize_relevance_to_active_band():
+    sr = 16_000
+    half = sr // 2
+    # First half: low (200 Hz) tone with +1 relevance.
+    # Second half: high (6 kHz) tone with -1 relevance.
+    waveform = np.concatenate([_tone(200, sr, half), _tone(6000, sr, half)])
+    relevance = np.concatenate([np.ones(half, np.float32), -np.ones(half, np.float32)])
+
+    bands = _compute_frequency_bands(waveform, relevance, sr)
+
+    # The Low band is energetic only while relevance is +1 → positive score;
+    # the High band only while relevance is -1 → negative score.  The old
+    # waveform-dot implementation could not separate the two like this.
+    assert bands["low"] > 0
+    assert bands["high"] < 0
+
+
+def test_frequency_bands_high_band_not_collapsed_to_zero():
+    sr = 16_000
+    n = sr
+    # Pure high-frequency tone with uniformly fake-supporting (+1) relevance.
+    waveform = _tone(6000, sr, n)
+    relevance = np.ones(n, dtype=np.float32)
+
+    bands = _compute_frequency_bands(waveform, relevance, sr)
+
+    # The previous energy-dot implementation pinned High to ~0 regardless of
+    # relevance (speech/tone energy normalisation); the energy-weighted mean
+    # must instead reflect the genuinely active high band.
+    assert bands["high"] > 0.2
+    assert abs(bands["high"]) >= abs(bands["mid"])
+
+
+# ── run_audio_inference: sign convention ──────────────────────────────────────
+
+
+def test_run_audio_inference_always_explains_fake_class(monkeypatch):
+    """Relevance must be explained w.r.t. the FAKE class even for a REAL verdict.
+
+    The frontend's sign convention is fixed (positive = fake-supporting), so
+    explaining the *predicted* class would invert L1–L3 on every REAL clip.
+    """
+    waveform = np.zeros(AUDIO_SAMPLES_PER_CHUNK, dtype=np.float32)
+    captured: dict[str, int | None] = {}
+
+    class _Stub:
+        def eval(self):
+            return self
+
+        def net(self, x):  # used by _audio_mean_fake_prob for band ablation
+            out = MagicMock()
+            out.logits = torch.zeros(x.shape[0], 2)
+            return out
+
+        def explain(self, input_values, target_class=None):
+            captured["target_class"] = target_class
+            return torch.zeros(1, input_values.shape[1]), torch.tensor([1])
+
+    monkeypatch.setattr(inf, "_load_audio", lambda _p: (waveform, 16_000))
+    monkeypatch.setattr(inf, "get_audio_model", lambda: _Stub())
+    monkeypatch.setattr(inf, "_windowed_audio_fake_prob", lambda _m, _w: 0.1)  # REAL
+    monkeypatch.setattr(inf, "_compute_word_segments", lambda *a, **k: [])
+
+    result = inf.run_audio_inference(Path("dummy.mp4"))
+
+    assert result is not None
+    assert result["verdict"] == "REAL"
+    assert captured["target_class"] == 1
+
+
+# ── _band_confidence (ablation) ───────────────────────────────────────────────
+
+
+def test_band_confidence_signs_by_decision_impact():
+    sr = 16_000
+    waveform = _tone(200, sr, sr) + _tone(6000, sr, sr)  # low + high content
+
+    # margin_fn: fake score drops sharply when the LOW band is removed (so Low
+    # carries fake evidence → positive) and rises when HIGH is removed (so High
+    # pulls toward real → negative).  Detect which band a variant has lost by
+    # comparing its energy to the original.
+    from scipy.signal import butter, sosfiltfilt
+
+    nyq = sr / 2.0
+    low_sos = butter(5, 500.0 / nyq, btype="low", output="sos")
+    high_sos = butter(5, 4000.0 / nyq, btype="high", output="sos")
+    base_low_e = float((sosfiltfilt(low_sos, waveform) ** 2).sum())
+    base_high_e = float((sosfiltfilt(high_sos, waveform) ** 2).sum())
+
+    def margin_fn(w: np.ndarray) -> float:
+        low_e = float((sosfiltfilt(low_sos, w) ** 2).sum())
+        high_e = float((sosfiltfilt(high_sos, w) ** 2).sum())
+        score = 0.5
+        if low_e < 0.5 * base_low_e:  # low band was removed
+            score -= 0.4
+        if high_e < 0.5 * base_high_e:  # high band was removed
+            score += 0.4
+        return score
+
+    bands = inf._band_confidence(waveform.astype(np.float32), sr, margin_fn)
+
+    assert bands["low"] > 0  # removing low lowered fake score → fake-supporting
+    assert bands["high"] < 0  # removing high raised fake score → real-supporting
