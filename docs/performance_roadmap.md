@@ -232,15 +232,73 @@ für Video/Multimodal auf 4 gesetzt (Audio bleibt 2). Nur noch **neu messen, wen
 sich Hardware oder Daten ändern** (anderes RAM-Budget, geänderte Sample-Größe,
 mehr `num_workers`); Mess-Befehl in `docs/commands.md` §4.2.
 
-### 2.2 HDF5-Repack gzip→lzf
+### 2.2 HDF5-Repack gzip→lzf — Tooling vorhanden, Messung offen
 
 gzip-4-Dekompression der 2,4-MB-Video-Samples ist der größte Per-Item-CPU-Posten
 neben der Augmentation. Die §1.9-Messung bestätigt den I/O-Bottleneck (Data-Wait
 > Compute bei `prefetch_factor=2`); `prefetch_factor=4` hat ihn auf ~ausgeglichen
-gebracht. lzf wäre der **nächste** Hebel, falls noch mehr Durchsatz nötig ist:
-`h5repack` auf den bestehenden Dateien (keine Neuverarbeitung nötig): ~2-3×
-schnellere Reads, ~30-50 % größere Dateien. Senkt die reine Decode-Zeit pro
-Sample (komplementär zu prefetch, das nur die Latenz puffert).
+gebracht. lzf ist der **nächste** Hebel, falls noch mehr Durchsatz nötig ist:
+~2-3× schnellere Reads bei ~30-50 % größeren Dateien — senkt die reine
+Decode-Zeit pro Sample (komplementär zu prefetch, das nur die Latenz puffert).
+Keine Neuverarbeitung nötig (verlustfrei, nur der Kompressionsfilter ändert sich).
+
+**Tooling (umgesetzt 2026-06-15):** Da das `h5repack`-CLI auf dieser Box nicht
+installiert ist (der LZF-Filter in `h5py` aber schon), läuft der Repack rein über
+`h5py`:
+
+- `scripts/repack_lzf.py` — streamt blockweise (RAM-beschränkt, auch für die
+  207-GB-`train.h5`), erhält dtype/shape/`maxshape`/Chunking, repackt alle
+  Datasets (video, audio, labels), **verifiziert** danach (Shapes, dtypes,
+  16 Stichproben byte-identisch). Nicht-destruktiv: schreibt `<split>.lzf.h5`,
+  fasst das Original nicht an.
+- `scripts/bench_h5_read.py` — A/B-Lesebenchmark (gleiche Zufallsindizes auf
+  gzip- vs. lzf-Datei, spiegelt `DeepfakeHDF5Dataset.__getitem__`), gibt
+  ms/Sample und Speedup aus. So lässt sich der Gewinn **vor** dem 207-GB-Repack
+  beziffern.
+
+**Workflow & Mess-Befehl (zuerst `val`, klein):**
+
+```bash
+python -m scripts.repack_lzf  --input data/processed/val.h5 --output data/processed/val.lzf.h5
+python -m scripts.bench_h5_read --gzip data/processed/val.h5 --lzf data/processed/val.lzf.h5 --n 1024 --normalize
+```
+
+Adoption ohne Code-Änderung (Loader liest `data/processed/<split>.h5` nach
+Dateiname): nach Verifikation `val.h5` → `val.gzip.h5` (Backup) und
+`val.lzf.h5` → `val.h5` umbenennen.
+
+**Messung (`val.h5`, 9477 Chunks, RTX-3060-Ti-Box, 2026-06-15):**
+
+| Messung | gzip | lzf | Δ |
+|---|---|---|---|
+| Dateigröße | 13,98 GB | 17,77 GB | **1,27×** (größer) |
+| Read **decode-only** (`bench_h5_read`, Median ms/Sample) | 12,95 | 7,07 | **1,83×** schneller |
+| Read **mit `--normalize`** (Median ms/Sample) | 41,16 | 37,85 | **1,09×** schneller |
+
+**Interpretation — kleiner als gehofft, und warum:** LZF halbiert die reine
+Dekodierzeit (1,83×, −45 %), aber die Dekodierung ist nur ~⅓ der Per-Item-Arbeit.
+Den Rest (~28 ms/Sample) macht die ImageNet-Normalisierung in
+`normalize_video_frames` aus — identisch für gzip und lzf. End-to-end pro Item
+bleibt deshalb nur **1,09×** (+8 %). Im echten Training wird dieser Gewinn
+**weiter** durch die §1.9-Balance gedeckelt: `prefetch_factor=4` hat Data-Wait
+(~0,35 s) bereits ~auf Compute (~0,29 s) gebracht. Decode zu halbieren drückt
+Data-Wait unter Compute → der Pfad wird GPU-gebunden, und der Wall-Clock-Gewinn
+pro Step geht gegen den (kleinen) Betrag, um den Data-Wait Compute noch übersteigt.
+
+**Entscheidung: `train.h5` (207 GB → ~263 GB, ~2-3 h Repack, danach nur ~117 GB
+frei) lohnt aktuell NICHT** — ~8 % Per-Item, im Training auf wenige Prozent
+gedeckelt, für hohen Platz-/Zeitaufwand. Tooling bleibt für den Fall, dass die
+Normalisierung von der kritischen Pfad-Achse wandert (z. B. Normalize GPU-seitig,
+dann dominiert Decode wieder und 1,83× schlägt voll durch). `val.lzf.h5` ist
+erzeugt und verifiziert; Adoption per Umbenennen (s. o.), wenn gewünscht.
+
+> **Platz-Warnung:** D: hatte ~380 GB frei (Stand 2026-06-15). `val`/`test`
+> (14/22 GB) repacken bequem; eine LZF-`train.h5` lässt nur ~117 GB frei.
+
+**Nächster, größerer Hebel statt LZF:** Da die Normalisierung (nicht Decode) der
+Per-Item-Engpass ist, wäre GPU-seitiges Normalisieren (uint8-Chunk roh in den
+Worker, `/255` + ImageNet-z-Score auf der GPU im `forward`) der wirksamere
+Schritt — entlastet die CPU-Worker um ~28 ms/Sample. Separat zu evaluieren.
 
 ---
 
