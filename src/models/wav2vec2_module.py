@@ -22,17 +22,25 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         scheduler: Any = None,
         freeze_feature_extractor: bool = True,
         freeze_backbone: bool = True,
+        gradient_checkpointing: bool = True,
         attn_implementation: str = "eager",
         # Any (not list[float]) because Hydra passes an OmegaConf ListConfig.
         class_weights: Any = None,
         label_smoothing: float = 0.0,
+        mixup_alpha: float = 0.0,
         llrd_decay: float | None = None,
         peft_mode: str = "none",
         lora_r: int = 8,
         lora_alpha: int = 16,
         lora_dropout: float = 0.05,
+        adv_train: bool = False,
+        adv_epsilon: float = 0.03,
+        adv_steps: int = 7,
     ) -> None:
         super().__init__()
+
+        if adv_train and adv_steps < 1:
+            raise ValueError(f"adv_steps must be >= 1 when adv_train is True, got {adv_steps}.")
 
         # Plain list so checkpoints stay loadable with weights_only=True.
         class_weights = self._plain_class_weights(class_weights)
@@ -44,6 +52,15 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         self.net = Wav2Vec2ForSequenceClassification.from_pretrained(
             model_name_or_path, num_labels=2, attn_implementation=self.hparams.attn_implementation
         )
+
+        # Gradient checkpointing trades step time for a large drop in activation
+        # memory — required to fit Phase 2 transformer fine-tuning on small GPUs.
+        # HF only applies it when self.training is True, so the eval-mode
+        # explain() / AttnLRP path is unaffected. Enabled BEFORE _wrap_lora so the
+        # base-class LoRA probe can disable it for the require-grads hook (Wav2Vec2
+        # has no input embeddings — see _wrap_lora in base_module).
+        if self.hparams.gradient_checkpointing:
+            self.net.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
         # Phase 1 (default): freeze the whole Wav2Vec2 backbone, train only the
         # projector + classifier head. Cold full fine-tuning of the encoder does
@@ -105,9 +122,62 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
 
         return loss, preds, y, logits
 
+    def _pgd_perturb(self, input_values: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Generate untargeted PGD adversarial waveforms for *input_values*.
+
+        Runs the attack with the backbone in eval mode (fixed dropout) and
+        restores the previous mode afterwards.  Returns a detached tensor.
+        """
+        from src.utils.adversarial import untargeted_pgd
+
+        step_size = self.hparams.adv_epsilon / self.hparams.adv_steps * 2.5
+        # Toggle via the module (self), not self.net, so the BaseDeepfakeModule
+        # train() override re-applies the frozen-backbone eval invariant on restore.
+        was_training = self.training
+        self.eval()
+        try:
+            (adv,) = untargeted_pgd(
+                forward_fn=lambda iv: self.forward(iv),
+                inputs=(input_values,),
+                labels=labels,
+                epsilons=(self.hparams.adv_epsilon,),
+                steps=self.hparams.adv_steps,
+                step_sizes=(step_size,),
+            )
+        finally:
+            self.train(was_training)
+        return adv
+
+    def _adversarial_mix(self, batch: Any) -> dict[str, torch.Tensor]:
+        """Replace the first half of the batch with PGD-adversarial waveforms (1:1 mix).
+
+        Batch-splitting keeps per-step VRAM identical to clean training (a single
+        combined forward pass); see docs/model.md for the rationale.
+        """
+        from src.utils.adversarial import num_adversarial_samples
+
+        input_values = batch["input_values"]
+        labels = batch["labels"]
+        n_adv = num_adversarial_samples(input_values.shape[0])
+        if n_adv == 0:
+            return batch
+
+        adv = self._pgd_perturb(input_values[:n_adv], labels[:n_adv])
+        mixed = input_values.clone()
+        mixed[:n_adv] = adv
+        return {"input_values": mixed, "labels": labels}
+
     @beartype
     def training_step(self, batch: Any, batch_idx: int) -> Float[torch.Tensor, ""]:
-        loss, preds, targets, _ = self.model_step(batch)
+        step = None
+        if self.hparams.adv_train:
+            # Mixup is skipped on adversarial batches to keep PGD semantics clean.
+            batch = self._adversarial_mix(batch)
+        else:
+            step = self._mixup_training_loss(batch, ("input_values",), lambda b: self.forward(b["input_values"]))
+        if step is None:
+            step = self.model_step(batch)
+        loss, preds, targets, _ = step
 
         # Metriken updaten
         self.train_loss(loss)

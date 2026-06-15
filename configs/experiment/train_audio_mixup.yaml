@@ -1,0 +1,27 @@
+# @package _global_
+
+# Ablation — Regularisierungs-Rezept (Phase 1): Mixup + Label Smoothing,
+# kombiniert mit Balanced Sampling (statt CE-Gewichten, s. train_audio_balanced).
+# Mixup überlagert hier zwei Waveforms im Batch (Beta(0.2, 0.2)); Label
+# Smoothing 0.1 verhindert überkonfidente Head-Logits. Gegenstück zu
+# train_video_mixup / train_multimodal_mixup für die symmetrische Modalitäts-Ablation.
+# Vergleichsmetrik: val/auc_video gegen train_audio und train_audio_balanced.
+# Run/Launch: experiment=train_audio_mixup
+
+defaults:
+  - override /data: deepfake_audio
+  - override /model: wav2vec2
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: wav2vec2_mixup
+
+data:
+  balanced_sampling: true
+
+model:
+  class_weights: null  # Sampler korrigiert die Imbalance bereits — nicht doppelt!
+  label_smoothing: 0.1
+  mixup_alpha: 0.2
+
+tags: ["wav2vec2", "audio", "ablation", "mixup", "label-smoothing"]

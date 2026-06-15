@@ -116,6 +116,13 @@ def test_multimodal_rejects_zero_adv_steps():
         MultimodalDeepfakeModule(optimizer=None, adv_train=True, adv_steps=0)
 
 
+def test_wav2vec2_rejects_zero_adv_steps():
+    from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule
+
+    with pytest.raises(ValueError, match="adv_steps must be >= 1"):
+        Wav2Vec2DeepfakeModule(adv_train=True, adv_steps=0)
+
+
 # ── Real-module smoke test (builds VideoMAE — needs network) ─────────────────────
 
 
@@ -144,3 +151,51 @@ def test_videomae_adversarial_mix_perturbs_half():
     assert delta.max().item() > 0.0  # actually perturbed
     # The clean half is left untouched.
     assert torch.allclose(mixed["pixel_values"][n_adv:], pixel_values[n_adv:])
+
+
+@pytest.mark.slow
+def test_wav2vec2_adversarial_mix_perturbs_half():
+    from functools import partial
+
+    from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule
+
+    model = Wav2Vec2DeepfakeModule(
+        optimizer=partial(torch.optim.AdamW, lr=5e-4),
+        adv_train=True,
+        adv_epsilon=0.03,
+        adv_steps=2,
+    )
+    model.eval()
+
+    batch_size = 4
+    input_values = torch.randn(batch_size, 16000)  # 1 s @ 16 kHz
+    labels = torch.tensor([0, 1, 0, 1])
+    mixed = model._adversarial_mix({"input_values": input_values, "labels": labels})
+
+    n_adv = batch_size // 2
+    delta = (mixed["input_values"][:n_adv] - input_values[:n_adv]).abs()
+    assert delta.max().item() <= 0.03 + 1e-5  # within the ε-ball
+    assert delta.max().item() > 0.0  # actually perturbed
+    # The clean half is left untouched.
+    assert torch.allclose(mixed["input_values"][n_adv:], input_values[n_adv:])
+
+
+@pytest.mark.slow
+def test_wav2vec2_mixup_produces_finite_loss():
+    """mixup_alpha>0 mixes the waveform batch and returns a finite mixed CE loss."""
+    from functools import partial
+
+    from src.models.wav2vec2_module import Wav2Vec2DeepfakeModule
+
+    model = Wav2Vec2DeepfakeModule(
+        optimizer=partial(torch.optim.AdamW, lr=5e-4),
+        mixup_alpha=0.2,
+    )
+    model.eval()
+
+    batch = {"input_values": torch.randn(2, 16000), "labels": torch.tensor([0, 1])}
+    step = model._mixup_training_loss(batch, ("input_values",), lambda b: model.forward(b["input_values"]))
+    assert step is not None  # mixup active (alpha>0 and batch>=2)
+    loss, _preds, _labels, logits = step
+    assert torch.isfinite(loss)
+    assert logits.shape == (2, 2)

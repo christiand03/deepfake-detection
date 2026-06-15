@@ -8,6 +8,7 @@ freeze_feature_extractor: True
 # AUC bei Zufall). Frozen-Backbone ist die robuste Baseline (siehe docs/model.md §7).
 # Phase 2: false + warmstart_ckpt für End-to-End-Finetuning.
 freeze_backbone: True
+gradient_checkpointing: true  # spart VRAM (Recompute im Backward); v. a. in Phase 2 relevant
 
 # Attention-Implementierung fürs TRAINING: "sdpa" (schneller) oder "eager".
 # explain_audio.py / die API laden Checkpoints immer mit eager (AttnLRP) —
@@ -21,6 +22,13 @@ class_weights: auto
 
 # Label Smoothing (z. B. 0.1) weicht die One-Hot-Targets auf. 0.0 = aus.
 label_smoothing: 0.0
+
+# Mixup (Beta(alpha, alpha)-Interpolation von Inputs UND Targets im Batch, z. B.
+# 0.2) — bei Audio eine lineare Überlagerung zweier Waveforms (Input-Raum-
+# Regularisierung, kein SpecAugment; Time Masking liegt in train_audio_robust).
+# Nur im Training aktiv; bei adv_train automatisch übersprungen. 0.0 = aus.
+# Ablation: experiment=train_audio_mixup
+mixup_alpha: 0.0
 
 # Layer-wise LR-Decay für Phase 2 (z. B. 0.75); null = einheitliche LR.
 # Wirkt nur bei freeze_backbone=false.

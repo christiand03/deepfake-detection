@@ -1,0 +1,36 @@
+# @package _global_
+
+# Phase 4.2 — Adversarial fine-tuning (defense) for the Wav2Vec2 detector.
+# PGD-augmented training with a 1:1 clean/adv mix (batch-splitting), perturbing
+# the raw audio waveform. Gegenstück zu train_video_adversarial /
+# train_multimodal_adversarial für die symmetrische Modalitäts-Ablation.
+# Run: python src/train.py experiment=train_audio_adversarial
+
+defaults:
+  - override /data: deepfake_audio
+  - override /model: wav2vec2
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: wav2vec2_adv
+
+# Warm-Start vom sauberen Phase-1-Wav2Vec2 (adversariales Finetuning eines trainierten
+# Detektors). ${paths.export_dir} = DEEPFAKE_CKPT_DIR (W&B-Launch) bzw. ./checkpoints/ (lokal).
+warmstart_ckpt: ${paths.export_dir}/wav2vec2.ckpt
+
+# Phase 2 (Backbone trainierbar) + PGD (7 Schritte) ist speicher-/zeitintensiv →
+# Batch gegenüber dem Phase-1-Wert (128) heruntersetzen.
+data:
+  batch_size: 16
+
+model:
+  adv_train: true
+  freeze_backbone: false  # Phase 2: Backbone muss trainierbar sein, sonst härtet das
+                          # adversariale Training nur den Kopf auf eingefrorenen Features
+  optimizer:
+    lr: 1e-5            # niedriger fürs Phase-2-Finetuning (entfrorener Backbone)
+  adv_epsilon: 0.03   # L∞ perturbation budget im (normalisierten) Waveform-Raum
+                      # (angeglichen an adv_audio_epsilon in train_multimodal_adversarial)
+  adv_steps: 7        # PGD iterations per step
+
+tags: ["wav2vec2", "audio", "adversarial-training", "phase4", "defense"]
