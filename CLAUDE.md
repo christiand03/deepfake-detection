@@ -14,12 +14,12 @@ As an autonomous coding agent, you must adhere to the following workflow:
 
 ##  Project Philosophy & Scope
 **"Unmasking Deception"** is a progressive, multimodal xAI approach to detecting deepfakes in political speeches (Talking-Head). (Belegarbeit, 30 Credits).
-*   **Depth-over-Breadth:** Focus on deep analysis using Explainable AI (xAI). We care not just *if* a deepfake is detected, but *why* (proven via Attention Maps and LRP-Heatmaps).
+*   **Depth-over-Breadth:** Focus on deep analysis using Explainable AI (xAI). We care not just *if* a deepfake is detected, but *why* (proven via the combination of Attention Maps and LRP-Heatmaps called AttnLRP).
 *   **The 4 Phases:**
-    1. **Unimodal Video:** Spatio-Temporal Video Transformer (ISTVT / VideoMAE) baseline.
-    2. **Multimodal (Audio+Video):** Cross-Modal Attention Head, Wav2Vec 2.0 for Audio.
-    3. **Robustness:** Social-Media simulation (compression, noise, framerate drops).
-    4. **Adversarial Attacks:** FGSM/PGD White-Box attacks and xAI impact analysis.
+    1. **Unimodal Video & Audio:** Spatio-Temporal Video Transformer (ISTVT / VideoMAE) baseline. Currently VideoMAE, ISTVT might be added at a later date. For Audio Wav2Vec is used.
+    2. **Multimodal (Audio+Video):** Cross-Modal Attention Head as well as simple concatenation to compare to each other as well as the the unimodal results.
+    3. **Robustness:** Social-Media simulation (compression, noise, framerate drops as well as upscaling afterwards).
+    4. **Adversarial Attacks:** FGSM/PGD White-Box attacks and UAP generation. Adversarial Fine tuning might be added as well.
 
 ---
 

@@ -6,15 +6,8 @@
 > [`archive/adversarial.md`](archive/adversarial.md).
 
 ## 1. Executive Summary & Forschungsphilosophie
-
-Dieses Projekt, mit dem Arbeitstitel **"Unmasking Deception: Ein progressiver,
-multimodaler xAI-Ansatz zur Erkennung von Deepfakes in politischen Reden unter
-Berücksichtigung von Adversarial Robustness"**, verfolgt einen
-**"Depth-over-Breadth"**-Ansatz: Statt viele Modelle oberflächlich zu
-vergleichen, wird ein modernes Transformer-Setup tiefgreifend analysiert. Der
-Fokus liegt auf **Explainable AI (xAI)** — es geht nicht nur darum, *ob* ein
-Deepfake erkannt wird, sondern *warum* (belegt durch Attention Rollout und
-AttnLRP-Heatmaps).
+Dieses Projekt, mit dem Arbeitstitel **"Unmasking Deception: Ein progressiver, multimodaler xAI-Ansatz zur Erkennung von Deepfakes unter Berücksichtigung von Adversarial Robustness"**, verfolgt einen ambitionierten Ansatz zur Deepfake-Detektion.
+Im Gegensatz zu traditionellen Benchmark-Studien ("Breadth-over-Depth"), die viele Modelle oberflächlich vergleichen, fokussiert sich diese Arbeit auf **"Depth-over-Breadth"**. Es wird ein hochmodernes, Transformer-basiertes Modell eingesetzt und tiefgreifend analysiert. Der Fokus liegt dabei auf **Explainable AI (xAI)**: Es geht nicht nur darum, *ob* ein Deepfake erkannt wird, sondern *warum*.
 
 ## 2. Motivation und Problemstellung
 
