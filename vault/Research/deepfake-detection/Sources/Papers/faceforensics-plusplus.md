@@ -51,4 +51,3 @@ Image/video-frame focus without audio; pre-diffusion-era manipulations; generali
 ## Connections
 - [[av-deepfake1m]] — successor scale + audio-visual
 - [[tolosana-2020-survey]] — places FF++ in the manipulation taxonomy
-- [[istvt-2023]] — evaluates on FF++

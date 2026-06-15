@@ -17,7 +17,7 @@ Project-scoped literature base for the Belegarbeit **"Unmasking Deception: A Pro
 | Phase | Topic | Core source notes |
 |-------|-------|-------------------|
 | Foundations | Transformer / attention | [[Sources/Papers/attention-is-all-you-need\|Vaswani 2017]], [[Sources/Papers/vit-dosovitskiy-2021\|ViT 2021]] |
-| Phase 1 | Unimodal video detection | [[Sources/Papers/videomae-tong-2022\|VideoMAE]], [[Sources/Papers/istvt-2023\|ISTVT]], [[Sources/Papers/faceforensics-plusplus\|FaceForensics++]] |
+| Phase 1 | Unimodal video detection | [[Sources/Papers/videomae-tong-2022\|VideoMAE]], [[Sources/Papers/lipforensics-haliassos-2021\|LipForensics]], [[Sources/Papers/faceforensics-plusplus\|FaceForensics++]] |
 | Phase 2 | Multimodal audio+video | [[Sources/Papers/wav2vec2-baevski-2020\|wav2vec 2.0]], [[Sources/Papers/av-deepfake1m\|AV-Deepfake1M]] |
 | Phase 3 | Robustness | [[Sources/Papers/av-deepfake1m\|AV-Deepfake1M]], [[Sources/Papers/tolosana-2020-survey\|Tolosana survey]] |
 | Phase 4 | Adversarial attacks | [[Sources/Papers/fgsm-goodfellow-2015\|FGSM]], [[Sources/Papers/pgd-madry-2018\|PGD]], [[Sources/Papers/uap-moosavi-2017\|UAP]], [[Sources/Papers/carlini-wagner-2017\|C&W]] |

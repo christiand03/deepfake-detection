@@ -6,10 +6,11 @@ venue: "ICML 2024"
 type: source/paper
 tags: [xAI, AttnLRP, RelevancePropagation, Transformer, Faithfulness]
 url: https://arxiv.org/abs/2402.05602
-status: read-abstract
-evidence-level: abstract
+status: read-full
+evidence-level: full-text
 project-phase: Cross-cutting
 created: 2026-06-14
+updated: 2026-06-14
 ---
 
 # AttnLRP (Achtibat et al., 2024)
@@ -17,7 +18,7 @@ created: 2026-06-14
 > [!info] Metadata
 > **Authors:** Achtibat, Hatefi, Dreyer, Jain, Wiegand, Lapuschkin, Samek
 > **Year / Venue:** 2024 · ICML (arXiv:2402.05602)
-> **Evidence level:** Abstract-grounded (fetched 2026-06-14)
+> **Evidence level:** full-text (2026-06-14)
 
 ## Project Relevance
 **Our primary xAI method.** AttnLRP is the reason the explain pipeline must load checkpoints with `eager` attention (per `CLAUDE.md`). It provides faithful, single-backward-pass attribution over attention layers — the spatial/temporal heatmaps that make our detector explainable and that we stress-test under adversarial attack in Phase 4.
@@ -36,7 +37,7 @@ Extends LRP to attention layers, enabling faithful, computationally efficient (�
 - **[ER-alrp-2]** AttnLRP **surpasses prior methods in faithfulness** and supports concept-based explanations, validated on LLaMa 2, Mixtral 8x7b, Flan-T5, and vision transformers.
   - Claim type: author claim
   - Claim strength: supported
-  - Evidence: abstract — "surpasses ... regarding faithfulness"; model list given; numeric faithfulness deltas in body (`needs-full-text`)
+  - Evidence: full text Table 1 — input-perturbation faithfulness AUC ≈ 6.19 (AttnLRP, best) vs 2.60 (Grad×AttnRollout), 0.70 (AtMan), −0.04 (SmoothGrad); validated on LLaMa 2-7b, Mixtral 8x7b, Flan-T5 + ViT-B/L-16/L-32 (ImageNet, 3,200 samples); LRP cost O(√N_L) memory w/ checkpointing vs O(N_T) for perturbation (provenance: full-text)
   - Method: comparison vs. prior LRP/attention attribution; released LRP library
   - Contradicts / weakens: improves on [[chefer-2021-transformer-interpretability]] and [[attention-rollout-abnar-2020]]
   - Project relevance: justifies AttnLRP as primary over rollout; basis for Phase 4 "does the attack move the explanation?" analysis

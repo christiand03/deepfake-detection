@@ -3,7 +3,7 @@ type: project-index
 project: deepfake-detection
 title: Index - Deepfake Detection
 status: active
-updated: 2026-06-14T21:25:55Z
+updated: 2026-06-15T14:13:14Z
 ---
 # Index
 
@@ -26,7 +26,6 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 - [[Sources/Papers/chefer-2021-transformer-interpretability]]
 - [[Sources/Papers/faceforensics-plusplus]]
 - [[Sources/Papers/fgsm-goodfellow-2015]]
-- [[Sources/Papers/istvt-2023]]
 - [[Sources/Papers/lrp-bach-2015]]
 - [[Sources/Papers/pgd-madry-2018]]
 - [[Sources/Papers/tolosana-2020-survey]]
@@ -59,6 +58,7 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 - [[Sources/Papers/audio-adversarial-carlini-2018]]
 - [[Sources/Papers/deeperforensics-jiang-2020]]
 - [[Sources/Papers/in-ictu-oculi-li-2018]]
+- [[Sources/Papers/.claude/logs/session-20260614-fc640a00]]
 
 ### Knowledge
 - [[Knowledge/Claim Map]]

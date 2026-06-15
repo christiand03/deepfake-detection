@@ -8,7 +8,7 @@ tags: [Writing, ComparisonMatrix, Draft]
 
 # Comparison Matrix
 
-> [!warning] Abstract-grounded draft. "✓/✗" reflect each paper's *stated scope*, not a re-evaluation. ISTVT row is metadata-only (see [[Claim Map]]). Do not present as benchmarked results.
+> [!warning] Draft. "✓/✗" reflect each paper's *stated scope*, not a re-evaluation. Do not present as benchmarked results.
 
 ## Capability coverage (scope, not performance)
 
@@ -16,14 +16,12 @@ tags: [Writing, ComparisonMatrix, Draft]
 |------|:----:|:----:|:----:|:----:|:----:|--------|
 | [[faceforensics-plusplus\|FF++]] (2019) | ✓ | ✗ | ✗ | ✗ | ✗ | face manip. benchmark |
 | [[av-deepfake1m\|AV-DF1M]] (2024) | ✓ | ✓ | ✓ (data) | ✗ | ✗ | AV deepfake dataset |
-| [[istvt-2023\|ISTVT]] (2023)† | ✓ | ✗ | ✗ | ✗ (attention-vis) | ✗ | deepfake detection |
+| [[lipforensics-haliassos-2021\|LipForensics]] (2021) | ✓ | ✗ | ✗ | ✗ (mouth cues) | ✗ | talking-head detection |
 | [[videomae-tong-2022\|VideoMAE]] (2022) | ✓ | ✗ | ✗ | ✗ | ✗ | video SSL backbone |
 | [[wav2vec2-baevski-2020\|wav2vec2]] (2020) | ✗ | ✓ | ✗ | ✗ | ✗ | speech SSL backbone |
 | [[attnlrp-achtibat-2024\|AttnLRP]] (2024) | (ViT) | ✗ | ✗ | ✓ | ✗ | xAI method |
 | [[pgd-madry-2018\|PGD]] (2018) | ✗ | ✗ | ✗ | ✗ | ✓ | attack + defense |
 | **This project** | ✓ | ✓ | ✓ | ✓ (AttnLRP) | ✓ (FGSM/PGD/UAP + adv. training) | political talking-head |
-
-† ISTVT row = metadata-only; verify against full text before use.
 
 ## Explanation-method ladder (faithfulness, abstract-grounded)
 

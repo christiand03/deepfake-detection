@@ -6,10 +6,11 @@ venue: "PLOS ONE"
 type: source/paper
 tags: [xAI, LRP, RelevancePropagation, Attribution]
 url: https://doi.org/10.1371/journal.pone.0130140
-status: read-abstract
-evidence-level: abstract
+status: read-full
+evidence-level: full-text
 project-phase: Cross-cutting
 created: 2026-06-14
+updated: 2026-06-14
 ---
 
 # Layer-wise Relevance Propagation / LRP (Bach et al., 2015)
@@ -17,7 +18,7 @@ created: 2026-06-14
 > [!info] Metadata
 > **Authors:** Bach, Binder, Montavon, Klauschen, Müller, Samek
 > **Year / Venue:** 2015 · PLOS ONE (doi:10.1371/journal.pone.0130140)
-> **Evidence level:** Abstract-grounded (fetched 2026-06-14)
+> **Evidence level:** full-text (2026-06-14) — relevance-conservation formulation confirmed; demonstrated on PASCAL VOC 2009, MNIST, synthetic data
 
 ## Project Relevance
 The **origin of the relevance-propagation family** that our primary xAI method ([[attnlrp-achtibat-2024]]) extends to transformers. Cite as the conceptual basis for "why a pixel contributed *for* or *against* the Fake decision" — the signed-attribution property that distinguishes LRP from attention maps.

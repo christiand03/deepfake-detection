@@ -6,10 +6,11 @@ venue: "ICLR 2015"
 type: source/paper
 tags: [Adversarial, FGSM, Robustness, AdversarialTraining]
 url: https://arxiv.org/abs/1412.6572
-status: read-abstract
-evidence-level: abstract
+status: read-full
+evidence-level: full-text
 project-phase: Phase 4
 created: 2026-06-14
+updated: 2026-06-14
 ---
 
 # FGSM (Goodfellow et al., 2015)
@@ -17,7 +18,7 @@ created: 2026-06-14
 > [!info] Metadata
 > **Authors:** Goodfellow, Shlens, Szegedy
 > **Year / Venue:** 2015 · ICLR (arXiv:1412.6572)
-> **Evidence level:** Abstract-grounded (fetched 2026-06-14)
+> **Evidence level:** full-text (2026-06-14)
 
 ## Project Relevance
 Defines the **Fast Gradient Sign Method** — the simplest white-box attack in our **Phase 4** suite and the conceptual entry point ("one-step, linear") before PGD. The linearity hypothesis frames why our detector is attackable and why adversarial training helps.
@@ -36,7 +37,7 @@ Argues neural nets are vulnerable to adversarial examples primarily because of t
 - **[ER-fgsm-2]** A fast one-step gradient-sign perturbation generates adversarial examples efficiently, and adversarial training with them lowers test error (MNIST/maxout).
   - Claim type: author claim
   - Claim strength: observed
-  - Evidence: abstract — efficient generation + reduced MNIST test error; exact numbers in body (`needs-full-text`)
+  - Evidence: full text — iconic GoogLeNet example: "panda" at 57.7% confidence → "gibbon" at 99.3% after an imperceptible ε·sign(∇ₓJ) perturbation; adversarial training lowers test error on MNIST/maxout (provenance: full-text)
   - Method: x' = x + ε·sign(∇ₓ J)
   - Limitation: one-step → weaker than iterative attacks ([[pgd-madry-2018]])
   - Project relevance: baseline attack; precursor to PGD-augmented training in Phase 4.2

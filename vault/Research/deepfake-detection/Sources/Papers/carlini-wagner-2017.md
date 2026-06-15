@@ -6,10 +6,11 @@ venue: "IEEE S&P 2017"
 type: source/paper
 tags: [Adversarial, CarliniWagner, AttackEvaluation, Robustness]
 url: https://arxiv.org/abs/1608.04644
-status: read-abstract
-evidence-level: abstract
+status: read-full
+evidence-level: full-text
 project-phase: Phase 4
 created: 2026-06-14
+updated: 2026-06-14
 ---
 
 # Carlini & Wagner (2017) — Towards Evaluating the Robustness of Neural Networks
@@ -17,7 +18,7 @@ created: 2026-06-14
 > [!info] Metadata
 > **Authors:** Carlini, Wagner
 > **Year / Venue:** 2017 · IEEE S&P (arXiv:1608.04644)
-> **Evidence level:** Abstract-grounded (fetched 2026-06-14)
+> **Evidence level:** full-text (2026-06-14) — L0/L2/L∞ targeted attacks on MNIST/CIFAR (all source/target pairs) confirmed; breaks defensive distillation
 
 ## Project Relevance
 Defines the **C&W attacks** and the methodological standard for *evaluating* robustness honestly (don't trust a defense until strong attacks fail). Useful in Phase 4 to frame attack strength (L0/L2/L∞) and to caution that our PGD-hardening must be tested against strong, not just weak, attacks.

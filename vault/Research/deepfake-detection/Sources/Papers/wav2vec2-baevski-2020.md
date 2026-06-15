@@ -6,10 +6,11 @@ venue: "NeurIPS 2020"
 type: source/paper
 tags: [Audio, SelfSupervised, SpeechRepresentation, Backbone]
 url: https://arxiv.org/abs/2006.11477
-status: read-abstract
-evidence-level: abstract
+status: read-full
+evidence-level: full-text
 project-phase: Phase 2
 created: 2026-06-14
+updated: 2026-06-14
 ---
 
 # wav2vec 2.0 (Baevski et al., 2020)
@@ -17,7 +18,7 @@ created: 2026-06-14
 > [!info] Metadata
 > **Authors:** Baevski, Zhou, Mohamed, Auli
 > **Year / Venue:** 2020 · NeurIPS (arXiv:2006.11477)
-> **Evidence level:** Abstract-grounded (fetched 2026-06-14)
+> **Evidence level:** full-text (2026-06-14) — Librispeech WER tables confirm 1.8/3.3 (960 h) and low-resource gains (10 min → ~4.8/8.2)
 
 ## Project Relevance
 **Our Phase 2 audio backbone** (`facebook/wav2vec2-base`, feature extractor frozen, projector/classifier trained). Self-supervised speech representations give a strong audio stream for the cross-modal fusion without training audio features from scratch on limited fake-speech data.

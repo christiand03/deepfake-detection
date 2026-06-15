@@ -6,10 +6,11 @@ venue: "CVPR 2017"
 type: source/paper
 tags: [Adversarial, UAP, UniversalPerturbation, Robustness]
 url: https://arxiv.org/abs/1610.08401
-status: read-abstract
-evidence-level: abstract
+status: read-full
+evidence-level: full-text
 project-phase: Phase 4
 created: 2026-06-14
+updated: 2026-06-14
 ---
 
 # Universal Adversarial Perturbations / UAP (Moosavi-Dezfooli et al., 2017)
@@ -17,7 +18,7 @@ created: 2026-06-14
 > [!info] Metadata
 > **Authors:** Moosavi-Dezfooli, Fawzi (Alhussein), Fawzi (Omar), Frossard
 > **Year / Venue:** 2017 · CVPR (arXiv:1610.08401)
-> **Evidence level:** Abstract-grounded (fetched 2026-06-14)
+> **Evidence level:** full-text (2026-06-14)
 > _Note: an earlier ID (1610.08864) was a wrong, unrelated paper; corrected to 1610.08401._
 
 ## Project Relevance
@@ -30,7 +31,7 @@ Shows a single, image-agnostic, quasi-imperceptible perturbation can fool a clas
 - **[ER-uap-1]** A single **image-agnostic** perturbation causes most natural images to be misclassified with high probability, while staying quasi-imperceptible.
   - Claim type: author claim
   - Claim strength: supported
-  - Evidence: abstract — "universal (image-agnostic) and very small perturbation ... misclassified with high probability" (provenance: abstract); exact fooling rates in body (`needs-full-text`)
+  - Evidence: full text Table 1 — a single universal perturbation reaches fooling ratios ~78–94% on the ImageNet validation set across CaffeNet, VGG-F, VGG-16, VGG-19, GoogLeNet and ResNet-152 (provenance: full-text)
   - Method: systematic algorithm aggregating per-sample perturbations into one universal vector
   - Limitation: exact fooling rates / network list not in abstract
   - Project relevance: defines the Phase 4.1 attack we apply to the detector
@@ -45,7 +46,7 @@ Shows a single, image-agnostic, quasi-imperceptible perturbation can fool a clas
 Iterative aggregation of DeepFool-style per-image perturbations into a single universal vector under an ε constraint.
 
 ## Limitations / Open Questions
-Abstract omits numeric fooling rates; effect on explanation maps is our novel angle (does a UAP move the AttnLRP heatmap off the face?).
+Fooling ratios are network-specific (~78–94%); effect on explanation maps is our novel angle (does a UAP move the AttnLRP heatmap off the face?).
 
 ## Connections
 - [[pgd-madry-2018]] — per-sample iterative attack + defense

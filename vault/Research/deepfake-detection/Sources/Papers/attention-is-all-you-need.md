@@ -6,10 +6,11 @@ venue: "NeurIPS 2017"
 type: source/paper
 tags: [Transformer, Attention, Foundation]
 url: https://arxiv.org/abs/1706.03762
-status: read-abstract
-evidence-level: abstract
+status: read-full
+evidence-level: full-text
 project-phase: Foundation
 created: 2026-06-14
+updated: 2026-06-14
 ---
 
 # Attention Is All You Need (Vaswani et al., 2017)
@@ -17,7 +18,7 @@ created: 2026-06-14
 > [!info] Metadata
 > **Authors:** Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser, Polosukhin
 > **Year / Venue:** 2017 · NeurIPS (arXiv:1706.03762)
-> **Evidence level:** Abstract-grounded (fetched 2026-06-14)
+> **Evidence level:** full-text (2026-06-14) — Table 2 confirms 28.4/41.8 BLEU; also generalizes to English constituency parsing (Table 4)
 
 ## Project Relevance
 Foundational. The self-attention mechanism is the substrate for **every** model in this project (VideoMAE, wav2vec 2.0, the cross-attention fusion head) and the object that our xAI methods (Attention Rollout, AttnLRP) explain. Cite once as the architectural origin.

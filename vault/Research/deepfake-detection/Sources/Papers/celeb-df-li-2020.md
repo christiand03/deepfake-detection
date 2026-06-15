@@ -8,36 +8,41 @@ tags: [DeepfakeDetection, Dataset, Benchmark]
 url: https://arxiv.org/abs/1909.12962
 citekey: li2020celebdf
 zotero_key: RKBU5SKE
-status: read-abstract
-evidence-level: abstract
+status: read-full
+evidence-level: full-text
 project-phase: Phase 1
 created: 2026-06-14
+updated: 2026-06-14
 ---
 
 # Celeb-DF (Li et al., 2020)
 
 > [!info] Metadata
-> **Authors:** Li, Yang, Sun, Qi, Lyu · **Year/Venue:** 2020 · CVPR (arXiv:1909.12962) · **Evidence level:** abstract-grounded (2026-06-14)
+> **Authors:** Li, Yang, Sun, Qi, Lyu · **Year/Venue:** 2020 · CVPR (arXiv:1909.12962, Celeb-DF v2) · **Evidence level:** full-text (2026-06-14)
 
 ## Project Relevance
-A standard **cross-dataset robustness** benchmark (higher visual quality than FF++). Used to test generalization of our detector beyond the training distribution (Phase 1/3 evaluation).
+A standard **cross-dataset robustness** benchmark (higher visual quality than FF++). Used to test generalization of our detector beyond the training distribution (Phase 1/3 evaluation). Its benchmark established the headline "detectors collapse on 2nd-generation data" finding that motivates our robustness focus.
 
 ## Summary
-A large DeepFake video benchmark of 5,639 high-quality synthetic celebrity videos generated with an improved synthesis pipeline that removes many visible artifacts, making detection harder than earlier datasets.
+A large DeepFake video benchmark: **590 real (YouTube celebrity) + 5,639 synthesized = 6,229 videos**. An improved synthesis pipeline removes visible artifacts of earlier sets — **256×256** synthesized faces (vs 64/128), color correction, and better masks — making detection markedly harder. Benchmarks the field: on 2nd-generation datasets (DFD, DFDC, Celeb-DF) average detector AUC is **<70%**, vs ~80% on 1st-generation sets; the best method (DSP-FWA) reaches only 87.4% overall.
 
 ## Key Claims
-- **[ER-celeb-1]** Provides **5,639** high-quality DeepFake videos with reduced visible artifacts, raising detection difficulty vs. earlier sets.
-  - Claim type: author claim · strength: supported · Evidence: abstract states 5,639 videos + improved synthesis (provenance: abstract)
-  - Method: improved face-swap synthesis; benchmark of existing detectors
+- **[ER-celeb-1]** Provides **5,639** high-quality DeepFake videos (+590 real; 6,229 total) with reduced visible artifacts, raising detection difficulty.
+  - Claim type: author result · strength: **strong** · Evidence: full text Table 1 + synthesis-improvement figures (256×256, color correction, mask) (provenance: full-text)
+  - Method: improved face-swap synthesis; frame-level AUC benchmark of existing detectors; H.264 compression robustness study
   - Limitation: visual-only, identity-swap; no audio; celebrity domain
   - Project relevance: cross-dataset generalization test set
+- **[ER-celeb-2]** On 2nd-generation data (incl. Celeb-DF) detectors **degrade to <70% average AUC**.
+  - Claim type: author result · strength: **supported** · Evidence: full text §benchmark + Figs 7–8 (2nd-gen avg AUC <70% vs ~80% 1st-gen; DSP-FWA best at 87.4%) (provenance: full-text)
+  - Project relevance: empirical motivation for the generalization/robustness gap (Phase 3)
 
 ## Methods
-Improved DeepFake synthesis; detector benchmark.
+Improved DeepFake synthesis (256×256, color correction, refined masks); frame-level AUC detector benchmark; H.264 compression (original/23/40) robustness analysis.
 
 ## Limitations / Open Questions
 No audio/multimodal manipulations (cf. [[av-deepfake1m]]); identity-swap focus.
 
 ## Connections
-- [[faceforensics-plusplus]], [[deepfakebench-yan-2023]] — benchmark family
+- [[faceforensics-plusplus]], [[deepfakebench-yan-2023]], [[dfdc-dolhansky-2020]] — benchmark family
 - [[av-deepfake1m]] — audio-visual successor
+- [[face-xray-li-2020]], [[sbi-shiohara-2022]] — methods evaluated cross-dataset on Celeb-DF

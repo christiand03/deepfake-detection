@@ -8,12 +8,12 @@ tags: [Inventory, Coverage, Zotero]
 # Collection Inventory — `Paper Belegarbeit` (Zotero group 6586509)
 
 > [!info] Coverage
-> **40 / 40** papers in the Zotero group now have a canonical note in `Sources/Papers/`. Evidence level is **abstract-grounded** for all (full-text reading pending). PDFs auto-attach on Zotero sync; **ISTVT** is paywalled IEEE → metadata only. Item ↔ note mapping below uses Zotero item keys.
+> **39 / 39** active papers have a canonical note in `Sources/Papers/`. **Deep full-text pass 2026-06-15:** the 34 papers in the `Paper Belegarbeit` parent collection are now **full-text-grounded** (PDFs read via the Zotero local API; numbers from tables/figures) — **except 2**: [[heatmap-defense-rieger-2020|Rieger]] (stored PDF unreadable), [[lips-are-lying-liu-2024|Lips Are Lying]] (full text not indexed). **ISTVT removed (unused) → [[../../Archive/istvt-2023|archived]]** (Zotero item left intact). Item ↔ note mapping below uses Zotero item keys. Evidence audit in [[../../Knowledge/Claim Map]].
 >
 > _Note (2026-06-14): a Zotero web/local **sync re-duplicated** 14 earlier-imported papers; a reconcile pass trashed the 28 duplicates and **changed 12 canonical item keys** — frontmatter `zotero_key` + this table were updated to the new keys. Keys can drift again on sync; resolve by title if a key 404s._
 
-## Foundational set (16) — full Evidence Records ([[../../Knowledge/Claim Map]])
-[[attention-is-all-you-need]] · [[vit-dosovitskiy-2021]] · [[videomae-tong-2022]] · [[wav2vec2-baevski-2020]] · [[faceforensics-plusplus]] · [[av-deepfake1m]] · [[tolosana-2020-survey]] · [[istvt-2023]] (metadata-only) · [[lrp-bach-2015]] · [[attention-rollout-abnar-2020]] · [[chefer-2021-transformer-interpretability]] · [[attnlrp-achtibat-2024]] · [[fgsm-goodfellow-2015]] · [[pgd-madry-2018]] · [[uap-moosavi-2017]] · [[carlini-wagner-2017]]
+## Foundational set (15) — full Evidence Records ([[../../Knowledge/Claim Map]])
+[[attention-is-all-you-need]] · [[vit-dosovitskiy-2021]] · [[videomae-tong-2022]] · [[wav2vec2-baevski-2020]] · [[faceforensics-plusplus]] · [[av-deepfake1m]] · [[tolosana-2020-survey]] · [[lrp-bach-2015]] · [[attention-rollout-abnar-2020]] · [[chefer-2021-transformer-interpretability]] · [[attnlrp-achtibat-2024]] · [[fgsm-goodfellow-2015]] · [[pgd-madry-2018]] · [[uap-moosavi-2017]] · [[carlini-wagner-2017]]
 
 ## New set (24, added 2026-06-14) by Zotero sub-collection
 
@@ -66,7 +66,7 @@ tags: [Inventory, Coverage, Zotero]
 | Robust Deepfake Detection (review) | SCMKRRZ7 | [[robust-deepfake-review-khan-2025]] |
 
 ## Notes
-- **Evidence gate:** all notes abstract-grounded; do not quote `needs-full-text` numbers in writing. ISTVT + the Khan review are weak sources (metadata-only / secondary).
+- **Evidence gate:** 32/34 collection notes full-text-grounded; 2 abstract-only (Rieger, Lips-Are-Lying). The Khan review is a secondary source. ISTVT removed (unused → [[../../Archive/istvt-2023|archived]]).
 - **Registry:** run `/kb-sync` after additions to register new notes (3 added 2026-06-14: In Ictu Oculi, DeeperForensics-1.0, Audio Adversarial Examples).
 - **RQ alignment:** new additions target named cues in [[../../Knowledge/research-question-card|the canonical RQs]] — blinking (Phase 1), real-world perturbations (Phase 3), audio attacks (Phase 4 RQ4c).
 - **Synthesis:** integrated in [[../../Writing/literature-review]]; canonical synthesis in [[../../Knowledge/Literature Overview]], [[../../Knowledge/Method Taxonomy]], [[../../Knowledge/Research Gaps]].

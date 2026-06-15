@@ -17,7 +17,7 @@ created: 2026-06-14
 # Rieger & Hansen (2020) — Simple Defense for Heatmap Explanations
 
 > [!info] Metadata
-> **Authors:** Rieger, Hansen · **Year/Venue:** 2020 · ICML WHI (arXiv:2007.06381) · **Evidence level:** abstract-grounded (2026-06-14)
+> **Authors:** Rieger, Hansen · **Year/Venue:** 2020 · ICML WHI (arXiv:2007.06381) · **Evidence level:** abstract-grounded (full-text attempted 2026-06-14 — stored PDF unreadable, so numbers remain `needs-full-text`)
 
 ## Project Relevance
 A lightweight **explanation defense**: aggregating multiple explanation methods resists manipulation ("fair-washing") even under white-box knowledge. Cheap candidate to stabilize our heatmaps (defense side of G4), and an argument for reporting *multiple* attributions (AttnLRP + rollout).

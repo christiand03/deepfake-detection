@@ -6,10 +6,11 @@ venue: "NeurIPS 2022"
 type: source/paper
 tags: [VideoTransformer, SelfSupervised, MaskedAutoencoder, Backbone]
 url: https://arxiv.org/abs/2203.12602
-status: read-abstract
-evidence-level: abstract
+status: read-full
+evidence-level: full-text
 project-phase: Phase 1
 created: 2026-06-14
+updated: 2026-06-14
 ---
 
 # VideoMAE (Tong et al., 2022)
@@ -17,7 +18,7 @@ created: 2026-06-14
 > [!info] Metadata
 > **Authors:** Tong, Song, Wang, Wang (Limin)
 > **Year / Venue:** 2022 · NeurIPS (arXiv:2203.12602)
-> **Evidence level:** Abstract-grounded (fetched 2026-06-14)
+> **Evidence level:** full-text (2026-06-14) — body confirms data-efficiency: from-scratch SSv2 32.6% → VideoMAE 69.6% (ViT-B); tube-mask 90%; K400→UCF transfer 96.1%
 
 ## Project Relevance
 **Our Phase 1 video backbone** (`MCG-NJU/videomae-base`). The data-efficiency result directly justifies using it on the comparatively small deepfake training set; the high masking ratio explains why fine-tuning a pre-trained VideoMAE beats training a video transformer from scratch.
@@ -48,5 +49,4 @@ Benchmarked on action recognition, not forgery; whether reconstruction-pretraine
 
 ## Connections
 - [[vit-dosovitskiy-2021]] — patch/Transformer basis
-- [[istvt-2023]] — alternative deepfake-specific video transformer
 - [[av-deepfake1m]] — data this backbone is fine-tuned on
