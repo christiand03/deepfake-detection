@@ -240,13 +240,74 @@
   archivePrefix = {arXiv}
 }
 
-% ============ TODO: complete from Zotero export (arXiv import was rate-limited 2026-06-14) ============
-% Verify authors/venue before use; arXiv IDs are confirmed:
-%   Lips Are Lying (audio-visual lip-sync inconsistency), 2024 — arXiv:2401.15668
-%   Making DeepFakes more spurious (trace removal attack), 2022 — arXiv:2203.11433
-%   Metamorphic Testing-based Adversarial Attack to Fool Deepfake Detectors, 2022 — arXiv:2204.08612
-%   Fake It Until You Break It (adversarial robustness of AI-gen image detectors), 2024 — arXiv:2410.01574
-%   Certifiably Robust Interpretation in Deep Learning, 2019 — arXiv:1905.12105
-%   A simple defense against adversarial attacks on heatmap explanations, 2020 — arXiv:2007.06381
-%   ExDDV: A New Dataset for Explainable Deepfake Detection in Video, 2025 — arXiv:2503.14421
-%   Unmasking Synthetic Realities (adversarially robust deepfake detection, review), 2025 — arXiv:2507.21157
+% ============ Multimodal / explainable / robustness (verified from source notes 2026-06-15) ============
+% Author names follow the initials given in the Sources/Papers notes; full first names
+% were not verified, so initials are kept rather than guessed. arXiv IDs confirmed.
+@inproceedings{liu2024lipsarelying,
+  title     = {Lips Are Lying: Spotting the Temporal Inconsistency between Audio and Visual in Lip-Syncing {DeepFakes}},
+  author    = {Liu, W. and She, T. and Liu, J. and Li, B. and Yao, D. and Liang, Z. and Wang, R.},
+  booktitle = {NeurIPS},
+  year      = {2024},
+  eprint    = {2401.15668},
+  archivePrefix = {arXiv}
+}
+@inproceedings{hondru2025exddv,
+  title     = {{ExDDV}: A New Dataset for Explainable Deepfake Detection in Video},
+  author    = {Hondru, V. and Hogea, E. and Onchis, D. and Ionescu, R. T.},
+  booktitle = {WACV},
+  year      = {2025},
+  note      = {To appear, WACV 2026},
+  eprint    = {2503.14421},
+  archivePrefix = {arXiv}
+}
+@article{liu2022traceremoval,
+  title   = {Making {DeepFakes} More Spurious: Evading Deep Face Forgery Detection via Trace Removal Attack},
+  author  = {Liu, C. and Chen, H. and Zhu, T. and Zhang, J. and Zhou, W.},
+  journal = {IEEE Transactions on Dependable and Secure Computing},
+  volume  = {20},
+  number  = {6},
+  pages   = {5182--5196},
+  year    = {2023},
+  eprint  = {2203.11433},
+  archivePrefix = {arXiv}
+}
+@inproceedings{lim2022metamorphic,
+  title     = {Metamorphic Testing-based Adversarial Attack to Fool Deepfake Detectors},
+  author    = {Lim, N. T. and Kuan, M. Y. and Pu, M. and Lim, M. K. and Chong, C. Y.},
+  booktitle = {ICPR},
+  year      = {2022},
+  eprint    = {2204.08612},
+  archivePrefix = {arXiv}
+}
+@article{mavali2024fakeit,
+  title   = {Fake It Until You Break It: On the Adversarial Robustness of {AI}-Generated Image Detectors},
+  author  = {Mavali, S. and Ricker, J. and Pape, D. and Fischer, A. and Sch{\"o}nherr, L.},
+  journal = {arXiv preprint},
+  year    = {2024},
+  eprint  = {2410.01574},
+  archivePrefix = {arXiv}
+}
+@article{levine2019certifiable,
+  title   = {Certifiably Robust Interpretation in Deep Learning},
+  author  = {Levine, A. and Singla, S. and Feizi, S.},
+  journal = {arXiv preprint},
+  year    = {2019},
+  eprint  = {1905.12105},
+  archivePrefix = {arXiv}
+}
+@inproceedings{rieger2020heatmapdefense,
+  title     = {A Simple Defense Against Adversarial Attacks on Heatmap Explanations},
+  author    = {Rieger, L. and Hansen, L. K.},
+  booktitle = {ICML Workshop on Human Interpretability in Machine Learning (WHI)},
+  year      = {2020},
+  eprint    = {2007.06381},
+  archivePrefix = {arXiv}
+}
+@article{khan2025robustreview,
+  title   = {Unmasking Synthetic Realities in Generative {AI}: A Comprehensive Review of Adversarially Robust Deepfake Detection Systems},
+  author  = {Khan, N. and Nguyen, T. and Bermak, A. and Khalil, I.},
+  journal = {arXiv preprint},
+  year    = {2025},
+  eprint  = {2507.21157},
+  archivePrefix = {arXiv}
+}
