@@ -13,8 +13,28 @@ if ($normalized -notmatch '\.py$') { exit 0 }
 if ($normalized -notmatch '/(src|tests)/') { exit 0 }
 if (-not (Test-Path -LiteralPath $filePath)) { exit 0 }
 
-$checkOutput = (& ruff check $filePath --fix 2>&1 | Out-String).Trim()
-& ruff format $filePath 2>&1 | Out-Null
+# Run ruff from the project root with a project-relative path. tool.ruff
+# per-file-ignores globs (e.g. "src/models/*") only match a path relative to the
+# project root; an absolute path bypasses them and would wrongly auto-strip
+# quoted single-token jaxtyping axes ("batch" -> batch via UP037), breaking the
+# file at runtime.
+$projDir = $env:CLAUDE_PROJECT_DIR
+$ruffPath = $filePath
+if ($projDir) {
+    $projNorm = ($projDir -replace '\\', '/').TrimEnd('/')
+    if ($normalized.StartsWith("$projNorm/", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $ruffPath = $normalized.Substring($projNorm.Length + 1)
+    }
+}
+
+$runDir = if ($projDir) { $projDir } else { Split-Path -LiteralPath $filePath }
+Push-Location -LiteralPath $runDir
+try {
+    $checkOutput = (& ruff check $ruffPath --fix 2>&1 | Out-String).Trim()
+    & ruff format $ruffPath 2>&1 | Out-Null
+} finally {
+    Pop-Location
+}
 
 if ($checkOutput -and $checkOutput -notmatch '^All checks passed!?$') {
     $result = @{
