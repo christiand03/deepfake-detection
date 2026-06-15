@@ -255,7 +255,8 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
         attn_implementation: str = "eager",
-        class_weights: list[float] | None = None,
+        # Any (not list[float]) because Hydra passes "auto" or an OmegaConf ListConfig.
+        class_weights: Any = None,
         label_smoothing: float = 0.0,
         mixup_alpha: float = 0.0,
         llrd_decay: float | None = None,
