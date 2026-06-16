@@ -90,5 +90,6 @@ hard label is needed** (e.g. API/demo) — maximize F1 on val or fix a target FP
 - Backbone source: [[wav2vec2-baevski-2020]]
 - Dataset family (audio/visual/both manipulation categories): [[av-deepfake1m]]
 - Data validity caveat: post-2026-06-11 pipeline only (see `docs/audit_2026-06.md`)
-- Next: Phase-2 fusion result note (pending) should report the same per-category
-  breakdown to test whether fusion lifts the visual-only category.
+- Next: **done →** [[multimodal-fusion-phase1-baseline]] — cross-attention fusion
+  lifts visual-only 0.832 → 0.932 (+0.10), confirming the motivation. Still open:
+  VideoMAE-only baseline, concat ablation, and seed repeats (see that note's gate).
