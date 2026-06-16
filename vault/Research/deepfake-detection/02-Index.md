@@ -3,7 +3,7 @@ type: project-index
 project: deepfake-detection
 title: Index - Deepfake Detection
 status: active
-updated: 2026-06-15T14:13:14Z
+updated: 2026-06-16T00:00:00Z
 ---
 # Index
 
@@ -71,7 +71,7 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 - None yet.
 
 ### Results
-- None yet.
+- [[Results/wav2vec2-phase1-audio-baseline]]
 
 ### Writing
 - [[Writing/comparison-matrix]]

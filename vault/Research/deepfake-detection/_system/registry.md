@@ -1,6 +1,6 @@
 # Registry
 
-Last updated: 2026-06-15T14:13:14Z
+Last updated: 2026-06-16T00:00:00Z
 
 ## Sources
 
@@ -67,6 +67,7 @@ Last updated: 2026-06-15T14:13:14Z
 
 | ID | Title | Path | Status | Related Experiment | Sources | Updated |
 |---|---|---|---|---|---|---|
+| results-001 | Wav2Vec2 Phase-1 Audio Baseline | [[Results/wav2vec2-phase1-audio-baseline]] | active | Phase 1 — unimodal audio | [[Sources/Papers/wav2vec2-baevski-2020]], [[Sources/Papers/av-deepfake1m]] | 2026-06-16T00:00:00Z |
 
 ## Writing
 
