@@ -81,9 +81,11 @@ Expect this to worsen in Phase-2 end-to-end (unfrozen backbones → far more cap
 > 1. **VideoMAE-only Phase-1 baseline.** "Fusion helps" is proven only vs *audio*.
 >    Fusion's audio-category 0.957 must be judged against video-only's per-category
 >    AUCs. → 3-way per-category table needed.
-> 2. **Fusion-mode ablations.** Only `cross_attention` tested; config also supports
->    `concat | video_only | audio_only`. CLAUDE.md mandates cross-attention vs concat
->    to attribute the gain to the *mechanism* vs merely *having both modalities*.
+> 2. ✅ **Fusion-mode ablation done** → [[multimodal-concat-phase1-ablation]]:
+>    cross-attention beats concat on all eight test metrics (visual-only 0.932 vs
+>    0.868), isolating the *mechanism* as the source of gain. Caveat: not yet
+>    parameter-matched — see the dead-attention-params TODO in that note.
+>    (`video_only` / `audio_only` modes still untested.)
 > 3. **Seed repeats (≥3).** Single seed; the auc_video dip (−0.016) and visual-only
 >    gain (+0.10) both need error bars. Test set is small (6 identities / 1,169 videos).
 
@@ -93,4 +95,5 @@ Expect this to worsen in Phase-2 end-to-end (unfrozen backbones → far more cap
 - Research questions: [[research-question-card]] (Phase 2 — multimodal fusion)
 - Backbone sources: [[videomae-tong-2022]], [[wav2vec2-baevski-2020]]
 - Dataset / split provenance: identity-disjoint, `split_seed=11` (no leakage verified)
-- Pending: VideoMAE Phase-1 result note; concat-fusion ablation; seeded reruns.
+- Concat ablation (mechanism-off): [[multimodal-concat-phase1-ablation]]
+- Pending: VideoMAE Phase-1 result note; `video_only`/`audio_only` modes; seeded reruns.
