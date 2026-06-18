@@ -118,12 +118,12 @@ export function AnalysisControls({
             <span
               style={{ fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.16em', color: '#4d5470' }}
             >
-              FUSION
+              VARIANT
             </span>
             <SegmentedToggle<FusionMode>
               options={[
-                { value: 'cross_attention', label: 'CROSS-ATTN' },
-                { value: 'concat', label: 'CONCAT' },
+                { value: 'cross_attention', label: 'FUSION' },
+                { value: 'concat', label: 'CONCATENATION' },
               ]}
               value={fusionMode}
               onChange={onFusionModeChange}

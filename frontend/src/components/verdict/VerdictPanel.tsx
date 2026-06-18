@@ -121,8 +121,8 @@ export function VerdictPanel({ result, isScanning }: VerdictPanelProps) {
                       marginTop: 6,
                     }}
                   >
-                    FUSION ·{' '}
-                    {result.fusionMode === 'concat' ? 'CONCATENATION' : 'CROSS-ATTENTION'}
+                    MULTIMODAL ·{' '}
+                    {result.fusionMode === 'concat' ? 'CONCATENATION' : 'FUSION'}
                   </div>
                 </div>
               ) : result.audio ? (

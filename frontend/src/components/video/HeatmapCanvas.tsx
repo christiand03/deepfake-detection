@@ -52,7 +52,10 @@ export function HeatmapCanvas({ heatmapFrames, frameIndex, opacity }: HeatmapCan
         height: '100%',
         objectFit: 'contain',
         opacity,
-        mixBlendMode: 'screen',
+        // 'normal' overlays the patch colour directly (clearly visible on dark
+        // backgrounds); 'screen' only lightens and washes colours out on dark,
+        // blue-toned video. The magnitude-based alpha keeps edges seamless.
+        mixBlendMode: 'normal',
         pointerEvents: 'none',
       }}
     />

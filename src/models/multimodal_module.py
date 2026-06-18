@@ -626,15 +626,18 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         # video_rel: (B, T, C, H, W)
         # audio_rel: (B, T_samples)
 
-        # Post-process video (identical to VideoMAEModule.explain)
+        # Post-process video — global normalization across all T frames per sample
+        # (matches VideoMAEModule.explain's default normalize_mode="global"), so
+        # the temporal dynamics are preserved and Phase 1 / Phase 2 video heatmaps
+        # and per-frame scores stay directly comparable.
         heatmap = reduce(video_rel, "b t c h w -> b t h w", "sum")
         B, T, H, W = heatmap.shape
         heatmap_4d = rearrange(heatmap, "b t h w -> (b t) 1 h w")
         heatmap_patches = F_nn.avg_pool2d(heatmap_4d, kernel_size=16, stride=16)
         heatmap_4d = F_nn.interpolate(heatmap_patches, size=(H, W), mode="bilinear", align_corners=False)
-        heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> (b t) (h w)", b=B, t=T)
+        heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> b (t h w)", b=B, t=T)
         heatmap_2d = normalize_relevance(heatmap_2d)
-        video_heatmap = rearrange(heatmap_2d, "(b t) (h w) -> b t h w", b=B, t=T, h=H, w=W)
+        video_heatmap = rearrange(heatmap_2d, "b (t h w) -> b t h w", b=B, t=T, h=H, w=W)
 
         # Post-process audio (identical to Wav2Vec2DeepfakeModule.explain)
         audio_relevance = normalize_relevance(audio_rel)

@@ -11,6 +11,71 @@ Dieses Dokument hält für jedes identifizierte Problem drei Dinge fest:
 Die Probleme sind thematisch gruppiert. Jeder Block ist durch Trennlinien klar
 abgegrenzt. Datei-Referenzen verweisen auf den Stand zum Zeitpunkt der Analyse.
 
+---
+
+## Abarbeitungs-Reihenfolge
+
+Sortiert nach Prinzip **„kleine/schnelle und risikoarme Sachen zuerst, kosmetische
+zuletzt"**, unter Beachtung der Abhängigkeiten. Aufwand: **S** = klein (Minuten bis
+~1 h), **M** = mittel, **L** = groß. Die Buchstaben-Kürzel verweisen auf die
+Detailblöcke weiter unten.
+
+### Etappe 0 — Quick Wins (winzig, risikoarm, sofort)
+
+Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
+
+1. **D1** — Adversarial `explain()` auf `target_class=1` setzen. *(S)*
+2. **D2** — Robustheits-Audio `explain()` auf `target_class=1` setzen. *(S)*
+3. **D4** — Multimodal-Heatmap auf `normalize_mode="global"` (wie unimodal). *(S)*
+4. **D6 (Teil 1)** — doppelte Normierung in den Adversarial-Heatmaps entfernen. *(S)*
+5. **A2 (seamless)** — Magnitude-basiertes Alpha in `_array_to_data_uri` (harte
+   Heatmap-Kante weg). Unabhängig, hohe Wirkung. *(S)*
+
+### Etappe 1 — Logik-Konsistenz & Audio-Berechnung (keine neue Infrastruktur)
+
+6. **D3** — Layer-3-Metrik in Phase 3/4 auf `_band_confidence` vereinheitlichen. *(M)*
+7. **B1 + B5** — Wort- und Band-Normierung gemeinsam auf Perzentil-Basis umstellen
+   (gleiche Wurzel: globales Abs-Max → meist ~0). *(M)*
+8. **B2** — Wort-Highlighting auf `requestAnimationFrame` statt `timeupdate`. *(S–M)*
+9. **B3** — Wort-Labels der X-Achse lesbar machen (schräg / Tooltip / ausdünnen). *(S)*
+10. **D5** — Adversarial über den ganzen Clip statt Einzel-Chunk *(Entscheidung
+    nötig)*. *(M)*
+11. **D6 (Teil 2)** — Adversarial-Heatmaps upprojizieren + Alpha-Maske wie Phase 1/2. *(M)*
+
+### Etappe 2 — Daten-/Registry-Fundament (schaltet A2-Box, H, E1 frei)
+
+12. **E2** — `normalized/`-Fallback (Original nutzen / on-the-fly normalisieren).
+    Voraussetzung für vieles. *(M)*
+13. **E1** — unimodalen H5-Video-Verdict über **alle** Chunks poolen (nicht nur
+    `chunk00000`). *(M)*
+14. **A2 (Box)** — mitwandernde Per-Chunk-Bounding-Box durch Upprojektion + ins
+    Frontend (braucht alle Chunk-Boxen → verzahnt mit E1). *(M–L)*
+15. **H1** — dynamische Registry + dreistufige Auswahl (Identität → Segment →
+    2×2-Varianten-Matrix). *(L)*
+
+### Etappe 3 — Visualisierungs-Features (brauchen neue API-Arrays)
+
+16. **A1** — zwei Timelines (Per-Chunk-Konfidenz + Relevanz-Hybrid); API liefert die
+    Per-Chunk-Arrays. *(M–L)*
+17. **B4** — panel-weiter Confidence/Relevance-Toggle (braucht Per-Fenster-Confidence-
+    Array für Audio). *(M)*
+
+### Etappe 4 — Kosmetik & Politur (zuletzt)
+
+18. **H2** — Thumbnails (erster Frame, `/thumbnail`-Endpoint mit Cache); nach H1. *(S–M)*
+19. **C1** — Multimodal-Verdict-Panel-Größe an die unimodalen Panels angleichen. *(S)*
+20. **F2** — Blau-Lesbarkeit / Blend-Modus final festlegen (zusammen mit A2-seamless
+    am realen Bild bewerten). *(S)*
+21. **F1** — Erklärtexte zu jeder Visualisierung. *(M)*
+
+### Parallel / separat (kein Frontend-Fix)
+
+- **G1** — Layer-3-Vorzeichen-Inversion: Modellseite (Training/Overfitting des
+  multimodalen Modells). Unabhängig von den obigen Etappen; nach E1/A2 erneut
+  bewerten.
+
+---
+
 **Gliederung**
 
 - A. Video-Panel

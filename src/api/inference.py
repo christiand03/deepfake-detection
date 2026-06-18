@@ -468,28 +468,80 @@ def _preprocess_video_fullframe(clip_path: Path) -> torch.Tensor:
 # ── Heatmap utilities ─────────────────────────────────────────────────────────
 
 
-def _array_to_data_uri(heatmap: np.ndarray, alpha_mask: np.ndarray | None = None) -> str:
+def _array_to_data_uri(
+    heatmap: np.ndarray,
+    alpha_mask: np.ndarray | None = None,
+    magnitude_alpha: bool = False,
+    max_alpha: float = 0.95,
+    alpha_gamma: float = 0.5,
+    color_gamma: float = 0.5,
+    color_gain: float = 3.0,
+    color_cap: float = 0.6,
+) -> str:
     """Encode a (H, W) float array in [-1, 1] as a base64 RGBA PNG data URI.
 
-    Uses the seismic colormap to match the frontend colour scheme.  When
-    ``alpha_mask`` is provided, pixels where the mask is ``False`` are fully
-    transparent (alpha = 0); otherwise all pixels are set to 85 % opacity.
+    Uses the seismic colormap to match the frontend colour scheme.
+
+    Alpha / colour handling (first matching rule wins):
+      * ``magnitude_alpha=True``: the magnitude is normalised **per image** (the
+        strongest pixel of THIS frame becomes the reference) and drives both
+        colour and alpha:
+          - *Colour*: ``color = sign(value) * clip(mag_norm**color_gamma *
+            color_gain, 0, color_cap)`` feeds the seismic map.  The gamma + strong
+            gain saturate small/medium relevance into vivid red/blue (seismic maps
+            small ``|value|`` to pale near-white), and ``color_cap`` keeps it below
+            seismic's dark maroon endpoint (``|v|=1``) so the strongest pixels stay
+            bright.  Colours "pop" at the cost of the magnitude dynamic range
+            (intended).
+          - *Alpha*: ``clip(mag_norm ** alpha_gamma * max_alpha, 0, max_alpha)``
+            keeps neutral / near-zero regions (incl. everything outside the face
+            crop, which is exactly zero) transparent, so the crop edge fades out
+            seamlessly (no hard rectangle).
+      * ``alpha_mask`` provided: pixels where the mask is ``False`` are fully
+        transparent (alpha = 0); the rest get ``max_alpha``.
+      * neither: keep the colormap's default alpha (fully opaque).
 
     Args:
         heatmap:    2-D float array in ``[-1, 1]``.
         alpha_mask: Boolean array of the same shape as ``heatmap``.  ``True``
                     marks visible pixels; ``False`` marks transparent ones.
+        magnitude_alpha: Per-image-normalised magnitude drives colour + alpha
+                    instead of using a binary mask.
+        max_alpha:  Peak opacity for the strongest relevance.
+        alpha_gamma: Gamma on the normalised magnitude for ALPHA (< 1 brightens
+                    faint patches; 1.0 = linear).
+        color_gamma: Gamma on the normalised magnitude for COLOUR saturation
+                    (< 1 makes colours pop; 1.0 = raw seismic).
+        color_gain: Multiplier on the gamma-boosted colour magnitude — higher =
+                    more intense, more uniform colours.
+        color_cap:  Upper bound on the colour magnitude fed to seismic; keeps
+                    colours below the dark maroon endpoint (≈0.5 = pure red/blue).
     """
     import matplotlib.colors as mcolors
     import matplotlib.pyplot as plt
 
     norm = mcolors.Normalize(vmin=-1.0, vmax=1.0)
     cmap = plt.get_cmap("seismic")
-    rgba_float = cmap(norm(heatmap))  # (H, W, 4) float [0, 1]
 
-    if alpha_mask is not None:
-        rgba_float[..., 3] = np.where(alpha_mask, 0.85, 0.0)
-    # else: keep the default alpha from the colormap (fully opaque)
+    if magnitude_alpha:
+        mag = np.abs(heatmap).astype(np.float32)
+        peak = float(mag.max())
+        if peak > 1e-6:  # noqa: PLR2004 — empty frame stays fully transparent
+            mag = mag / peak
+        # Colour: gamma-boost, then a strong gain, capped BELOW seismic's dark
+        # endpoint (|v|=1 → maroon) so colours land on vivid pure red/blue. The
+        # gain saturates almost any relevance into a strong patch — intensity over
+        # dynamic range (intended).
+        color_mag = np.clip((mag**color_gamma) * color_gain, 0.0, color_cap)
+        color_val = np.sign(heatmap) * color_mag
+        rgba_float = cmap(norm(color_val))  # (H, W, 4) float [0, 1]
+        # Alpha: keep neutral / near-zero regions transparent (seamless edge).
+        rgba_float[..., 3] = np.clip(mag**alpha_gamma * max_alpha, 0.0, max_alpha)
+    else:
+        rgba_float = cmap(norm(heatmap))  # (H, W, 4) float [0, 1]
+        if alpha_mask is not None:
+            rgba_float[..., 3] = np.where(alpha_mask, max_alpha, 0.0)
+        # else: keep the default alpha from the colormap (fully opaque)
 
     rgba_uint8 = (rgba_float * 255).astype(np.uint8)
     img = Image.fromarray(rgba_uint8, mode="RGBA")
@@ -691,8 +743,7 @@ def _video_result_with_heatmaps(
     heatmap_frames: list[str] = []
     for i in range(n_frames):
         full_frame = _upproject_heatmap(heatmap_np[i], cx1, cy1, cx2, cy2, orig_w, orig_h)
-        alpha_mask = np.abs(full_frame) > 1e-6
-        heatmap_frames.append(_array_to_data_uri(full_frame, alpha_mask=alpha_mask))
+        heatmap_frames.append(_array_to_data_uri(full_frame, magnitude_alpha=True))
 
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
 
@@ -741,7 +792,7 @@ def _run_video_inference_fullframe(clip_path: Path) -> dict:
     heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
 
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
-    heatmap_frames = [_array_to_data_uri(heatmap_np[i]) for i in range(n_frames)]
+    heatmap_frames = [_array_to_data_uri(heatmap_np[i], magnitude_alpha=True) for i in range(n_frames)]
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
 
     return {
@@ -1340,8 +1391,7 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
     heatmap_frames: list[str] = []
     for i in range(n_frames):
         full_frame = _upproject_heatmap(heatmap_np[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
-        alpha_mask = np.abs(full_frame) > 1e-6
-        heatmap_frames.append(_array_to_data_uri(full_frame, alpha_mask=alpha_mask))
+        heatmap_frames.append(_array_to_data_uri(full_frame, magnitude_alpha=True))
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
 
     # ── Audio panel: relevance timeline + frequency bands + word segments ───────
@@ -1453,7 +1503,7 @@ def _run_audio_for_robustness(clip_path: Path) -> dict | None:
     try:
         relevance_tensor, _ = model.explain(
             input_values=waveform_tensor,
-            target_class=1 if fake_prob > 0.5 else 0,
+            target_class=1,
         )
         relevance = relevance_tensor.detach().cpu().squeeze(0).numpy()
         import transformers.models.wav2vec2.modeling_wav2vec2 as _w2v_mod
@@ -1673,9 +1723,8 @@ def run_adversarial_inference(
 
     # Perturbed heatmaps
     try:
-        hm_tensor, _ = model.explain(pixel_values=adv_pv)
-        hm_np = hm_tensor.detach().cpu().numpy()[0]  # (T, H, W)
-        hm_np = hm_np / (np.max(np.abs(hm_np)) + 1e-8)
+        hm_tensor, _ = model.explain(pixel_values=adv_pv, target_class=1)
+        hm_np = hm_tensor.detach().cpu().numpy()[0]  # (T, H, W) — already [-1, 1]
     except Exception:
         hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
 
@@ -1754,9 +1803,8 @@ def run_adversarial_batch(
 
     # ── Clean LRP ─────────────────────────────────────────────────────────────
     try:
-        hm_clean, _ = model.explain(pixel_values=pixel_values)
-        hm_clean_np = hm_clean.detach().cpu().numpy()[0]  # (T, H, W)
-        hm_clean_np = hm_clean_np / (np.max(np.abs(hm_clean_np)) + 1e-8)
+        hm_clean, _ = model.explain(pixel_values=pixel_values, target_class=1)
+        hm_clean_np = hm_clean.detach().cpu().numpy()[0]  # (T, H, W) — already [-1, 1]
     except Exception:  # noqa: BLE001
         hm_clean_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     clean_region_scores = {r["region"]: r["score"] for r in _extract_anomaly_regions(hm_clean_np)}
@@ -1776,9 +1824,8 @@ def run_adversarial_batch(
 
     # ── Adversarial LRP ───────────────────────────────────────────────────────
     try:
-        hm_adv, _ = model.explain(pixel_values=adv_pv)
-        hm_adv_np = hm_adv.detach().cpu().numpy()[0]  # (T, H, W)
-        hm_adv_np = hm_adv_np / (np.max(np.abs(hm_adv_np)) + 1e-8)
+        hm_adv, _ = model.explain(pixel_values=adv_pv, target_class=1)
+        hm_adv_np = hm_adv.detach().cpu().numpy()[0]  # (T, H, W) — already [-1, 1]
     except Exception:  # noqa: BLE001
         hm_adv_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     adv_region_scores = {r["region"]: r["score"] for r in _extract_anomaly_regions(hm_adv_np)}
@@ -1967,6 +2014,7 @@ def run_multimodal_adversarial_inference(
         video_hm_clean, audio_rel_clean, _ = model.explain(
             pixel_values=pixel_values,
             input_values=waveform_tensor,
+            target_class=1,
         )
         video_hm_clean_np = video_hm_clean.detach().cpu().numpy()[0]  # (T, H, W)
         audio_rel_clean_np = audio_rel_clean.detach().cpu().numpy()[0]  # (T_samples,)
@@ -1979,6 +2027,7 @@ def run_multimodal_adversarial_inference(
         video_hm_adv, audio_rel_adv, _ = model.explain(
             pixel_values=adv_pv,
             input_values=adv_iv,
+            target_class=1,
         )
         video_hm_adv_np = video_hm_adv.detach().cpu().numpy()[0]  # (T, H, W)
         audio_rel_adv_np = audio_rel_adv.detach().cpu().numpy()[0]  # (T_samples,)
@@ -1987,7 +2036,7 @@ def run_multimodal_adversarial_inference(
         audio_rel_adv_np = np.zeros_like(waveform_np)
 
     # ── Perturbed video frames ────────────────────────────────────────────────
-    hm_adv_norm = video_hm_adv_np / (np.max(np.abs(video_hm_adv_np)) + 1e-8)
+    hm_adv_norm = video_hm_adv_np  # explain() output is already [-1, 1]
     perturbed_frames = [_array_to_data_uri(hm_adv_norm[i]) for i in range(NUM_FRAMES)]
 
     # Difference map: L1 pixel delta averaged over channels, normalised to [0, 1].
@@ -1997,7 +2046,7 @@ def run_multimodal_adversarial_inference(
     difference_frames = [_array_to_data_uri(diff_norm[i] * 2 - 1) for i in range(NUM_FRAMES)]
 
     # ── Video attention shift ─────────────────────────────────────────────────
-    hm_clean_norm = video_hm_clean_np / (np.max(np.abs(video_hm_clean_np)) + 1e-8)
+    hm_clean_norm = video_hm_clean_np  # explain() output is already [-1, 1]
     clean_regions = _extract_anomaly_regions(hm_clean_norm)
     adv_regions = _extract_anomaly_regions(hm_adv_norm)
     clean_by_region = {r["region"]: r["score"] for r in clean_regions}
@@ -2101,7 +2150,7 @@ def _multimodal_region_band_scores(
     relevance when the AttnLRP pass raises so the sweep stays robust.
     """
     try:
-        video_hm, audio_rel, _ = model.explain(pixel_values=pixel_values, input_values=input_values)
+        video_hm, audio_rel, _ = model.explain(pixel_values=pixel_values, input_values=input_values, target_class=1)
         video_hm_np = video_hm.detach().cpu().numpy()[0]  # (T, H, W)
         audio_rel_np = audio_rel.detach().cpu().numpy()[0]  # (T_samples,)
     except Exception:  # noqa: BLE001

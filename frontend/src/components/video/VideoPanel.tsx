@@ -32,7 +32,7 @@ export function VideoPanel({
 }: VideoPanelProps) {
   const [clips, setClips] = useState<ClipMeta[]>([])
   const [selectedId, setSelectedId] = useState<string>('')
-  const [heatmapOpacity, setHeatmapOpacity] = useState(0.55)
+  const [heatmapOpacity, setHeatmapOpacity] = useState(0.85)
   const [modelMode, setModelMode] = useState<ModelMode>('unimodal')
   const [fusionMode, setFusionMode] = useState<FusionMode>('cross_attention')
 
