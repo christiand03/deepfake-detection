@@ -1114,6 +1114,20 @@ def _band_confidence(
     return {key: float(np.clip(v / maxabs, -1.0, 1.0)) for key, v in raw.items()}
 
 
+def _percentile_normalize(arr: np.ndarray, pct: float = 99.0) -> np.ndarray:
+    """Scale a signed array to ~[-1, 1] by the *pct*-th percentile of |arr|.
+
+    A plain global abs-max lets a single spike flatten everything else to ~0
+    (the reason the word bars / Layer-1 band rendered near-white). Dividing by a
+    high percentile keeps the bulk of the values in a visible range; the clip
+    caps the rare outliers at ±1. Sign is preserved.
+    """
+    if arr.size == 0:
+        return arr
+    scale = float(np.percentile(np.abs(arr), pct)) + 1e-8
+    return np.clip(arr / scale, -1.0, 1.0)
+
+
 def _compute_word_segments(
     waveform_np: np.ndarray,
     sample_rate: int,
@@ -1150,22 +1164,29 @@ def _compute_word_segments(
         with cache_path.open("w") as f:
             json.dump(raw_segs, f)
 
-    max_abs = np.max(np.abs(relevance)) + 1e-8
-    segments = []
+    # Per-word relevance = the signed value at the sample with the largest
+    # |relevance| in the word window (the "most suspicious sample"). A mean would
+    # cancel opposing signs and push most words to ~0.
+    raw_word_rels: list[float] = []
     for seg in raw_segs:
         s = int(seg["start"] * sample_rate)
         e = int(seg["end"] * sample_rate)
         chunk = relevance[s:e]
-        word_rel = float(np.mean(chunk)) if len(chunk) > 0 else 0.0
-        segments.append(
-            {
-                "word": seg["word"],
-                "start": seg["start"],
-                "end": seg["end"],
-                "relevance": float(np.clip(word_rel / max_abs, -1.0, 1.0)),
-            }
-        )
-    return segments
+        word_rel = float(chunk[int(np.argmax(np.abs(chunk)))]) if len(chunk) > 0 else 0.0
+        raw_word_rels.append(word_rel)
+
+    # Percentile-normalise across words so the bars use the full colour range
+    # (a global abs-max would let one spike flatten every other word to ~0).
+    norm = _percentile_normalize(np.asarray(raw_word_rels, dtype=np.float32))
+    return [
+        {
+            "word": seg["word"],
+            "start": seg["start"],
+            "end": seg["end"],
+            "relevance": float(value),
+        }
+        for seg, value in zip(raw_segs, norm.tolist(), strict=True)
+    ]
 
 
 # ── Audio inference ───────────────────────────────────────────────────────────
@@ -1254,7 +1275,11 @@ def run_audio_inference(clip_path: Path) -> dict | None:
         log.exception("AttnLRP backward failed for audio in %s; using zero relevance", clip_path)
         relevance = np.zeros_like(waveform_np)
 
-    relevance_norm = relevance.tolist()  # normalize_relevance() already called inside explain()
+    # Percentile-normalise for the Layer-1 band so the bulk of the relevance is
+    # visible (B5); explain() already abs-max-normalised, which a single spike
+    # would otherwise flatten to ~0. The raw `relevance` still feeds the word
+    # segments below (which do their own per-word normalisation).
+    relevance_norm = _percentile_normalize(relevance).tolist()
     amplitude = waveform_np.tolist()
 
     # Frequency-band evidence via band ablation (signed by the model's decision),
@@ -1405,7 +1430,7 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
     audio_block = {
         "verdict": verdict,
         "confidence": confidence,
-        "waveformRelevance": audio_relevance_full.tolist(),
+        "waveformRelevance": _percentile_normalize(audio_relevance_full).tolist(),
         "waveformAmplitude": waveform_np.tolist(),
         "sampleRate": sample_rate,
         "wordSegments": word_segments,
