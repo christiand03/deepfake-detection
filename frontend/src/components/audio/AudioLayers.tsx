@@ -7,14 +7,15 @@
  *   L2 — WordTokenChart          (Recharts BarChart, scrollable)
  *   L3 — FrequencyBandChart      (custom SVG horizontal bars)
  *
- * Syncs to the video element via `videoRef` → `useVideoTime`.
+ * The shared `videoRef` is passed straight to L1/L2; each syncs to playback
+ * itself (imperative rAF playhead in L1, `useActiveWordIndex` in L2) so the
+ * panel does not re-render on every animation frame.
  */
 
 import { motion, AnimatePresence } from 'framer-motion'
 import { WaveformRelevanceLayer } from './WaveformRelevanceLayer'
 import { WordTokenChart } from './WordTokenChart'
 import { FrequencyBandChart } from './FrequencyBandChart'
-import { useVideoTime } from '../../hooks/useVideoTime'
 import type { AnalysisResult, ClipMeta } from '../../types/analysis'
 
 interface AudioLayersProps {
@@ -64,7 +65,6 @@ function LayerCard({
 }
 
 export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
-  const currentTime = useVideoTime(videoRef)
   const audio = result?.audio ?? null
   const duration = clip?.duration ?? 1
 
@@ -142,7 +142,7 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
               <LayerCard>
                 <WaveformRelevanceLayer
                   audio={audio}
-                  currentTime={currentTime}
+                  videoRef={videoRef}
                   duration={duration}
                 />
               </LayerCard>
@@ -155,7 +155,7 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
                 <LayerCard maxHeight={160}>
                   <WordTokenChart
                     wordSegments={audio.wordSegments}
-                    currentTime={currentTime}
+                    videoRef={videoRef}
                   />
                 </LayerCard>
               ) : (

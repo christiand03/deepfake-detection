@@ -348,7 +348,7 @@ def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
     25-fps normalisation → consecutive non-overlapping 16-frame chunks →
     MediaPipe face crop per chunk (temporally smoothed, 1.4×-scaled, square)
     → uint8 → ImageNet normalisation.  Face-less chunks are skipped, matching
-    training.  Capped at ``_MAX_FULL_FRAMES // NUM_FRAMES`` chunks.
+    training.  The whole clip is processed end to end (no frame cap).
 
     Returns:
         A :class:`_PreparedClip`, or ``None`` when no chunk contains a
@@ -363,11 +363,8 @@ def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
     chunk_indices: list[int] = []
     boxes: list[tuple[int, int, int, int]] = []
     orig_w = orig_h = 0
-    max_chunks = _MAX_FULL_FRAMES // NUM_FRAMES
 
     for chunk_idx, frames in enumerate(iter_video_chunks(video_path, num_frames=NUM_FRAMES)):
-        if chunk_idx >= max_chunks:
-            break
         with _face_extractor_lock:
             result = extractor(frames)
         if result is None:
@@ -605,14 +602,12 @@ def _estimate_per_frame_scores(
 
 # ── Full-video frame loaders ──────────────────────────────────────────────────
 
-_MAX_FULL_FRAMES = 300  # Hard cap to prevent OOM on very long clips
-
 
 def _load_all_frames(clip_path: Path) -> torch.Tensor:
     """Load every frame from *clip_path*, resize to 224 × 224, normalise.
 
     Returns:
-        Float tensor of shape ``(N, C, H, W)`` where N ≤ ``_MAX_FULL_FRAMES``.
+        Float tensor of shape ``(N, C, H, W)`` covering every frame of the clip.
     """
     try:
         import decord
@@ -622,7 +617,7 @@ def _load_all_frames(clip_path: Path) -> torch.Tensor:
         raise ModelNotReadyError("decord is not installed; required for video loading.") from exc
 
     vr = decord.VideoReader(str(clip_path), ctx=decord.cpu(0))
-    n_frames = min(len(vr), _MAX_FULL_FRAMES)
+    n_frames = len(vr)
     frames_np = vr.get_batch(list(range(n_frames))).asnumpy()  # (N, H, W, C) uint8
     processed = [_frame_transform(Image.fromarray(f)) for f in frames_np]
     return torch.stack(processed)  # (N, C, H, W)
@@ -641,7 +636,7 @@ def _load_all_frames_cropped(
     the heatmaps produced from the full video match the training distribution.
 
     Returns:
-        Float tensor of shape ``(N, C, H, W)`` where N ≤ ``_MAX_FULL_FRAMES``.
+        Float tensor of shape ``(N, C, H, W)`` covering every frame of the clip.
     """
     try:
         import decord
@@ -651,7 +646,7 @@ def _load_all_frames_cropped(
         raise ModelNotReadyError("decord is not installed; required for video loading.") from exc
 
     vr = decord.VideoReader(str(clip_path), ctx=decord.cpu(0))
-    n_frames = min(len(vr), _MAX_FULL_FRAMES)
+    n_frames = len(vr)
     frames_np = vr.get_batch(list(range(n_frames))).asnumpy()  # (N, H, W, C) uint8
     # PIL.crop takes (left, upper, right, lower) — same convention as bbox coords
     processed = [_frame_transform(Image.fromarray(f).crop((x1, y1, x2, y2))) for f in frames_np]

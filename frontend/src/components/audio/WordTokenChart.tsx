@@ -7,6 +7,7 @@
  * animated cyan ring rendered via a custom Bar shape.
  */
 
+import { useMemo } from 'react'
 import {
   BarChart,
   Bar,
@@ -18,11 +19,12 @@ import {
   ReferenceLine,
 } from 'recharts'
 import { seismicToRgb } from '../../lib/seismicColormap'
+import { useActiveWordIndex } from '../../hooks/useActiveWordIndex'
 import type { WordSegment } from '../../types/analysis'
 
 interface WordTokenChartProps {
   wordSegments: WordSegment[]
-  currentTime: number
+  videoRef: React.RefObject<HTMLVideoElement | null>
 }
 
 interface BarEntry {
@@ -93,16 +95,23 @@ function ActiveBarShape(props: Record<string, unknown>) {
   )
 }
 
-export function WordTokenChart({ wordSegments, currentTime }: WordTokenChartProps) {
-  const activeIdx = wordSegments.findIndex(
-    w => currentTime >= w.start && currentTime <= w.end,
-  )
+export function WordTokenChart({ wordSegments, videoRef }: WordTokenChartProps) {
+  // Re-renders only when the active word changes (not on every time tick), so
+  // the chart stays stable (no per-frame jitter); the index is still checked
+  // every animation frame, so fast words are not skipped.
+  const activeIdx = useActiveWordIndex(videoRef, wordSegments)
 
-  const data: BarEntry[] = wordSegments.map(w => ({
-    word: w.word,
-    value: w.relevance,
-    fill: seismicFill(w.relevance),
-  }))
+  // Memoised so a re-render never hands Recharts a fresh array reference, which
+  // would otherwise restart the bar animation.
+  const data: BarEntry[] = useMemo(
+    () =>
+      wordSegments.map(w => ({
+        word: w.word,
+        value: w.relevance,
+        fill: seismicFill(w.relevance),
+      })),
+    [wordSegments],
+  )
 
   return (
     <div>
@@ -152,6 +161,7 @@ export function WordTokenChart({ wordSegments, currentTime }: WordTokenChartProp
           />
           <Bar
             dataKey="value"
+            isAnimationActive={false}
             shape={(props: object) => {
               const barProps = props as { index?: number } & Record<string, unknown>
               return (

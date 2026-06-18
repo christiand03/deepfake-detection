@@ -15,7 +15,7 @@ import type { AudioAnalysis } from '../../types/analysis'
 
 interface WaveformRelevanceLayerProps {
   audio: AudioAnalysis
-  currentTime: number
+  videoRef: React.RefObject<HTMLVideoElement | null>
   /** Clip duration in seconds, used for the playhead position */
   duration: number
 }
@@ -124,7 +124,7 @@ function drawPlayhead(
 
 export function WaveformRelevanceLayer({
   audio,
-  currentTime,
+  videoRef,
   duration,
 }: WaveformRelevanceLayerProps) {
   const baseCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -139,15 +139,24 @@ export function WaveformRelevanceLayer({
     drawWaveform(ctx, audio, CANVAS_W, CANVAS_H)
   }, [audio])
 
-  // Redraw playhead on time change
+  // Playhead: drawn imperatively in a requestAnimationFrame loop straight from
+  // the <video> element, so it stays smooth (~60 Hz) WITHOUT triggering any
+  // React re-render (which would jitter the whole audio panel).
   useEffect(() => {
     const canvas = overlayCanvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H)
-    drawPlayhead(ctx, currentTime, duration, CANVAS_W, CANVAS_H)
-  }, [currentTime, duration])
+    let rafId = 0
+    function tick() {
+      ctx!.clearRect(0, 0, CANVAS_W, CANVAS_H)
+      const video = videoRef.current
+      if (video) drawPlayhead(ctx!, video.currentTime, duration, CANVAS_W, CANVAS_H)
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [videoRef, duration])
 
   return (
     <div>
