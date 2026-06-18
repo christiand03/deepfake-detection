@@ -127,7 +127,7 @@ export function WordTokenChart({ wordSegments, videoRef }: WordTokenChartProps) 
         LAYER 2 — WORD-LEVEL RELEVANCE
       </div>
 
-      <ResponsiveContainer width="100%" height={110}>
+      <ResponsiveContainer width="100%" height={150}>
         <BarChart
           data={data}
           margin={{ top: 6, right: 0, bottom: 0, left: -20 }}
@@ -135,9 +135,35 @@ export function WordTokenChart({ wordSegments, videoRef }: WordTokenChartProps) 
         >
           <XAxis
             dataKey="word"
-            tick={{ fontSize: 10, fontFamily: 'monospace', fill: '#8b92a8' }}
+            interval={0}
+            height={48}
             axisLine={{ stroke: '#2a2f42' }}
             tickLine={false}
+            tick={(props: object) => {
+              // Custom tick: every word, rotated -45° (so long words don't
+              // overlap), with the currently-spoken word highlighted in cyan.
+              const { x, y, payload } = props as {
+                x: number
+                y: number
+                payload: { value: string; index: number }
+              }
+              const isActive = payload.index === activeIdx
+              return (
+                <text
+                  x={x}
+                  y={y}
+                  dy={3}
+                  textAnchor="end"
+                  transform={`rotate(-45, ${x}, ${y})`}
+                  fontSize={9}
+                  fontFamily="monospace"
+                  fontWeight={isActive ? 700 : 400}
+                  fill={isActive ? '#00e5ff' : '#8b92a8'}
+                >
+                  {payload.value}
+                </text>
+              )
+            }}
           />
           <YAxis
             domain={[-1, 1]}

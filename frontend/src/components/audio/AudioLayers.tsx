@@ -152,7 +152,7 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
             <div>
               <LayerLabel>L2 — WORD TOKENS</LayerLabel>
               {audio.wordSegments.length > 0 ? (
-                <LayerCard maxHeight={160}>
+                <LayerCard maxHeight={200}>
                   <WordTokenChart
                     wordSegments={audio.wordSegments}
                     videoRef={videoRef}
