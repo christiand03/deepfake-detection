@@ -205,21 +205,30 @@ export function WordTokenChart({ wordSegments, videoRef }: WordTokenChartProps) 
         </BarChart>
       </ResponsiveContainer>
 
-      {activeIdx >= 0 && (
-        <div
-          style={{
-            fontSize: 10,
-            fontFamily: 'monospace',
-            marginTop: 2,
-            color: '#00e5ff',
-            letterSpacing: '0.08em',
-          }}
-        >
-          ▶ "{wordSegments[activeIdx].word}"
-          {' — relevance '}
-          {wordSegments[activeIdx].relevance.toFixed(3)}
-        </div>
-      )}
+      {/* Always reserve this line's height (even when no word is active) so the
+          card never resizes when the active-word readout appears/disappears —
+          otherwise Layer 3 below would jitter between words. */}
+      <div
+        style={{
+          height: 16,
+          lineHeight: '16px',
+          marginTop: 2,
+          fontSize: 10,
+          fontFamily: 'monospace',
+          color: '#00e5ff',
+          letterSpacing: '0.08em',
+          overflow: 'hidden',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {activeIdx >= 0 && (
+          <>
+            ▶ "{wordSegments[activeIdx].word}"
+            {' — relevance '}
+            {wordSegments[activeIdx].relevance.toFixed(3)}
+          </>
+        )}
+      </div>
     </div>
   )
 }

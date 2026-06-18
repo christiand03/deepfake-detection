@@ -151,8 +151,13 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
             {/* L2 — Word Tokens */}
             <div>
               <LayerLabel>L2 — WORD TOKENS</LayerLabel>
+              {/* No maxHeight on the L2 card: the chart height is fixed
+                  (independent of word count), so the card sizes exactly to its
+                  content. A cap a few px below content made a scrollbar appear,
+                  which shrank the ResponsiveContainer width and caused a
+                  re-layout feedback loop (the visible "shaking"). */}
               {audio.wordSegments.length > 0 ? (
-                <LayerCard maxHeight={200}>
+                <LayerCard>
                   <WordTokenChart
                     wordSegments={audio.wordSegments}
                     videoRef={videoRef}

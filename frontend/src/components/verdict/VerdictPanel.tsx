@@ -106,11 +106,18 @@ export function VerdictPanel({ result, isScanning }: VerdictPanelProps) {
                   >
                     MULTIMODAL VERDICT
                   </div>
-                  <VerdictGauge
-                    confidence={result.confidence}
-                    verdict={result.verdict}
-                    isScanning={false}
-                  />
+                  {/* Match the size of ONE unimodal gauge: those sit in flex:1
+                      columns of a row with gap 12 + a 1px divider, i.e. each is
+                      calc((100% - 24px - 1px) / 2) = calc(50% - 12.5px) wide.
+                      Centred so the single fused gauge reads as the primary
+                      verdict without being upscaled to full panel width. */}
+                  <div style={{ width: 'calc(50% - 12.5px)', margin: '0 auto' }}>
+                    <VerdictGauge
+                      confidence={result.confidence}
+                      verdict={result.verdict}
+                      isScanning={false}
+                    />
+                  </div>
                   <div
                     style={{
                       textAlign: 'center',
