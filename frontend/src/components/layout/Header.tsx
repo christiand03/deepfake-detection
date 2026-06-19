@@ -61,10 +61,10 @@ export function Header() {
             className="text-sm font-semibold tracking-wide"
             style={{ color: '#e8eaf0', letterSpacing: '0.04em' }}
           >
-            UNMASKING DECEPTION
+            MULTIMODAL DEEPFAKE xAI
           </div>
           <div className="text-xs" style={{ color: '#4d5470' }}>
-            xAI Deepfake Detection
+            Cross-Modal Attention · AttnLRP
           </div>
         </div>
       </div>
@@ -78,7 +78,7 @@ export function Header() {
           color: '#00e5ff',
         }}
       >
-        Full-Stack · Phases 1–4
+        VideoMAE · Wav2Vec 2.0
       </div>
 
       {/* Right: backend status + GitHub */}

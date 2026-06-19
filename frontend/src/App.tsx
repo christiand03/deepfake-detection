@@ -31,9 +31,9 @@ function App() {
         right={
           <>
             <VerdictPanel result={result} clip={currentClip} isScanning={isScanning} />
-            {activeTab === null && (
-              <AudioLayers result={result} clip={currentClip} videoRef={videoRef} />
-            )}
+            {/* Audio xAI stays visible alongside the labs (scroll down for them),
+                so Verdict, Audio xAI and Video are consistently available. */}
+            <AudioLayers result={result} clip={currentClip} videoRef={videoRef} />
           </>
         }
         bottom={
