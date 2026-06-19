@@ -107,6 +107,11 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
 - H. Clip-Auswahl & Vorschau
   - H1. Auswahl: Identität → Segment → 2×2-Varianten-Matrix
   - H2. Thumbnails (erster Frame) für die Auswahl-Karten
+- I. Phase-3/4-Labs (Robustness & Adversarial)
+  - I1. Phase 3 (Robustness) multimodal-fähig machen
+  - I2. Phase 3 & 4: ganze Heatmap über den ganzen Clip + Video dahinter (Frame-8 entfällt)
+  - I3. Phase 4: Clean-Baseline mit demselben Modell wie der Angriff
+  - I4. Landmark-basierte Regionen statt fester Pixel-Rechtecke (Attention-Shift)
 
 ---
 ---
@@ -807,5 +812,140 @@ beibehalten, damit der Text auf dem Thumbnail gut lesbar bleibt.
    Preprocessing nötig, nur der erste Aufruf ist langsam, danach aus dem Cache.
 2. Frontend: `posterSrc` auf den Thumbnail-Endpoint setzen; Banner + Badge wie
    gehabt übernehmen.
+
+---
+---
+
+## I. Phase-3/4-Labs (Robustness & Adversarial)
+
+> Ergänzt die xAI-Konsistenz-Punkte D5/D6: dort ging es um den Adversarial-
+> Backend-Pfad; hier kommen die Lab-spezifischen Anforderungen (Multimodal,
+> Ganzclip-Anzeige, Modell-Konsistenz) dazu.
+
+---
+
+### I1. Phase 3 (Robustness) multimodal-fähig machen
+
+**Gewollter Zustand**
+
+Das Robustness-Lab unterstützt auch das **multimodale** Modell — analog zum
+Adversarial-Lab und zur Hauptanalyse (Toggle Unimodal/Multimodal). Aktuell ist es
+auf unimodal beschränkt.
+
+**Ist-Zustand**
+
+- [robustness.py](../src/api/routers/robustness.py) ruft ausschließlich
+  `run_video_inference` (VideoMAE) für die degradierte Video-Inferenz; Audio nur
+  optional über `run_audio_robustness_inference` (Wav2Vec2). Kein multimodaler Pfad,
+  kein Frontend-Toggle.
+
+**To-Do**
+
+1. Backend: multimodalen Robustheits-Pfad ergänzen (z. B.
+   `run_multimodal_robustness_inference`), der den degradierten Clip durch das
+   `MultimodalDeepfakeModule` schickt.
+2. Schema/Request um `use_multimodal` (+ `fusion_mode`) erweitern; Frontend-Toggle
+   im `RobustnessPanel` wie im `AdversarialPanel`.
+
+---
+
+### I2. Phase 3 & 4: ganze Heatmap über den ganzen Clip (Frame-8 entfällt)
+
+**Gewollter Zustand**
+
+Die Heatmap-Vergleiche in Phase 3 & 4 zeigen die **vollständige** Heatmap über den
+**gesamten** Clip — größer dargestellt und mit Wiedergabe/Frame-Sync wie in Phase
+1/2 (Video-Player + Overlay), nicht nur als kleines Standbild von „Frame #8". Das
+fest verdrahtete „Frame #8"-Konstrukt entfällt.
+
+Hinter der Heatmap läuft das **jeweils passende Video**: clean → Originalvideo,
+degraded → das **degradierte** Video (Phase 3), attacked → das **adversariale**
+Video (Phase 4) — so sieht man Degradation/Störung zusätzlich zur Heatmap. Ein
+**Opacity-Slider steuert die Transparenz des VIDEOS** (nicht der Heatmap):
+**Default 100 %** (Video normal sichtbar) … **0 %** (Video komplett aus, nur die
+Heatmaps — zum Fokus auf die Differenzen).
+
+**Ist-Zustand**
+
+- Beide Panels zeigen genau einen Frame (#8) als kleines `<img>`
+  ([RobustnessPanel.tsx:632-634](../frontend/src/components/phases/RobustnessPanel.tsx#L632-L634),
+  [AdversarialPanel.tsx:696-700](../frontend/src/components/phases/AdversarialPanel.tsx#L696-L700)).
+- Phase 3 rechnet backend-seitig zwar über den ganzen Clip, zeigt aber nur einen
+  Frame. Phase 4 läuft backend-seitig **nur auf einem Chunk** (siehe D5), und die
+  Adversarial-Heatmaps sind nicht upprojiziert (siehe D6-Teil2).
+
+**To-Do**
+
+1. Phase 4 über den ganzen Clip rechnen (= **D5**) und die Heatmaps upprojizieren
+   (= **D6-Teil2**), sodass pro Frame eine Vollbild-Heatmap vorliegt.
+2. Frontend: die kleine „Frame #8"-Vorschau durch eine **große Heatmap-Anzeige über
+   den ganzen Clip** ersetzen (Video-Player/Scrubbing + Overlay wie Phase 1/2) — für
+   clean vs. degraded (Phase 3) bzw. clean vs. attacked + ΔPerturbation (Phase 4).
+3. Alle `heatmapFrames[8]` / `[8]`-Hardcodes entfernen.
+4. Hinter jede Heatmap das passende Video legen (clean / degraded / adversarial) +
+   **Video-Opacity-Slider** (Default 100 %, bis 0 % = Video aus). Voraussetzung: das
+   degradierte Video (Phase 3) bzw. das adversariale Video (Phase 4) muss als
+   abspielbare Quelle bereitstehen — das Backend muss diese Clips also persistieren/
+   ausliefern (aktuell wird der degradierte Clip nur in einem Tempfile erzeugt).
+
+---
+
+### I3. Phase 4: Clean-Baseline mit demselben Modell wie der Angriff
+
+**Gewollter Zustand**
+
+Die „CLEAN"-Metrik (Verdict, Konfidenz, Region-Scores) wird mit **demselben Modell**
+berechnet wie die „ATTACKED"-Metrik — unimodal-vs-unimodal **oder**
+multimodal-vs-multimodal. Sonst ist der Vergleich ungültig.
+
+**Ist-Zustand**
+
+- [adversarial.py:30](../src/api/routers/adversarial.py#L30) berechnet die Baseline
+  immer per `run_video_inference` (unimodal VideoMAE) — auch wenn `use_multimodal`
+  gesetzt ist und der Angriff über das multimodale Modell läuft → Modell-Mismatch
+  zwischen „clean" und „attacked".
+
+**To-Do**
+
+1. Baseline modus-abhängig berechnen: bei `use_multimodal` die multimodale
+   Clean-Inferenz als Baseline verwenden (gleiche Eingabe-Pipeline wie der Angriff).
+2. Sicherstellen, dass Verdict/Konfidenz/Region-Scores von clean und attacked aus
+   demselben Modell + derselben Datengrundlage (ganzer Clip, s. I2) stammen.
+
+---
+
+### I4. Landmark-basierte Regionen statt fester Pixel-Rechtecke (Attention-Shift)
+
+**Gewollter Zustand**
+
+Die Regionen der Attention-Shift-Tabelle (Augen, Mund, Kiefer, …) folgen **pro
+Frame dem tatsächlichen Gesicht** — über MediaPipe-Landmarks — statt fester
+Pixel-Rechtecke im 224er-Crop. Bei bewegten/gedrehten Köpfen sind feste Rechtecke
+irreführend und ungenau; landmark-basierte Regionen sind akkurat und die Labels
+(„Right Eye" usw.) stimmen wirklich.
+
+**Ist-Zustand**
+
+- `_extract_anomaly_regions` ([inference.py:507-524](../src/api/inference.py#L507-L524))
+  teilt die Heatmap in **feste geometrische Rechtecke** (oberes Viertel = Stirn,
+  oberes Mittelfeld = Augen, …) — keine echte Gesichtszuordnung pro Frame.
+- MediaPipe FaceLandmarker (468 Landmarks/Frame) läuft im Preprocessing bereits für
+  den Crop ([face_extractor.py](../src/data_processing/face_extractor.py)); die
+  Landmarks werden danach verworfen.
+
+**To-Do (Option A — Preprocessing-Zeit; gewählt, weil ein zweiter MediaPipe-Pass
+zur xAI-Zeit beim Ganzclip-Phase-4 zu langsam wäre)**
+
+1. Preprocessing: die schon berechneten Landmarks pro Frame **speichern** — kompakt,
+   z. B. nur die für die Regionen nötigen Landmark-Gruppen oder Regions-Boxen pro
+   Frame, in Crop-/224er-Koordinaten (bzw. per Crop-Box rekonstruierbar). HDF5/CSV-
+   Schema entsprechend erweitern; `FaceExtractor` muss die Landmarks zurückgeben.
+2. xAI: `_extract_anomaly_regions` durch eine Variante ersetzen, die pro Frame die
+   Heatmap über **landmark-definierte Regionen** (Index-Gruppen für Augen/Mund/Nase/
+   Kiefer/Stirn) mittelt.
+3. **Datensatz neu preprocessen** (Schema-Migration), damit die Landmarks vorliegen
+   — Aufwand bewusst in Kauf genommen.
+4. Fallback pro Frame ohne Landmarks: auf die alte geometrische Aufteilung
+   zurückfallen.
 
 ---
