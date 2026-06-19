@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
 
+from src.api.analysis_cache import load_cached, save_cache
 from src.api.clip_registry import get_clip_video_path
 from src.api.inference import (
     ModelNotReadyError,
@@ -21,7 +22,20 @@ router = APIRouter(prefix="/adversarial", tags=["adversarial"])
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adversarial")
 
 
+def _cache_key(req: AdversarialRequest) -> str:
+    """Cache stem encoding every settable adversarial parameter (unique per request)."""
+    return (
+        f"{req.clip_id}__adversarial_{req.method}_eps{req.epsilon}_steps{req.steps}"
+        f"_mm{int(req.use_multimodal)}_{req.attack_modalities}_aeps{req.audio_epsilon}"
+    )
+
+
 def _run(req: AdversarialRequest) -> Phase4ResultSchema:
+    cache_key = _cache_key(req)
+    cached = load_cached(cache_key, Phase4ResultSchema)
+    if cached is not None:
+        return cached
+
     clip_path = get_clip_video_path(req.clip_id)
     if clip_path is None or not clip_path.exists():
         raise FileNotFoundError(f"Video file not found for clip '{req.clip_id}'.")
@@ -47,7 +61,10 @@ def _run(req: AdversarialRequest) -> Phase4ResultSchema:
             steps=req.steps,
             base_result=base,
         )
-    return Phase4ResultSchema(**result)
+
+    schema = Phase4ResultSchema(**result)
+    save_cache(cache_key, schema)
+    return schema
 
 
 @router.post("", response_model=Phase4ResultSchema)

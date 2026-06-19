@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
 
+from src.api.analysis_cache import load_cached, save_cache
 from src.api.clip_registry import get_clip_video_path
 from src.api.inference import (
     ModelNotReadyError,
@@ -21,7 +22,20 @@ router = APIRouter(prefix="/robustness", tags=["robustness"])
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="robustness")
 
 
+def _cache_key(req: RobustnessRequest) -> str:
+    """Cache stem encoding every settable robustness parameter (unique per request)."""
+    return (
+        f"{req.clip_id}__robustness_crf{req.crf}_fps{req.fps}"
+        f"_noise{req.noise_sigma}_up{int(req.upscale)}_ab{req.audio_bitrate}"
+    )
+
+
 def _run(req: RobustnessRequest) -> Phase3ResultSchema:
+    cache_key = _cache_key(req)
+    cached = load_cached(cache_key, Phase3ResultSchema)
+    if cached is not None:
+        return cached
+
     clip_path = get_clip_video_path(req.clip_id)
     if clip_path is None or not clip_path.exists():
         raise FileNotFoundError(f"Video file not found for clip '{req.clip_id}'.")
@@ -37,7 +51,10 @@ def _run(req: RobustnessRequest) -> Phase3ResultSchema:
     )
     if req.audio_bitrate is not None:
         result["audioRobustness"] = run_audio_robustness_inference(clip_path, req.audio_bitrate)
-    return Phase3ResultSchema(**result)
+
+    schema = Phase3ResultSchema(**result)
+    save_cache(cache_key, schema)
+    return schema
 
 
 @router.post("", response_model=Phase3ResultSchema)
