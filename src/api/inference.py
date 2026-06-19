@@ -1515,31 +1515,10 @@ def _run_audio_for_robustness(clip_path: Path) -> dict | None:
     audio_verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     confidence = fake_prob if audio_verdict == "FAKE" else 1.0 - fake_prob
 
-    # Whole-waveform tensor for the visualization-only explain() pass below.
-    waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
-    waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / torch.sqrt(waveform_tensor.var() + 1e-7)
-
-    model.eval()
-    try:
-        relevance_tensor, _ = model.explain(
-            input_values=waveform_tensor,
-            target_class=1,
-        )
-        relevance = relevance_tensor.detach().cpu().squeeze(0).numpy()
-        import transformers.models.wav2vec2.modeling_wav2vec2 as _w2v_mod
-
-        if getattr(_w2v_mod, "_lxt_patched", False):
-            log.info("Audio robustness for %s — true AttnLRP (lxt-patched).", clip_path)
-        else:
-            log.warning(
-                "Audio robustness for %s — AttnLRP patch not applied; relevance is plain Input\u00d7Gradient.",
-                clip_path,
-            )
-    except Exception:  # noqa: BLE001
-        log.exception("LRP backward failed for audio in %s; using zero relevance", clip_path)
-        relevance = np.zeros_like(waveform_np)
-
-    frequency_bands = _compute_frequency_bands(waveform_np, relevance, sample_rate)
+    # Frequency-band evidence via band ablation (decision-grounded sign),
+    # consistent with the unimodal/multimodal main paths (D3). No relevance
+    # backward pass is needed for this metric.
+    frequency_bands = _band_confidence(waveform_np, sample_rate, lambda w: _audio_mean_fake_margin(model, w))
     return {"confidence": confidence, "frequencyBands": frequency_bands}
 
 
@@ -2031,29 +2010,25 @@ def run_multimodal_adversarial_inference(
 
     # ── Clean LRP ─────────────────────────────────────────────────────────────
     try:
-        video_hm_clean, audio_rel_clean, _ = model.explain(
+        video_hm_clean, _, _ = model.explain(
             pixel_values=pixel_values,
             input_values=waveform_tensor,
             target_class=1,
         )
         video_hm_clean_np = video_hm_clean.detach().cpu().numpy()[0]  # (T, H, W)
-        audio_rel_clean_np = audio_rel_clean.detach().cpu().numpy()[0]  # (T_samples,)
     except Exception:  # noqa: BLE001
         video_hm_clean_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
-        audio_rel_clean_np = np.zeros_like(waveform_np)
 
     # ── Adversarial LRP ───────────────────────────────────────────────────────
     try:
-        video_hm_adv, audio_rel_adv, _ = model.explain(
+        video_hm_adv, _, _ = model.explain(
             pixel_values=adv_pv,
             input_values=adv_iv,
             target_class=1,
         )
         video_hm_adv_np = video_hm_adv.detach().cpu().numpy()[0]  # (T, H, W)
-        audio_rel_adv_np = audio_rel_adv.detach().cpu().numpy()[0]  # (T_samples,)
     except Exception:  # noqa: BLE001
         video_hm_adv_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
-        audio_rel_adv_np = np.zeros_like(waveform_np)
 
     # ── Perturbed video frames ────────────────────────────────────────────────
     hm_adv_norm = video_hm_adv_np  # explain() output is already [-1, 1]
@@ -2081,21 +2056,14 @@ def run_multimodal_adversarial_inference(
 
     # ── Audio frequency-band attention shift ──────────────────────────────────
     adv_waveform_np = adv_iv.squeeze(0).cpu().numpy()
-    # Trim/pad relevance arrays to match waveform length for _compute_frequency_bands.
     t_len = len(waveform_np)
-    audio_rel_clean_trimmed = (
-        audio_rel_clean_np[:t_len]
-        if len(audio_rel_clean_np) >= t_len
-        else np.pad(audio_rel_clean_np, (0, t_len - len(audio_rel_clean_np)))
-    )
     adv_waveform_trimmed = adv_waveform_np[:t_len] if len(adv_waveform_np) >= t_len else waveform_np
-    audio_rel_adv_trimmed = (
-        audio_rel_adv_np[:t_len]
-        if len(audio_rel_adv_np) >= t_len
-        else np.pad(audio_rel_adv_np, (0, t_len - len(audio_rel_adv_np)))
+    clean_bands = _band_confidence(
+        waveform_np, sample_rate, lambda w: _multimodal_mean_fake_margin(model, [pixel_values], w)
     )
-    clean_bands = _compute_frequency_bands(waveform_np, audio_rel_clean_trimmed, sample_rate)
-    adv_bands = _compute_frequency_bands(adv_waveform_trimmed, audio_rel_adv_trimmed, sample_rate)
+    adv_bands = _band_confidence(
+        adv_waveform_trimmed, sample_rate, lambda w: _multimodal_mean_fake_margin(model, [adv_pv], w)
+    )
     audio_attention_shift = [
         {"region": "Low 0\u2013500 Hz", "before": clean_bands["low"], "after": adv_bands["low"]},
         {"region": "Mid 500\u20134 kHz", "before": clean_bands["mid"], "after": adv_bands["mid"]},
@@ -2170,21 +2138,16 @@ def _multimodal_region_band_scores(
     relevance when the AttnLRP pass raises so the sweep stays robust.
     """
     try:
-        video_hm, audio_rel, _ = model.explain(pixel_values=pixel_values, input_values=input_values, target_class=1)
+        video_hm, _, _ = model.explain(pixel_values=pixel_values, input_values=input_values, target_class=1)
         video_hm_np = video_hm.detach().cpu().numpy()[0]  # (T, H, W)
-        audio_rel_np = audio_rel.detach().cpu().numpy()[0]  # (T_samples,)
     except Exception:  # noqa: BLE001
         video_hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
-        audio_rel_np = np.zeros_like(waveform_np)
 
     video_hm_np = video_hm_np / (np.max(np.abs(video_hm_np)) + 1e-8)
     region_scores = {r["region"]: r["score"] for r in _extract_anomaly_regions(video_hm_np)}
 
-    t_len = len(waveform_np)
-    audio_rel_trimmed = (
-        audio_rel_np[:t_len] if len(audio_rel_np) >= t_len else np.pad(audio_rel_np, (0, t_len - len(audio_rel_np)))
-    )
-    bands = _compute_frequency_bands(waveform_np, audio_rel_trimmed, sample_rate)
+    # Audio bands via ablation on the fused model (D3): decision-grounded sign.
+    bands = _band_confidence(waveform_np, sample_rate, lambda w: _multimodal_mean_fake_margin(model, [pixel_values], w))
     return region_scores, bands
 
 
