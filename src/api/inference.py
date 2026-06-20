@@ -1689,6 +1689,65 @@ def run_robustness_inference(
 # ── Adversarial inference ─────────────────────────────────────────────────────
 
 
+def _run_adversarial_fullframe(
+    clip_path: Path,
+    method: Literal["FGSM", "PGD"],
+    epsilon: float,
+    steps: int,
+    base_result: dict,
+) -> dict:
+    """Single-window adversarial fallback for face-less clips (out-of-distribution).
+
+    Attacks one evenly-sampled 16-frame full-frame window — the only sensible
+    option when no face crop is available.  Mirrors the whole-clip path's
+    rendering (magnitude-alpha heatmaps) so the frontend triptych looks the same.
+    """
+    model = get_video_model()
+    pixel_values = _preprocess_video_fullframe(clip_path).to(_device)
+
+    clean_verdict: Literal["FAKE", "REAL"] = base_result["verdict"]
+    target_class = 1 if clean_verdict == "FAKE" else 0
+    n_steps = 1 if method == "FGSM" else steps
+    step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
+
+    adv_pv = _pgd_attack(model, pixel_values, target_class, epsilon, n_steps, step_size)
+
+    with torch.no_grad():
+        probs_adv = torch.softmax(model.net(pixel_values=adv_pv).logits, dim=-1)[0]
+    adv_fake_prob = probs_adv[1].item()
+    adv_confidence = adv_fake_prob if adv_fake_prob > 0.5 else probs_adv[0].item()
+
+    try:
+        hm_tensor, _ = model.explain(pixel_values=adv_pv, target_class=1)
+        hm_np = hm_tensor.detach().cpu().numpy()[0]  # (T, H, W) — already [-1, 1]
+    except Exception:  # noqa: BLE001
+        hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    perturbed_frames = [_array_to_data_uri(hm_np[i], magnitude_alpha=True) for i in range(NUM_FRAMES)]
+
+    diff = (adv_pv - pixel_values).abs().detach().cpu().numpy()[0].mean(axis=1)  # (T, H, W)
+    diff_norm = diff / (diff.max() + 1e-8)
+    difference_frames = [_array_to_data_uri(diff_norm[i], magnitude_alpha=True) for i in range(NUM_FRAMES)]
+
+    adv_regions = _extract_anomaly_regions(hm_np)
+    clean_by_region = {r["region"]: r["score"] for r in base_result["anomalyRegions"]}
+    attention_shift = [
+        {
+            "region": r["region"],
+            "before": float(clean_by_region.get(r["region"], 0.0)),
+            "after": float(r["score"]),
+        }
+        for r in adv_regions
+    ]
+    return {
+        "perturbedFrames": perturbed_frames,
+        "perturbedConfidence": adv_confidence,
+        "differenceFrames": difference_frames,
+        "attackMethod": method,
+        "epsilon": epsilon,
+        "attentionShift": attention_shift,
+    }
+
+
 def run_adversarial_inference(
     clip_path: Path,
     method: Literal["FGSM", "PGD"],
@@ -1696,47 +1755,91 @@ def run_adversarial_inference(
     steps: int,
     base_result: dict,
 ) -> dict:
-    """Generate an adversarial perturbation and measure xAI impact.
+    """Generate an adversarial perturbation over the WHOLE clip and measure xAI impact.
 
-    Implements FGSM (steps=1) and PGD natively via PyTorch autograd.
-    The attack maximises CE loss to push the model away from its clean prediction.
+    Implements FGSM (steps=1) and PGD natively via PyTorch autograd, attacking
+    every 16-frame window of the clip (the same chunking as the Phase-1 heatmap
+    pipeline) so the perturbed heatmaps, difference maps, and verdict span the
+    full video rather than a single chunk.  The attack maximises CE loss to push
+    the model away from its clean prediction; per-window AttnLRP then yields the
+    perturbed heatmap, upprojected into the original frame canvas (same full-frame
+    format as the Phase-1 'clean' heatmaps for triptych consistency).
 
     Returns:
         Phase4Result dict.
     """
     model = get_video_model()
-    pixel_values = _preprocess_video(clip_path).to(_device)
+
+    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is None:
+        log.warning(
+            "No face detected in %s — adversarial attack falls back to a single "
+            "full-frame window; the result is out-of-distribution.",
+            clip_path.name,
+        )
+        return _run_adversarial_fullframe(clip_path, method, epsilon, steps, base_result)
+
+    cx1, cy1, cx2, cy2 = prepared.crop_box
+    all_frames = _load_all_frames_cropped(prepared.video_path, cx1, cy1, cx2, cy2)
+    n_frames = all_frames.shape[0]
 
     clean_verdict: Literal["FAKE", "REAL"] = base_result["verdict"]
     target_class = 1 if clean_verdict == "FAKE" else 0
-    step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
     n_steps = 1 if method == "FGSM" else steps
+    step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
 
-    adv_pv = _pgd_attack(model, pixel_values, target_class, epsilon, n_steps, step_size)
+    adv_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    diff_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    adv_fake_prob = 0.0
 
-    with torch.no_grad():
-        logits_adv = model.net(pixel_values=adv_pv).logits
-    probs_adv = torch.softmax(logits_adv, dim=-1)[0]
-    adv_fake_prob = probs_adv[1].item()
-    adv_confidence = adv_fake_prob if adv_fake_prob > 0.5 else probs_adv[0].item()
+    n_chunks = -(-n_frames // NUM_FRAMES)  # ceiling division
+    for window_idx, frame_start in enumerate(range(0, n_frames, NUM_FRAMES)):
+        frame_end = min(frame_start + NUM_FRAMES, n_frames)
+        chunk = all_frames[frame_start:frame_end]  # (k, C, H, W)
+        k = chunk.shape[0]
+        if k < NUM_FRAMES:
+            # Pad the last (partial) window by repeating the final frame.
+            pad = chunk[-1:].expand(NUM_FRAMES - k, -1, -1, -1)
+            chunk = torch.cat([chunk, pad], dim=0)
+        pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
 
-    # Perturbed heatmaps
-    try:
-        hm_tensor, _ = model.explain(pixel_values=adv_pv, target_class=1)
-        hm_np = hm_tensor.detach().cpu().numpy()[0]  # (T, H, W) — already [-1, 1]
-    except Exception:
-        hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        adv_pv = _pgd_attack(model, pv, target_class, epsilon, n_steps, step_size)
 
-    perturbed_frames = [_array_to_data_uri(hm_np[i]) for i in range(NUM_FRAMES)]
+        # Adversarial fake probability — max-pooled over windows (verdict aggregation).
+        with torch.no_grad():
+            logits_adv = model.net(pixel_values=adv_pv).logits  # (1, 2)
+        adv_fake_prob = max(adv_fake_prob, torch.softmax(logits_adv, dim=-1)[0, 1].item())
 
-    # Difference map (magnified perturbation, averaged across channels)
-    diff = (adv_pv - pixel_values).abs().detach().cpu().numpy()[0]  # (T, C, H, W)
-    diff_grey = diff.mean(axis=1)  # (T, H, W)
-    diff_norm = diff_grey / (diff_grey.max() + 1e-8)
-    difference_frames = [_array_to_data_uri(diff_norm[i] * 2 - 1) for i in range(NUM_FRAMES)]
+        try:
+            hm_tensor, _ = model.explain(pixel_values=adv_pv, target_class=1)
+            hm = hm_tensor.detach().cpu().numpy()[0]  # (16, H, W) — already [-1, 1]
+        except Exception:  # noqa: BLE001
+            log.exception("Adversarial AttnLRP failed for window %d of %s", window_idx, clip_path.name)
+            hm = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
 
-    # Attention shift (clean vs. perturbed anomaly regions)
-    adv_regions = _extract_anomaly_regions(hm_np)
+        diff = (adv_pv - pv).abs().detach().cpu().numpy()[0].mean(axis=1)  # (16, H, W)
+
+        adv_hm_full[frame_start:frame_end] = hm[:k]
+        diff_full[frame_start:frame_end] = diff[:k]
+        log.debug("Adversarial window %d/%d processed.", window_idx + 1, n_chunks)
+
+    adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
+    adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
+
+    # Upproject perturbed heatmaps + difference maps into the original frame canvas.
+    # Difference is a non-negative perturbation magnitude → magnitude_alpha renders
+    # it red where the attack changed pixels and transparent (incl. outside the
+    # crop) elsewhere, matching the clean/perturbed full-frame framing.
+    perturbed_frames: list[str] = []
+    difference_frames: list[str] = []
+    for i in range(n_frames):
+        pf = _upproject_heatmap(adv_hm_full[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        perturbed_frames.append(_array_to_data_uri(pf, magnitude_alpha=True))
+        df = _upproject_heatmap(diff_full[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        difference_frames.append(_array_to_data_uri(df, magnitude_alpha=True))
+
+    # Attention shift (clean vs. perturbed anomaly regions over the whole clip).
+    adv_regions = _extract_anomaly_regions(adv_hm_full)
     clean_by_region = {r["region"]: r["score"] for r in base_result["anomalyRegions"]}
     attention_shift = [
         {
@@ -1933,18 +2036,20 @@ def run_multimodal_adversarial_inference(
     attack_modalities: Literal["video", "audio", "both"],
     base_result: dict,
 ) -> dict:
-    """Multimodal adversarial attack using ``MultimodalDeepfakeModule``.
+    """Multimodal adversarial attack over the WHOLE clip via ``MultimodalDeepfakeModule``.
 
-    Jointly perturbs video and/or audio in a single backward pass per step so
-    that cross-modal attention gradients are preserved.  Returns a ``Phase4``
-    dict extended with ``audioAttentionShift`` (frequency-band LRP shift) and
-    ``attackModalities``.
+    Attacks every 16-frame window (with its time-aligned audio window), jointly
+    perturbing video and/or audio in a single backward pass per step so cross-modal
+    attention gradients are preserved. Perturbed heatmaps, difference maps, and the
+    verdict span the full clip (same chunking as the Phase-1/2 heatmap pipeline).
+    Returns a ``Phase4`` dict extended with ``audioAttentionShift`` (frequency-band
+    ablation shift) and ``attackModalities``.
 
     Args:
         clip_path:         Path to the original MP4 clip.
         method:            ``"FGSM"`` (1 step) or ``"PGD"`` (multi-step).
-        epsilon:           L∞ budget for the video modality.
-        audio_epsilon:     L∞ budget for the audio modality.
+        epsilon:           L-inf budget for the video modality.
+        audio_epsilon:     L-inf budget for the audio modality.
         steps:             PGD iterations; ignored for FGSM.
         attack_modalities: Which modalities to perturb.
         base_result:       Clean video-inference dict (must contain
@@ -1954,97 +2059,103 @@ def run_multimodal_adversarial_inference(
         Phase4 result dict with additional keys ``audioAttentionShift`` and
         ``attackModalities``.
     """
-    import subprocess
-
     model = get_multimodal_model()
 
-    # ── Preprocessing ─────────────────────────────────────────────────────────
-    pixel_values, chunk_idx = _preprocess_video_chunked(clip_path)
-    pixel_values = pixel_values.to(_device)
+    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is None:
+        raise RuntimeError(
+            f"No face detected in {clip_path.name}; multimodal adversarial analysis "
+            "requires a face crop. Use unimodal mode for face-less clips."
+        )
 
     try:
-        waveform_np, sample_rate = _load_audio(clip_path)
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"Audio extraction failed for {clip_path.name}: {exc}") from exc
+        waveform_np, sample_rate = _load_audio(prepared.video_path)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"Audio extraction failed for {clip_path.name}; multimodal adversarial analysis requires an audio track."
+        ) from exc
 
-    # Slice the audio window aligned to the attacked video chunk (chunk i covers
-    # samples [i*10240, (i+1)*10240)) so the attack runs on a training-identical
-    # (video, audio) pair. Falls back to the whole waveform when the chunk came
-    # from the no-face fallback or the slice is incomplete.
-    if chunk_idx >= 0:
-        start = chunk_idx * AUDIO_SAMPLES_PER_CHUNK
-        window = waveform_np[start : start + AUDIO_SAMPLES_PER_CHUNK]
-        if len(window) == AUDIO_SAMPLES_PER_CHUNK:
-            waveform_np = window
+    cx1, cy1, cx2, cy2 = prepared.crop_box
+    all_frames = _load_all_frames_cropped(prepared.video_path, cx1, cy1, cx2, cy2)
+    n_frames = all_frames.shape[0]
 
-    waveform_tensor = torch.from_numpy(waveform_np.copy()).unsqueeze(0).to(_device)
-    # Z-score normalise (Wav2Vec2 expects values close to zero-mean unit-variance).
-    waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / (waveform_tensor.std() + 1e-7)
-
-    # ── Attack schedule ───────────────────────────────────────────────────────
+    # Attack schedule
     clean_verdict: Literal["FAKE", "REAL"] = base_result["verdict"]
     target_class = 1 if clean_verdict == "FAKE" else 0
     n_steps = 1 if method == "FGSM" else steps
     step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
     step_size_audio = audio_epsilon if method == "FGSM" else audio_epsilon / steps * 2.5
 
-    adv_pv, adv_iv = _pgd_attack_multimodal(
-        model,
-        pixel_values,
-        waveform_tensor,
-        target_class,
-        epsilon,
-        audio_epsilon,
-        n_steps,
-        step_size,
-        step_size_audio,
-        attack_modalities,
-    )
+    adv_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    diff_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    adv_fake_prob = 0.0
+    # Per-window video tensors for the band-ablation pass: clean and adversarial so
+    # each band-stopped audio window is re-paired with the matching video window.
+    pv_windows: list[torch.Tensor] = []
+    adv_pv_windows: list[torch.Tensor] = []
 
-    # ── Adversarial confidence ────────────────────────────────────────────────
-    with torch.no_grad():
-        logits_adv = model(pixel_values=adv_pv, input_values=adv_iv)
-    probs_adv = torch.softmax(logits_adv, dim=-1)[0]
-    adv_fake_prob = probs_adv[1].item()
-    adv_confidence = adv_fake_prob if adv_fake_prob > 0.5 else probs_adv[0].item()
+    n_chunks = -(-n_frames // NUM_FRAMES)  # ceiling division
+    for window_idx, frame_start in enumerate(range(0, n_frames, NUM_FRAMES)):
+        frame_end = min(frame_start + NUM_FRAMES, n_frames)
+        chunk = all_frames[frame_start:frame_end]  # (k, C, H, W)
+        k = chunk.shape[0]
+        if k < NUM_FRAMES:
+            pad = chunk[-1:].expand(NUM_FRAMES - k, -1, -1, -1)
+            chunk = torch.cat([chunk, pad], dim=0)
+        pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
+        iv = _audio_window_tensor(waveform_np, window_idx)  # (1, 10240) z-scored
+        pv_windows.append(pv)
 
-    # ── Clean LRP ─────────────────────────────────────────────────────────────
-    try:
-        video_hm_clean, _, _ = model.explain(
-            pixel_values=pixel_values,
-            input_values=waveform_tensor,
-            target_class=1,
+        adv_pv, adv_iv = _pgd_attack_multimodal(
+            model,
+            pv,
+            iv,
+            target_class,
+            epsilon,
+            audio_epsilon,
+            n_steps,
+            step_size,
+            step_size_audio,
+            attack_modalities,
         )
-        video_hm_clean_np = video_hm_clean.detach().cpu().numpy()[0]  # (T, H, W)
-    except Exception:  # noqa: BLE001
-        video_hm_clean_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        adv_pv_windows.append(adv_pv)
 
-    # ── Adversarial LRP ───────────────────────────────────────────────────────
-    try:
-        video_hm_adv, _, _ = model.explain(
-            pixel_values=adv_pv,
-            input_values=adv_iv,
-            target_class=1,
-        )
-        video_hm_adv_np = video_hm_adv.detach().cpu().numpy()[0]  # (T, H, W)
-    except Exception:  # noqa: BLE001
-        video_hm_adv_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        # Adversarial fused fake probability -- max-pooled over windows.
+        with torch.no_grad():
+            logits_adv = model(pixel_values=adv_pv, input_values=adv_iv)  # (1, 2)
+        adv_fake_prob = max(adv_fake_prob, torch.softmax(logits_adv, dim=-1)[0, 1].item())
 
-    # ── Perturbed video frames ────────────────────────────────────────────────
-    hm_adv_norm = video_hm_adv_np  # explain() output is already [-1, 1]
-    perturbed_frames = [_array_to_data_uri(hm_adv_norm[i]) for i in range(NUM_FRAMES)]
+        try:
+            video_hm_adv, _, _ = model.explain(pixel_values=adv_pv, input_values=adv_iv, target_class=1)
+            hm = video_hm_adv.detach().cpu().numpy()[0]  # (16, H, W) -- already [-1, 1]
+        except Exception:  # noqa: BLE001
+            log.exception("Multimodal adversarial AttnLRP failed for window %d of %s", window_idx, clip_path.name)
+            hm = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
 
-    # Difference map: L1 pixel delta averaged over channels, normalised to [0, 1].
-    diff = (adv_pv - pixel_values).abs().detach().cpu().numpy()[0]  # (T, C, H, W)
-    diff_grey = diff.mean(axis=1)  # (T, H, W)
-    diff_norm = diff_grey / (diff_grey.max() + 1e-8)
-    difference_frames = [_array_to_data_uri(diff_norm[i] * 2 - 1) for i in range(NUM_FRAMES)]
+        diff = (adv_pv - pv).abs().detach().cpu().numpy()[0].mean(axis=1)  # (16, H, W)
 
-    # ── Video attention shift ─────────────────────────────────────────────────
-    hm_clean_norm = video_hm_clean_np  # explain() output is already [-1, 1]
-    clean_regions = _extract_anomaly_regions(hm_clean_norm)
-    adv_regions = _extract_anomaly_regions(hm_adv_norm)
-    clean_by_region = {r["region"]: r["score"] for r in clean_regions}
+        adv_hm_full[frame_start:frame_end] = hm[:k]
+        diff_full[frame_start:frame_end] = diff[:k]
+        log.debug("Multimodal adversarial window %d/%d processed.", window_idx + 1, n_chunks)
+
+    adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
+    adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
+
+    # Perturbed video frames + difference maps (upprojected into the full frame).
+    # Difference is a non-negative perturbation magnitude -> magnitude_alpha renders
+    # it red where the attack changed pixels and transparent elsewhere, matching the
+    # clean/perturbed full-frame framing.
+    perturbed_frames: list[str] = []
+    difference_frames: list[str] = []
+    for i in range(n_frames):
+        pf = _upproject_heatmap(adv_hm_full[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        perturbed_frames.append(_array_to_data_uri(pf, magnitude_alpha=True))
+        df = _upproject_heatmap(diff_full[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        difference_frames.append(_array_to_data_uri(df, magnitude_alpha=True))
+
+    # Video attention shift (clean base_result vs. adversarial whole clip).
+    adv_regions = _extract_anomaly_regions(adv_hm_full)
+    clean_by_region = {r["region"]: r["score"] for r in base_result["anomalyRegions"]}
     attention_shift = [
         {
             "region": r["region"],
@@ -2054,20 +2165,20 @@ def run_multimodal_adversarial_inference(
         for r in adv_regions
     ]
 
-    # ── Audio frequency-band attention shift ──────────────────────────────────
-    adv_waveform_np = adv_iv.squeeze(0).cpu().numpy()
-    t_len = len(waveform_np)
-    adv_waveform_trimmed = adv_waveform_np[:t_len] if len(adv_waveform_np) >= t_len else waveform_np
+    # Audio frequency-band attention shift: band ablation (D3) on the fusion model,
+    # paired with clean vs. adversarial video windows over the whole clip. The clean
+    # audio waveform is used for both sides; the shift isolates how the attack moved
+    # the fused model's reliance on each audio band.
     clean_bands = _band_confidence(
-        waveform_np, sample_rate, lambda w: _multimodal_mean_fake_margin(model, [pixel_values], w)
+        waveform_np, sample_rate, lambda w: _multimodal_mean_fake_margin(model, pv_windows, w)
     )
     adv_bands = _band_confidence(
-        adv_waveform_trimmed, sample_rate, lambda w: _multimodal_mean_fake_margin(model, [adv_pv], w)
+        waveform_np, sample_rate, lambda w: _multimodal_mean_fake_margin(model, adv_pv_windows, w)
     )
     audio_attention_shift = [
-        {"region": "Low 0\u2013500 Hz", "before": clean_bands["low"], "after": adv_bands["low"]},
-        {"region": "Mid 500\u20134 kHz", "before": clean_bands["mid"], "after": adv_bands["mid"]},
-        {"region": "High 4\u20138 kHz", "before": clean_bands["high"], "after": adv_bands["high"]},
+        {"region": "Low 0–500 Hz", "before": clean_bands["low"], "after": adv_bands["low"]},
+        {"region": "Mid 500–4 kHz", "before": clean_bands["mid"], "after": adv_bands["mid"]},
+        {"region": "High 4–8 kHz", "before": clean_bands["high"], "after": adv_bands["high"]},
     ]
 
     return {
