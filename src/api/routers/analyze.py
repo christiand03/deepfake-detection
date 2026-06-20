@@ -83,6 +83,14 @@ def _run_unimodal_analysis(clip_id: str) -> AnalysisResultSchema:
     if h5_meta is not None:
         if not h5_meta.h5_path.exists():
             raise FileNotFoundError(f"HDF5 file missing: {h5_meta.h5_path}")
+        # Serve-time guard (E2): the normalised MP4 is the single source the heatmap
+        # loader and audio inference read from. A missing file here otherwise surfaces
+        # as a cryptic decord error deep in the pipeline — fail loudly and actionably.
+        if not h5_meta.video_path.exists():
+            raise FileNotFoundError(
+                f"Normalized video missing for clip '{clip_id}': {h5_meta.video_path}. "
+                "Run preprocessing to materialise it under data/normalized/."
+            )
         video_result = run_video_inference_h5(h5_meta)
         video_path = h5_meta.video_path
     else:
