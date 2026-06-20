@@ -337,7 +337,8 @@ class _PreparedClip:
 
     chunks: torch.Tensor  # (M, 16, 3, 224, 224) ImageNet-normalised float32
     chunk_indices: list[int]  # temporal index of each kept chunk in the 25-fps video
-    crop_box: tuple[int, int, int, int]  # per-chunk boxes averaged — for display/upprojection
+    crop_box: tuple[int, int, int, int]  # per-chunk boxes averaged — display fallback
+    chunk_box_map: dict[int, tuple[int, int, int, int]]  # window index -> its face box (A2-Box)
     orig_w: int
     orig_h: int
     video_path: Path  # the 25-fps file the chunks were read from
@@ -382,10 +383,14 @@ def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
     chunks = _normalize_uint8_frames(np.stack(cropped_chunks))  # (M, 16, 3, 224, 224)
     box_arr = np.array(boxes, dtype=np.float32).mean(axis=0)
     crop_box = tuple(int(round(v)) for v in box_arr)
+    # A2-Box: keep each kept window's own box (keyed by its temporal window index)
+    # so heatmaps can be cropped + upprojected with the box that tracks the face.
+    chunk_box_map = dict(zip(chunk_indices, boxes, strict=True))
     return _PreparedClip(
         chunks=chunks,
         chunk_indices=chunk_indices,
         crop_box=crop_box,  # type: ignore[arg-type]
+        chunk_box_map=chunk_box_map,
         orig_w=orig_w,
         orig_h=orig_h,
         video_path=video_path,
@@ -654,6 +659,59 @@ def _load_all_frames_cropped(
     return torch.stack(processed)  # (N, C, H, W)
 
 
+def _resolve_per_window_boxes(
+    n_windows: int,
+    chunk_box_map: dict[int, tuple[int, int, int, int]],
+    fallback_box: tuple[int, int, int, int],
+) -> list[tuple[int, int, int, int]]:
+    """Dense per-window crop boxes (A2-Box), one per contiguous 16-frame window.
+
+    *chunk_box_map* maps a window index to the face box detected for that window;
+    face-less windows (skipped at preprocessing time) are gap-filled by carrying the
+    previous known box forward, with *fallback_box* (the clip-averaged box) for any
+    leading gap. The box used to CROP a window must match the box used to UPPROJECT
+    that window's heatmap, so callers reuse the returned list for both.
+    """
+    boxes: list[tuple[int, int, int, int]] = []
+    last: tuple[int, int, int, int] | None = None
+    for w in range(n_windows):
+        box = chunk_box_map.get(w, last if last is not None else fallback_box)
+        boxes.append(box)
+        last = box
+    return boxes
+
+
+def _load_all_frames_cropped_per_window(
+    clip_path: Path,
+    chunk_box_map: dict[int, tuple[int, int, int, int]],
+    fallback_box: tuple[int, int, int, int],
+) -> tuple[torch.Tensor, list[tuple[int, int, int, int]]]:
+    """Load every frame, cropping each 16-frame window with ITS OWN face box.
+
+    The A2-Box counterpart to :func:`_load_all_frames_cropped`: instead of one box
+    for the whole clip, window ``w`` (frames ``[w*16, (w+1)*16)``) is cropped with
+    the box for that window so the heatmap tracks the moving face. Returns the
+    frames ``(N, C, H, W)`` and the dense per-window box list (reused for
+    upprojection so crop and upprojection always agree).
+    """
+    try:
+        import decord
+
+        decord.bridge.set_bridge("native")
+    except ImportError as exc:
+        raise ModelNotReadyError("decord is not installed; required for video loading.") from exc
+
+    vr = decord.VideoReader(str(clip_path), ctx=decord.cpu(0))
+    n_frames = len(vr)
+    frames_np = vr.get_batch(list(range(n_frames))).asnumpy()  # (N, H, W, C) uint8
+    n_windows = -(-n_frames // NUM_FRAMES)  # ceiling division
+    per_window_boxes = _resolve_per_window_boxes(n_windows, chunk_box_map, fallback_box)
+    processed = [
+        _frame_transform(Image.fromarray(f).crop(per_window_boxes[i // NUM_FRAMES])) for i, f in enumerate(frames_np)
+    ]
+    return torch.stack(processed), per_window_boxes
+
+
 def _compute_heatmaps_chunked(
     model: VideoMAEModule,
     all_frames: torch.Tensor,
@@ -717,6 +775,7 @@ def _video_result_with_heatmaps(
     crop_box: tuple[int, int, int, int],
     orig_w: int,
     orig_h: int,
+    chunk_box_map: dict[int, tuple[int, int, int, int]] | None = None,
 ) -> dict:
     """Build the full analysis dict: face-cropped heatmaps + upprojection + cropBox.
 
@@ -724,10 +783,19 @@ def _video_result_with_heatmaps(
     *video_path* with the face crop applied, computes per-chunk AttnLRP
     heatmaps, derives per-frame scores, and upprojects the 224×224 heatmaps
     back into the original frame canvas.
+
+    When *chunk_box_map* is given (A2-Box), each 16-frame window is cropped and
+    upprojected with its OWN face box (tracking the moving face) instead of one
+    averaged box for the whole clip; *crop_box* then serves as the gap-fill
+    fallback for face-less windows.
     """
     cx1, cy1, cx2, cy2 = crop_box
 
-    all_frames = _load_all_frames_cropped(video_path, cx1, cy1, cx2, cy2)
+    if chunk_box_map:
+        all_frames, per_window_boxes = _load_all_frames_cropped_per_window(video_path, chunk_box_map, crop_box)
+    else:
+        all_frames = _load_all_frames_cropped(video_path, cx1, cy1, cx2, cy2)
+        per_window_boxes = None
     n_frames = all_frames.shape[0]
 
     heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
@@ -735,10 +803,12 @@ def _video_result_with_heatmaps(
     # Per-frame scores: mean absolute LRP relevance
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
 
-    # Upproject each 224×224 heatmap to the original full-frame resolution
+    # Upproject each 224×224 heatmap to the original full-frame resolution, using the
+    # same per-window box it was cropped with (A2-Box) so the heatmap tracks the face.
     heatmap_frames: list[str] = []
     for i in range(n_frames):
-        full_frame = _upproject_heatmap(heatmap_np[i], cx1, cy1, cx2, cy2, orig_w, orig_h)
+        box = per_window_boxes[i // NUM_FRAMES] if per_window_boxes else (cx1, cy1, cx2, cy2)
+        full_frame = _upproject_heatmap(heatmap_np[i], *box, orig_w, orig_h)
         heatmap_frames.append(_array_to_data_uri(full_frame, magnitude_alpha=True))
 
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
@@ -843,6 +913,7 @@ def run_video_inference(
         prepared.crop_box,
         prepared.orig_w,
         prepared.orig_h,
+        chunk_box_map=prepared.chunk_box_map,
     )
 
 
@@ -897,7 +968,12 @@ def run_video_inference_h5(
     confidence = fake_prob if verdict == "FAKE" else 1.0 - fake_prob
 
     # Heatmaps: every source frame with the stored face crop applied, AttnLRP
-    # per 16-frame window, upprojected into the original frame canvas.
+    # per 16-frame window, upprojected into the original frame canvas. A2-Box: each
+    # window uses its own stored box (keyed by temporal chunk index) so the heatmap
+    # tracks the moving face; the anchor box is the gap-fill fallback.
+    chunk_box_map = (
+        {c.chunk_index: (c.crop_x1, c.crop_y1, c.crop_x2, c.crop_y2) for c in h5_chunks} if h5_chunks else None
+    )
     return _video_result_with_heatmaps(
         model,
         verdict,
@@ -906,6 +982,7 @@ def run_video_inference_h5(
         (h5_metadata.crop_x1, h5_metadata.crop_y1, h5_metadata.crop_x2, h5_metadata.crop_y2),
         h5_metadata.orig_w,
         h5_metadata.orig_h,
+        chunk_box_map=chunk_box_map,
     )
 
 
@@ -1374,7 +1451,9 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         ) from exc
 
     cx1, cy1, cx2, cy2 = prepared.crop_box
-    all_frames = _load_all_frames_cropped(prepared.video_path, cx1, cy1, cx2, cy2)
+    all_frames, per_window_boxes = _load_all_frames_cropped_per_window(
+        prepared.video_path, prepared.chunk_box_map, prepared.crop_box
+    )
     n_frames = all_frames.shape[0]
 
     heatmap_np = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
@@ -1425,7 +1504,8 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
     heatmap_frames: list[str] = []
     for i in range(n_frames):
-        full_frame = _upproject_heatmap(heatmap_np[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        box = per_window_boxes[i // NUM_FRAMES]
+        full_frame = _upproject_heatmap(heatmap_np[i], *box, prepared.orig_w, prepared.orig_h)
         heatmap_frames.append(_array_to_data_uri(full_frame, magnitude_alpha=True))
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
 
@@ -1794,8 +1874,9 @@ def run_adversarial_inference(
         )
         return _run_adversarial_fullframe(clip_path, method, epsilon, steps, base_result)
 
-    cx1, cy1, cx2, cy2 = prepared.crop_box
-    all_frames = _load_all_frames_cropped(prepared.video_path, cx1, cy1, cx2, cy2)
+    all_frames, per_window_boxes = _load_all_frames_cropped_per_window(
+        prepared.video_path, prepared.chunk_box_map, prepared.crop_box
+    )
     n_frames = all_frames.shape[0]
 
     clean_verdict: Literal["FAKE", "REAL"] = base_result["verdict"]
@@ -1848,9 +1929,10 @@ def run_adversarial_inference(
     perturbed_frames: list[str] = []
     difference_frames: list[str] = []
     for i in range(n_frames):
-        pf = _upproject_heatmap(adv_hm_full[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        box = per_window_boxes[i // NUM_FRAMES]
+        pf = _upproject_heatmap(adv_hm_full[i], *box, prepared.orig_w, prepared.orig_h)
         perturbed_frames.append(_array_to_data_uri(pf, magnitude_alpha=True))
-        df = _upproject_heatmap(diff_full[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        df = _upproject_heatmap(diff_full[i], *box, prepared.orig_w, prepared.orig_h)
         difference_frames.append(_array_to_data_uri(df, magnitude_alpha=True))
 
     # Attention shift (clean vs. perturbed anomaly regions over the whole clip).
@@ -2090,8 +2172,9 @@ def run_multimodal_adversarial_inference(
             f"Audio extraction failed for {clip_path.name}; multimodal adversarial analysis requires an audio track."
         ) from exc
 
-    cx1, cy1, cx2, cy2 = prepared.crop_box
-    all_frames = _load_all_frames_cropped(prepared.video_path, cx1, cy1, cx2, cy2)
+    all_frames, per_window_boxes = _load_all_frames_cropped_per_window(
+        prepared.video_path, prepared.chunk_box_map, prepared.crop_box
+    )
     n_frames = all_frames.shape[0]
 
     # Attack schedule
@@ -2163,9 +2246,10 @@ def run_multimodal_adversarial_inference(
     perturbed_frames: list[str] = []
     difference_frames: list[str] = []
     for i in range(n_frames):
-        pf = _upproject_heatmap(adv_hm_full[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        box = per_window_boxes[i // NUM_FRAMES]
+        pf = _upproject_heatmap(adv_hm_full[i], *box, prepared.orig_w, prepared.orig_h)
         perturbed_frames.append(_array_to_data_uri(pf, magnitude_alpha=True))
-        df = _upproject_heatmap(diff_full[i], cx1, cy1, cx2, cy2, prepared.orig_w, prepared.orig_h)
+        df = _upproject_heatmap(diff_full[i], *box, prepared.orig_w, prepared.orig_h)
         difference_frames.append(_array_to_data_uri(df, magnitude_alpha=True))
 
     # Video attention shift (clean base_result vs. adversarial whole clip).

@@ -22,6 +22,7 @@ from src.api.inference import (
     _ensure_target_fps,
     _normalize_uint8_frames,
     _prepare_uploaded_video,
+    _resolve_per_window_boxes,
     _windowed_audio_fake_prob,
 )
 from src.utils.vision_constants import IMAGENET_MEAN, IMAGENET_STD
@@ -137,6 +138,8 @@ def test_prepare_uploaded_video_shapes_indices_and_box(tmp_path: Path):
     assert prepared.chunks.dtype == torch.float32
     assert prepared.chunk_indices == [0, 1]
     assert prepared.crop_box == (12, 22, 112, 122)  # mean of the two boxes
+    # A2-Box: each window keeps its OWN box, keyed by temporal window index.
+    assert prepared.chunk_box_map == {0: (10, 20, 110, 120), 1: (14, 24, 114, 124)}
     assert (prepared.orig_w, prepared.orig_h) == (640, 360)
     assert prepared.video_path == clip
 
@@ -151,6 +154,23 @@ def test_prepare_uploaded_video_skips_faceless_chunks(tmp_path: Path):
     assert prepared.chunks.shape[0] == 2
     # Temporal indices of the KEPT chunks — the face-less chunk 1 is skipped.
     assert prepared.chunk_indices == [0, 2]
+    # A2-Box: the face-less window 1 has no box entry (gap-filled at heatmap time).
+    assert set(prepared.chunk_box_map) == {0, 2}
+
+
+def test_resolve_per_window_boxes_gap_fill():
+    """Face-less windows carry the previous box forward; leading gaps use fallback."""
+    fallback = (0, 0, 224, 224)
+    box0 = (10, 10, 110, 110)
+    box2 = (30, 30, 130, 130)
+    # Windows 0 and 2 detected; window 1 (gap) carries box0 forward; window 3
+    # (trailing gap) carries box2 forward.
+    boxes = _resolve_per_window_boxes(4, {0: box0, 2: box2}, fallback)
+    assert boxes == [box0, box0, box2, box2]
+
+    # Leading gap (window 0 face-less) falls back to the averaged box.
+    boxes_lead = _resolve_per_window_boxes(3, {2: box2}, fallback)
+    assert boxes_lead == [fallback, fallback, box2]
 
 
 def test_prepare_uploaded_video_all_faceless_returns_none(tmp_path: Path):
