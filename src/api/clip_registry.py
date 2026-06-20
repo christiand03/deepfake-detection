@@ -82,6 +82,34 @@ class ClipH5Metadata:
     video_path: Path
 
 
+@dataclass(frozen=True)
+class ClipH5Chunk:
+    """One preprocessed chunk of a clip's video.
+
+    Used for whole-clip verdict pooling (E1) and per-chunk crop boxes (A2-Box):
+    one of these per stored chunk of a ``video_id``, ordered by temporal index.
+
+    Attributes:
+        h5_path:     HDF5 file holding the chunk's video tensor.
+        h5_index:    Row index inside the HDF5 ``video`` dataset.
+        chunk_index: Temporal index parsed from ``chunk_id`` (``chunk{NNNNN}``);
+                     face-less chunks are skipped at preprocessing time, so this
+                     sequence may have gaps.
+        crop_x1/y1/x2/y2: Face crop rectangle in the normalised-video pixel space.
+        orig_w/h:    Normalised video frame dimensions.
+    """
+
+    h5_path: Path
+    h5_index: int
+    chunk_index: int
+    crop_x1: int
+    crop_y1: int
+    crop_x2: int
+    crop_y2: int
+    orig_w: int
+    orig_h: int
+
+
 # Module-level cache: chunk_id → raw CSV row dict.  Populated lazily on first call.
 _csv_cache: dict[str, dict[str, str]] = {}
 # Module-level cache for clips.json raw entries.  Populated lazily on first call.
@@ -192,3 +220,57 @@ def get_clip_h5_metadata(clip_id: str) -> ClipH5Metadata | None:
         orig_h=int(row.get("orig_h") or 224),
         video_path=Path("data") / "normalized" / f"{row['video_id']}.mp4",
     )
+
+
+def _parse_chunk_index(chunk_id: str) -> int:
+    """Parse the temporal chunk index from a ``..._chunk{NNNNN}`` chunk_id."""
+    tail = chunk_id.rsplit("__chunk", 1)
+    if len(tail) == 2 and tail[1].isdigit():  # noqa: PLR2004
+        return int(tail[1])
+    return 0
+
+
+def get_clip_h5_chunks(clip_id: str) -> list[ClipH5Chunk]:
+    """Return **all** preprocessed chunks of a clip's video, ordered temporally.
+
+    Resolves the clip's ``video_id`` from its anchor ``h5ChunkId`` row, then
+    collects every metadata-CSV row sharing that ``video_id``. Used for whole-clip
+    verdict pooling (E1) and per-chunk crop boxes (A2-Box).
+
+    Args:
+        clip_id: The ``id`` field from ``clips.json`` (e.g. ``"clip_01"``).
+
+    Returns:
+        Temporally-ordered list of :class:`ClipH5Chunk`, or ``[]`` if the clip,
+        its ``h5ChunkId``, or its CSV rows are absent.
+    """
+    raw = _load_clips_json()
+    entry = next((e for e in raw if e.get("id") == clip_id), None)
+    if entry is None:
+        return []
+    h5_chunk_id = entry.get("h5ChunkId")
+    if not h5_chunk_id:
+        return []
+    rows = _load_all_csv_rows()
+    anchor = rows.get(h5_chunk_id)
+    if anchor is None:
+        log.warning("Chunk %s not found in any metadata CSV", h5_chunk_id)
+        return []
+    video_id = anchor["video_id"]
+    chunks = [
+        ClipH5Chunk(
+            h5_path=Path(r["h5_path"]),
+            h5_index=int(r["h5_index"]),
+            chunk_index=_parse_chunk_index(r["chunk_id"]),
+            crop_x1=int(r.get("crop_x1") or 0),
+            crop_y1=int(r.get("crop_y1") or 0),
+            crop_x2=int(r.get("crop_x2") or 224),
+            crop_y2=int(r.get("crop_y2") or 224),
+            orig_w=int(r.get("orig_w") or 224),
+            orig_h=int(r.get("orig_h") or 224),
+        )
+        for r in rows.values()
+        if r.get("video_id") == video_id
+    ]
+    chunks.sort(key=lambda c: c.chunk_index)
+    return chunks

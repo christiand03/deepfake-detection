@@ -11,7 +11,12 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 
 from src.api.analysis_cache import load_cached, save_cache
-from src.api.clip_registry import get_clip_h5_metadata, get_clip_video_path, load_clips
+from src.api.clip_registry import (
+    get_clip_h5_chunks,
+    get_clip_h5_metadata,
+    get_clip_video_path,
+    load_clips,
+)
 from src.api.inference import (
     ModelNotReadyError,
     run_audio_inference,
@@ -91,7 +96,9 @@ def _run_unimodal_analysis(clip_id: str) -> AnalysisResultSchema:
                 f"Normalized video missing for clip '{clip_id}': {h5_meta.video_path}. "
                 "Run preprocessing to materialise it under data/normalized/."
             )
-        video_result = run_video_inference_h5(h5_meta)
+        # E1: pool the verdict over ALL chunks of the clip, not just chunk00000.
+        h5_chunks = get_clip_h5_chunks(clip_id)
+        video_result = run_video_inference_h5(h5_meta, h5_chunks)
         video_path = h5_meta.video_path
     else:
         clip_path = get_clip_video_path(clip_id)

@@ -43,6 +43,7 @@ from src.utils.vision_constants import IMAGENET_MEAN, IMAGENET_STD
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from src.api.clip_registry import ClipH5Chunk as ClipH5Chunk
     from src.api.clip_registry import ClipH5Metadata as ClipH5Metadata
     from src.models.multimodal_module import MultimodalDeepfakeModule
     from src.models.VideoMAE_module import VideoMAEModule
@@ -847,6 +848,7 @@ def run_video_inference(
 
 def run_video_inference_h5(
     h5_metadata: ClipH5Metadata,
+    h5_chunks: list[ClipH5Chunk] | None = None,
 ) -> dict:
     """Run video deepfake detection from preprocessed HDF5 data.
 
@@ -859,8 +861,14 @@ def run_video_inference_h5(
     frame, replacing the slow 16-pass occlusion-sensitivity method.
 
     Args:
-        h5_metadata: :class:`~src.api.clip_registry.ClipH5Metadata` from
-                     :func:`~src.api.clip_registry.get_clip_h5_metadata`.
+        h5_metadata: :class:`~src.api.clip_registry.ClipH5Metadata` for the
+                     anchor chunk (drives the heatmap crop box + video path).
+        h5_chunks:   All chunks of the clip's video
+                     (:func:`~src.api.clip_registry.get_clip_h5_chunks`). When
+                     given, the verdict is **max-pooled over every chunk** (E1) \u2014
+                     the same aggregation as the upload/audio/multimodal paths, so
+                     a FAKE clip whose manipulation is not in chunk 0 is still
+                     caught. Falls back to the single anchor chunk when ``None``.
 
     Returns:
         Dict with keys: verdict, confidence, perFrameScores, heatmapFrames,
@@ -871,15 +879,22 @@ def run_video_inference_h5(
     """
     model = get_video_model()
 
-    # Verdict/confidence: use the 16-frame HDF5 chunk (exact training format, fast)
-    pixel_values = _load_from_hdf5(h5_metadata.h5_path, h5_metadata.h5_index).to(_device)
-    with torch.no_grad():
-        logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
+    # Verdict/confidence: max-pool the fake probability over ALL chunks of the clip
+    # (E1). Each chunk is the exact 16-frame training tensor; chunks run one at a
+    # time inside _chunked_fake_prob (VRAM-safe).
+    if h5_chunks:
+        all_chunks = torch.stack(
+            [_load_from_hdf5(c.h5_path, c.h5_index).squeeze(0) for c in h5_chunks]
+        )  # (M, T, C, H, W)
+        fake_prob = _chunked_fake_prob(model, all_chunks)
+    else:
+        pixel_values = _load_from_hdf5(h5_metadata.h5_path, h5_metadata.h5_index).to(_device)
+        with torch.no_grad():
+            logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
+        fake_prob = torch.softmax(logits, dim=-1)[0, 1].item()
 
-    probs = torch.softmax(logits, dim=-1)[0]  # class 0 = REAL, 1 = FAKE
-    fake_prob = probs[1].item()
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
-    confidence = fake_prob if verdict == "FAKE" else probs[0].item()
+    confidence = fake_prob if verdict == "FAKE" else 1.0 - fake_prob
 
     # Heatmaps: every source frame with the stored face crop applied, AttnLRP
     # per 16-frame window, upprojected into the original frame canvas.
