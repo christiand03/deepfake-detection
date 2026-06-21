@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { seismicToRgb } from '../../lib/seismicColormap'
+import { relevanceToRgb } from '../../lib/seismicColormap'
 import type { AudioAnalysis } from '../../types/analysis'
 
 interface WaveformRelevanceLayerProps {
@@ -61,7 +61,7 @@ function drawWaveform(
   // ── Relevance strip (top) ──────────────────────────────────────────────
   for (let x = 0; x < w; x++) {
     const rel = relBuckets[x]
-    const [r, g, b] = seismicToRgb(rel)
+    const [r, g, b] = relevanceToRgb(rel)
     const alpha = 0.75 * Math.min(1, Math.abs(rel) * 2 + 0.15)
     ctx.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(3)})`
     ctx.fillRect(x, 0, 1, RELEVANCE_H)
@@ -80,7 +80,7 @@ function drawWaveform(
     const amp = ampBuckets[x]
     const barH = Math.max(1, (amp / maxAmp) * waveMaxH)
     const rel = relBuckets[x]
-    const [r, g, b] = seismicToRgb(rel)
+    const [r, g, b] = relevanceToRgb(rel)
     const alpha = 0.5 * Math.min(1, Math.abs(rel) + 0.3)
 
     // Grey base bar

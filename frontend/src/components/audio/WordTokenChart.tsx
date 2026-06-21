@@ -18,7 +18,7 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts'
-import { seismicToRgb } from '../../lib/seismicColormap'
+import { relevanceToRgb } from '../../lib/seismicColormap'
 import { useActiveWordIndex } from '../../hooks/useActiveWordIndex'
 import type { WordSegment } from '../../types/analysis'
 
@@ -34,7 +34,7 @@ interface BarEntry {
 }
 
 function seismicFill(relevance: number): string {
-  const [r, g, b] = seismicToRgb(relevance)
+  const [r, g, b] = relevanceToRgb(relevance)
   const alpha = 0.7 + 0.3 * Math.abs(relevance)
   return `rgba(${r},${g},${b},${alpha.toFixed(2)})`
 }

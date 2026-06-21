@@ -15,7 +15,7 @@
  */
 
 import { motion } from 'framer-motion'
-import { seismicToRgb } from '../../lib/seismicColormap'
+import { relevanceToRgb } from '../../lib/seismicColormap'
 import type { FrequencyBands } from '../../types/analysis'
 
 interface FrequencyBandChartProps {
@@ -28,10 +28,28 @@ const BAND_DEFS = [
   { key: 'high' as const, label: 'High', range: '4–8 kHz', desc: 'Consonants' },
 ]
 
+// Lift small band magnitudes onto a clear-colour floor so even a weakly-contributing
+// band reads as a proper blue/red instead of washing out near white — the bar WIDTH
+// already encodes the magnitude, so colour only needs to convey direction. Sign is
+// preserved; an exactly-zero band stays neutral (white).
+function boostMagnitude(value: number): number {
+  if (value === 0) return 0
+  return Math.sign(value) * (0.55 + 0.45 * Math.abs(value))
+}
+
 function bandColor(value: number): string {
-  const [r, g, b] = seismicToRgb(value)
-  const alpha = 0.8 + 0.2 * Math.abs(value)
+  const [r, g, b] = relevanceToRgb(boostMagnitude(value))
+  const alpha = 0.85 + 0.15 * Math.abs(value)
   return `rgba(${r},${g},${b},${alpha.toFixed(2)})`
+}
+
+// Text colour for the band label + value: same (boosted) hue as the bar but lightened
+// toward white so small monospace text stays legible on the dark panel.
+function bandTextColor(value: number): string {
+  const [r, g, b] = relevanceToRgb(boostMagnitude(value))
+  const mix = 0.22
+  const l = (c: number) => Math.round(c + (255 - c) * mix)
+  return `rgb(${l(r)},${l(g)},${l(b)})`
 }
 
 function bandGlow(value: number): string {
@@ -60,6 +78,7 @@ export function FrequencyBandChart({ bands }: FrequencyBandChartProps) {
           const value = bands[band.key]
           const pct = Math.abs(value) * 100
           const color = bandColor(value)
+          const textColor = bandTextColor(value)
           const glow = bandGlow(value)
           const isPositive = value > 0
 
@@ -80,7 +99,7 @@ export function FrequencyBandChart({ bands }: FrequencyBandChartProps) {
                       fontSize: 11,
                       fontFamily: 'monospace',
                       fontWeight: 600,
-                      color: color,
+                      color: textColor,
                     }}
                   >
                     {band.label}
@@ -99,7 +118,7 @@ export function FrequencyBandChart({ bands }: FrequencyBandChartProps) {
                   style={{
                     fontSize: 11,
                     fontFamily: 'monospace',
-                    color: color,
+                    color: textColor,
                     fontWeight: 600,
                   }}
                 >
