@@ -70,6 +70,8 @@ Last updated: 2026-06-16T00:00:00Z
 | results-001 | Wav2Vec2 Phase-1 Audio Baseline | [[Results/wav2vec2-phase1-audio-baseline]] | active | Phase 1 — unimodal audio | [[Sources/Papers/wav2vec2-baevski-2020]], [[Sources/Papers/av-deepfake1m]] | 2026-06-16T00:00:00Z |
 | results-002 | Multimodal Cross-Attention Fusion Phase-1 | [[Results/multimodal-fusion-phase1-baseline]] | active | Phase 2 — multimodal fusion (cross_attention) | [[Sources/Papers/videomae-tong-2022]], [[Sources/Papers/wav2vec2-baevski-2020]] | 2026-06-16T00:00:00Z |
 | results-003 | Multimodal Concat Fusion Phase-1 (ablation) | [[Results/multimodal-concat-phase1-ablation]] | active | Phase 2 — multimodal fusion (concat ablation) | [[Sources/Papers/videomae-tong-2022]], [[Sources/Papers/wav2vec2-baevski-2020]] | 2026-06-16T00:00:00Z |
+| results-004 | VideoMAE Unimodal Video Baseline (P1/P2) | [[Results/videomae-unimodal-video-baseline]] | active | Phase 1/2 — unimodal video | [[Sources/Papers/videomae-tong-2022]] | 2026-06-16T00:00:00Z |
+| results-005 | Wav2Vec2 Phase-2 Audio End-to-End | [[Results/wav2vec2-phase2-audio-end-to-end]] | active | Phase 2 — unimodal audio | [[Sources/Papers/wav2vec2-baevski-2020]] | 2026-06-16T00:00:00Z |
 
 ## Writing
 

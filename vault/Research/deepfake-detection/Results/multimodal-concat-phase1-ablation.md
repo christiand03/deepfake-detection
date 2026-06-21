@@ -16,10 +16,16 @@ tags: [Results, Multimodal, Concat, Fusion, Ablation, Phase2]
 > [!summary] Headline
 > Concat fusion (`fusion_mode=concat`, both backbones frozen) is the **mechanism-off
 > ablation** for [[multimodal-fusion-phase1-baseline]]. Result: **cross-attention beats
-> concat on all eight test metrics**, and ~3× on the visual-only category
-> (concat +0.036 vs cross +0.100 over audio). The gain is attributable to the
-> **cross-modal attention mechanism**, not merely to having both modalities.
+> concat on all eight test metrics**, including visual-only (cross 0.932 vs concat
+> 0.868 — both valid under the combined `label`, 273 pos). The gain is attributable to
+> the **cross-modal attention mechanism**, not merely to having both modalities.
 > Single seed + tiny eval → directionally strong, not yet statistically confirmed.
+>
+> [!error] Correction (2026-06-16)
+> The earlier "concat +0.036 vs cross +0.100 **over audio**" framing is retracted: the
+> audio baseline's visual-only 0.832 is a degenerate 4-positive metric (see
+> [[wav2vec2-phase1-audio-baseline]]). The concat-vs-cross comparison stands (same
+> combined `label`); only the deltas-over-audio are removed.
 
 ## Run configuration
 
@@ -33,21 +39,26 @@ Per-manipulation test AUC (real vs each fake category):
 
 | Category | Audio (r-001) | Concat (r-003) | Cross-Attn (r-002) | best |
 |---|---|---|---|---|
-| audio-manip. | 0.982 | 0.946 | 0.957 | audio |
-| both-manip. | 0.984 | 0.978 | 0.988 | cross |
-| **visual-only** | 0.832 | 0.868 | **0.932** | **cross** |
+| audio-manip. | 0.982 † | 0.946 | 0.957 | — † |
+| both-manip. | 0.984 † | 0.978 | 0.988 | cross |
+| **visual-only** | ❌ 0.832 deg. | 0.868 | **0.932** | **cross** |
 
-Aggregate video-level test:
+† The **audio column uses `label_audio`** (different task from the fusion columns'
+combined `label`) — listed for context only, not a like-for-like comparison. Its
+**visual-only 0.832 is degenerate** (4 positive videos) and must be ignored. The
+valid, like-for-like comparison is **concat vs cross-attention** (both combined
+`label`): cross-attention wins on visual-only (0.932 vs 0.868) and every aggregate.
 
-| metric | Audio | Concat | Cross-Attn |
-|---|---|---|---|
-| auc_video | **0.976** | 0.934 | 0.960 |
-| ap_video | 0.976 | 0.966 | 0.979 |
-| acc_video | 0.787 | 0.877 | 0.908 |
-| f1_video | 0.815 | 0.913 | 0.934 |
+Aggregate video-level test (concat vs cross-attn — like-for-like):
 
-Cross-attention > concat on every metric. Aggregate `auc_video` still topped by the
-audio baseline — fusion benefit remains visual-only-specific.
+| metric | Concat | Cross-Attn |
+|---|---|---|
+| auc_video | 0.934 | **0.960** |
+| ap_video | 0.966 | **0.979** |
+| acc_video | 0.877 | **0.908** |
+| f1_video | 0.913 | **0.934** |
+
+Cross-attention > concat on every metric.
 
 ## Two tempering findings
 
@@ -80,6 +91,23 @@ the checkpoint).
 - [ ] **Note in the methods section** that the current ablation is *mechanism on/off*,
       NOT parameter-matched (reported 3.42M is identical only because the attention
       modules are built-but-unused in concat).
+
+## ⚠️ TODO — guard degenerate per-category AUCs
+
+`_video_eval_epoch_end` ([src/models/base_module.py:488-493](../../../src/models/base_module.py))
+logs `test/auc_video_{cat}` whenever a category mask has ≥2 classes. For **unimodal**
+models the cross-modal category collapses to ~one class under the modality label, so
+the guard passes on only **4–5 boundary-noise positive videos** and reports a noise
+AUC (audio model visual-only: 0.832 at P1 → 0.998 at P2; video model audio-only: 0.760
+→ 1.000). This produced a retracted claim across results-001/002/003.
+
+- [ ] **Add a minimum-positives guard** (e.g. skip / log `nan` when
+      `video_labels[mask].sum() < 20` or the minority class < ~20 videos) so degenerate
+      cross-modal AUCs are never reported.
+- [ ] Optionally log the per-category **positive count** alongside each AUC so
+      degeneracy is visible in W&B at a glance.
+- [ ] Backfill: once guarded, the unimodal notes should show only own-modality + `both`
+      categories.
 
 ## Connections
 

@@ -72,6 +72,8 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 
 ### Results
 - [[Results/wav2vec2-phase1-audio-baseline]]
+- [[Results/wav2vec2-phase2-audio-end-to-end]]
+- [[Results/videomae-unimodal-video-baseline]]
 - [[Results/multimodal-fusion-phase1-baseline]]
 - [[Results/multimodal-concat-phase1-ablation]]
 

@@ -14,13 +14,22 @@ tags: [Results, Multimodal, CrossAttention, Fusion, Phase2, VideoMAE, Wav2Vec2]
 # Multimodal Cross-Attention Fusion Phase-1 (frozen backbones)
 
 > [!summary] Headline
-> Cross-attention fusion (both backbones **frozen**) **achieves its design goal**:
-> visual-only test AUC **0.832 → 0.932 (+0.10)** vs the audio baseline
-> [[wav2vec2-phase1-audio-baseline]], and a far better operating point
-> (acc_video +0.12, f1_video +0.12). **But** it is not a clean win — aggregate
-> `auc_video` dips slightly (0.976 → 0.960, likely within noise) and the run now
-> **overfits** (the audio baseline did not). **Not yet conclusive** — see the gate
-> at the bottom. Canonical RQs: [[research-question-card]] (Phase 2).
+> Cross-attention fusion (both backbones **frozen**, combined `label`) reaches
+> **test `auc_video` 0.960**, with valid per-category AUCs of audio 0.957 / both 0.988
+> / **visual-only 0.932** (273 positive videos — valid under the combined label). The
+> run **overfits** (train loss 0.214 < val 0.343). Cross-attention beats concat
+> ([[multimodal-concat-phase1-ablation]]). **Not yet conclusive** — see the gate.
+> Canonical RQs: [[research-question-card]] (Phase 2).
+>
+> [!error] Correction (2026-06-16)
+> The original headline ("visual-only 0.832 → 0.932, +0.10 vs the audio baseline") is
+> **retracted**: the audio baseline's 0.832 is a degenerate 4-positive metric
+> ([[wav2vec2-phase1-audio-baseline]]). Unimodal (`label_audio`/`label_video`) and
+> multimodal (combined `label`) runs are **different-label tasks**, so their
+> `auc_video` are not directly comparable — the "−0.016 aggregate dip vs audio" and
+> "+0.10 visual" deltas below are cross-task and have been removed. Fusion's visual
+> 0.932 **is** valid on its own (273 pos); the right comparison is vs the VIDEO model
+> ([[videomae-unimodal-video-baseline]]: frozen 0.745 → unfrozen 0.999).
 
 ## Run configuration
 
@@ -35,31 +44,35 @@ tags: [Results, Multimodal, CrossAttention, Fusion, Phase2, VideoMAE, Wav2Vec2]
 | Precision / sampling | bf16-mixed; balanced_sampling off; mixup 0; label-smoothing 0; class_weights auto |
 | Stopping | EarlyStopping on `val/auc_video` (patience 5); stopped **epoch 7**, ~14.4 h |
 
-## Per-manipulation test AUC vs audio baseline (the key comparison)
+## Per-manipulation test AUC (all valid — combined `label`, 272–277 pos each)
 
-`test/auc_video_{cat}` = real videos vs one fake category each.
+`test/auc_video_{cat}` = real videos vs one fake category each. Under the combined
+`label` every manipulation category is genuinely positive, so all three cells are
+valid (unlike the unimodal notes, where cross-modal cells are degenerate).
 
-| Category (real vs …) | Audio-only (results-001) | **Multimodal fusion** | Δ |
-|---|---|---|---|
-| audio-manipulated | 0.982 | 0.957 | **−0.025** |
-| both-manipulated | 0.984 | 0.988 | +0.004 |
-| **visual-only** | **0.832** | **0.932** | **+0.100** |
+| Category (real vs …) | Multimodal cross-attn | Positive videos |
+|---|---|---|
+| audio-manipulated | 0.957 | 272 |
+| both-manipulated | 0.988 | 277 |
+| **visual-only** | **0.932** | 273 |
 
-**Hypothesis confirmed:** the VideoMAE stream closes the visual-only gap the audio
-model was blind to (genuine audio there). Small audio-category regression — see gate.
+Balanced across all three manipulation types — the point of fusion. For the
+visual-only number, compare against the **VIDEO** model (the modality that owns it):
+[[videomae-unimodal-video-baseline]] (frozen 0.745 → unfrozen 0.999), **not** the
+audio baseline. NB the frozen-fusion 0.932 already beats the frozen video probe
+(0.745), but an *unfrozen* video model alone hits 0.999 — so a Phase-2 (unfrozen)
+fusion run is the real test of whether fusion adds value over the best unimodal.
 
-## Aggregate video-level metrics vs audio baseline
+## Aggregate video-level metrics
 
-| Video-level metric | Audio-only | Multimodal | Δ |
-|---|---|---|---|
-| auc_video | 0.976 | 0.960 | −0.016 |
-| ap_video | 0.976 | 0.979 | +0.003 |
-| **acc_video** | 0.787 | **0.908** | **+0.121** |
-| **f1_video** | 0.815 | **0.934** | **+0.119** |
+| Video-level metric | Multimodal cross-attn |
+|---|---|
+| auc_video | 0.960 |
+| ap_video | 0.979 |
+| acc_video | 0.908 |
+| f1_video | 0.934 |
 
-Threshold-free `auc_video` dips slightly (driven by the audio category); every
-operating-point metric (acc/f1 at 0.5 threshold) improves markedly. The audio
-baseline's poorly-balanced max-pool operating point (acc_video 0.787) is fixed.
+(Not tabulated against the audio baseline — different label/task; see the correction.)
 
 ## Overfitting (new vs the audio baseline)
 
@@ -78,22 +91,24 @@ Expect this to worsen in Phase-2 end-to-end (unfrozen backbones → far more cap
 ## Evidence gate — what this run does NOT yet establish
 
 > [!warning] Not conclusive without:
-> 1. **VideoMAE-only Phase-1 baseline.** "Fusion helps" is proven only vs *audio*.
->    Fusion's audio-category 0.957 must be judged against video-only's per-category
->    AUCs. → 3-way per-category table needed.
+> 1. ✅ **VideoMAE-only baseline now exists** → [[videomae-unimodal-video-baseline]]
+>    (visual-only: frozen 0.745 → unfrozen 0.999). Open: a **Phase-2 (unfrozen)
+>    fusion** run, so fusion is compared to the *unfrozen* unimodal models, not just
+>    the frozen probes — otherwise "fusion vs best unimodal" stays unanswered.
 > 2. ✅ **Fusion-mode ablation done** → [[multimodal-concat-phase1-ablation]]:
 >    cross-attention beats concat on all eight test metrics (visual-only 0.932 vs
 >    0.868), isolating the *mechanism* as the source of gain. Caveat: not yet
 >    parameter-matched — see the dead-attention-params TODO in that note.
 >    (`video_only` / `audio_only` modes still untested.)
-> 3. **Seed repeats (≥3).** Single seed; the auc_video dip (−0.016) and visual-only
->    gain (+0.10) both need error bars. Test set is small (6 identities / 1,169 videos).
+> 3. **Seed repeats (≥3).** Single seed; the cross-vs-concat visual-only gap (0.932 vs
+>    0.868) needs error bars. Test set is small (6 identities / 1,169 videos).
 
 ## Connections
 
-- Audio baseline (motivation + comparison): [[wav2vec2-phase1-audio-baseline]]
+- Audio baseline (different-label task): [[wav2vec2-phase1-audio-baseline]]
+- Video baseline (correct visual-only comparison): [[videomae-unimodal-video-baseline]]
+- Concat ablation (mechanism-off): [[multimodal-concat-phase1-ablation]]
 - Research questions: [[research-question-card]] (Phase 2 — multimodal fusion)
 - Backbone sources: [[videomae-tong-2022]], [[wav2vec2-baevski-2020]]
 - Dataset / split provenance: identity-disjoint, `split_seed=11` (no leakage verified)
-- Concat ablation (mechanism-off): [[multimodal-concat-phase1-ablation]]
-- Pending: VideoMAE Phase-1 result note; `video_only`/`audio_only` modes; seeded reruns.
+- Pending: Phase-2 (unfrozen) fusion run; `video_only`/`audio_only` modes; seeded reruns.

@@ -15,10 +15,16 @@ tags: [Results, Wav2Vec2, Phase1, AudioBaseline]
 
 > [!summary] Headline
 > Frozen `facebook/wav2vec2-base` + trained head gives a **strong audio deepfake
-> baseline**: video-level **`val/auc_video 0.975`, `test/auc_video 0.976`**. It is
-> near-ceiling on audio-manipulated and fully-manipulated fakes but **weak on
-> visual-only manipulations (0.832)** — the key motivation for Phase-2 fusion.
+> baseline**: video-level **`val/auc_video 0.975`, `test/auc_video 0.976`**,
+> near-ceiling on audio-manipulated (0.982) and fully-manipulated (0.984) fakes.
 > Not overfit. Canonical RQs: [[research-question-card]] (Phase 1).
+>
+> [!error] Correction (2026-06-16)
+> An earlier version of this note claimed "weak on visual-only manipulations (0.832)
+> → motivates fusion." **That number is a degenerate metric and is retracted** — see
+> the per-manipulation section. The audio model labels visual-only fakes as *real*
+> (genuine audio), so that category has only **4** positive videos and its AUC is
+> noise. Use the VIDEO model as the visual-only baseline instead.
 
 ## Run configuration
 
@@ -46,20 +52,31 @@ Two metric families (see [base_module.py](../../../src/models/base_module.py)):
 | Acc (test) | 0.945 | 0.787 |
 | F1 (test) | 0.663 | 0.815 |
 
-## Key finding — per-manipulation breakdown (test)
+## Per-manipulation breakdown (test) — read the validity column
 
-`test/auc_video_{cat}` scores **real videos vs one fake category each**:
+`test/auc_video_{cat}` scores **real videos vs one fake category each**, using this
+model's label (`label_audio`). Validity depends on how many positive videos the
+category actually has under `label_audio` (verified from the test metadata CSV):
 
-| Category | AUC | Reading |
-|---|---|---|
-| audio-manipulated | **0.982** | near ceiling — audio track carries the artifact |
-| both-manipulated | **0.984** | near ceiling — audio also manipulated |
-| **visual-only manipulated** | **0.832** | **weak spot** — audio is genuine, so an audio-only model has little signal |
+| Category | AUC | Positive videos | Validity |
+|---|---|---|---|
+| audio-manipulated | **0.982** | 272 | ✅ valid — near ceiling |
+| both-manipulated | **0.984** | 277 | ✅ valid — near ceiling |
+| visual-only | ~~0.832~~ | **4** | ❌ **degenerate — ignore** |
 
-This is the expected and desirable result: an audio model **cannot, by construction,
-catch purely visual fakes**. 0.832 is roughly the floor reachable from incidental
-correlations. → strongest empirical case for **Phase-2 multimodal fusion**
-(`MultimodalDeepfakeModule`), where the video stream must cover that quadrant.
+**Why visual-only is degenerate, not a "weak spot":** under `label_audio`, a
+visual-only fake has genuine audio → labeled **real**, same as the real class. Only 4
+stray boundary-noise videos carry a positive label, so the AUC is pure noise (it
+swings to 0.998 in the Phase-2 audio run on the same 4 points). The audio model
+*definitionally* treats visual-only fakes as real; this metric cannot measure
+"visual detection." The correct visual-only baseline is the **VIDEO** model
+([[videomae-unimodal-video-baseline]]: frozen probe 0.745 → unfrozen 0.999).
+
+> [!note] Cross-task caveat
+> Unimodal models (`label_audio`/`label_video`) and the multimodal model (combined
+> `label`) optimize **different label definitions**, so their `auc_video` numbers are
+> not directly comparable. Only own-modality and `both` per-category cells are valid
+> for a unimodal model; cross-modal cells are degenerate.
 
 ## Why the high-Acc / low-F1 gap is not a problem
 
@@ -90,6 +107,7 @@ hard label is needed** (e.g. API/demo) — maximize F1 on val or fix a target FP
 - Backbone source: [[wav2vec2-baevski-2020]]
 - Dataset family (audio/visual/both manipulation categories): [[av-deepfake1m]]
 - Data validity caveat: post-2026-06-11 pipeline only (see `docs/audit_2026-06.md`)
-- Next: **done →** [[multimodal-fusion-phase1-baseline]] — cross-attention fusion
-  lifts visual-only 0.832 → 0.932 (+0.10), confirming the motivation. Still open:
-  VideoMAE-only baseline, concat ablation, and seed repeats (see that note's gate).
+- Visual-only baseline (correct one): [[videomae-unimodal-video-baseline]]
+- Fusion (different-label task, not directly comparable): [[multimodal-fusion-phase1-baseline]],
+  [[multimodal-concat-phase1-ablation]]
+- Audio end-to-end (Phase 2): [[wav2vec2-phase2-audio-end-to-end]]
