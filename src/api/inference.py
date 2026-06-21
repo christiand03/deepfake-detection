@@ -1775,6 +1775,95 @@ def run_robustness_inference(
 
     return {
         "degradedHeatmapFrames": degraded["heatmapFrames"],
+        "degradedVerdict": degraded["verdict"],
+        "degradedConfidence": degraded["confidence"],
+        "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma, "upscale": upscale},
+        "attentionShift": attention_shift,
+    }
+
+
+def run_multimodal_robustness_inference(
+    clip_path: Path,
+    crf: int,
+    fps: int,
+    noise_sigma: int,
+    base_anomaly_regions: list[dict],
+    upscale: bool = False,
+    audio_bitrate: int | None = None,
+    fusion_mode: str = "cross_attention",
+) -> dict:
+    """Social-media degradation re-scored by the MULTIMODAL fusion model (I1).
+
+    Mirrors :func:`run_robustness_inference` but routes the degraded clip through
+    ``MultimodalDeepfakeModule`` so the verdict, heatmaps, and attention-shift come
+    from the fused model rather than VideoMAE alone.  Because the fusion model
+    grades audio intrinsically, audio degradation is folded into the SAME degraded
+    clip (AAC re-encode at *audio_bitrate*) instead of the separate Wav2Vec audio
+    pass — there is no separate ``audioRobustness`` block for the multimodal path.
+
+    Args:
+        clip_path:           Path to the original MP4.
+        crf:                 H.264 CRF (18–51).
+        fps:                 Output frame rate.
+        noise_sigma:         Gaussian noise σ in pixel units.
+        base_anomaly_regions: Clean multimodal anomaly-region scores (for the
+                             attention-shift), in ``_extract_anomaly_regions`` format.
+        upscale:             Simulate downscale-upscale re-encoding when ``True``.
+        audio_bitrate:       AAC bitrate in kbps for the audio track; ``None`` keeps
+                             the original audio (stream copy).
+        fusion_mode:         Fusion variant for the multimodal model.
+
+    Returns:
+        Phase3Result dict.
+    """
+    import tempfile
+
+    import ffmpeg
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        degraded_path = Path(tmpdir) / "degraded.mp4"
+        video_filter = f"fps={fps}"
+        if upscale:
+            video_filter += ",scale=640:360,scale=1280:720"
+        if noise_sigma > 0:
+            video_filter += f",noise=alls={noise_sigma}:allf=t+u"
+        # Degrade audio in-place (fusion model grades it) or copy it through.
+        audio_kwargs = (
+            {"acodec": "aac", "audio_bitrate": f"{audio_bitrate}k"} if audio_bitrate is not None else {"acodec": "copy"}
+        )
+        try:
+            (
+                ffmpeg.input(str(clip_path))
+                .output(
+                    str(degraded_path),
+                    vf=video_filter,
+                    vcodec="libx264",
+                    crf=crf,
+                    loglevel="error",
+                    **audio_kwargs,
+                )
+                .overwrite_output()
+                .run()
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"FFmpeg degradation failed: {exc}") from exc
+
+        degraded = run_multimodal_inference(degraded_path, fusion_mode=fusion_mode)
+
+    # Attention-shift: clean vs. degraded anomaly-region scores (same model).
+    clean_by_region = {r["region"]: r["score"] for r in base_anomaly_regions}
+    attention_shift = [
+        {
+            "region": r["region"],
+            "before": float(clean_by_region.get(r["region"], 0.0)),
+            "after": float(r["score"]),
+        }
+        for r in degraded["anomalyRegions"]
+    ]
+
+    return {
+        "degradedHeatmapFrames": degraded["heatmapFrames"],
+        "degradedVerdict": degraded["verdict"],
         "degradedConfidence": degraded["confidence"],
         "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma, "upscale": upscale},
         "attentionShift": attention_shift,

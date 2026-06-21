@@ -57,7 +57,16 @@ export interface AudioRobustness {
 
 export interface Phase3Result {
   degradedHeatmapFrames: string[]
+  /** Verdict after degradation (reported by the backend; never re-derive it). */
+  degradedVerdict: 'FAKE' | 'REAL'
   degradedConfidence: number
+  /**
+   * Clean baseline from the SAME model as the degraded pass (I1/I3) — use these
+   * for the "clean" side instead of the main analysis result, which may have
+   * used a different model (unimodal vs. multimodal).
+   */
+  baselineVerdict: 'FAKE' | 'REAL'
+  baselineConfidence: number
   params: {
     crf: number
     fps: number

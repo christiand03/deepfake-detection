@@ -59,7 +59,14 @@ export async function analyzeClip(
 
 export async function runRobustnessTest(
   clipId: string,
-  params: { crf: number; fps: number; noiseSigma: number; audioBitrate?: number },
+  params: {
+    crf: number
+    fps: number
+    noiseSigma: number
+    audioBitrate?: number
+    useMultimodal?: boolean
+    fusionMode?: 'cross_attention' | 'concat'
+  },
   baseResult: AnalysisResult,
 ): Promise<Phase3Result> {
   if (USE_MOCK) {
@@ -75,6 +82,8 @@ export async function runRobustnessTest(
       fps: params.fps,
       noise_sigma: params.noiseSigma,
       audio_bitrate: params.audioBitrate ?? null,
+      ...(params.useMultimodal !== undefined && { use_multimodal: params.useMultimodal }),
+      ...(params.fusionMode !== undefined && { fusion_mode: params.fusionMode }),
     }),
   })
   if (!res.ok) {

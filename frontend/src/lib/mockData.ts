@@ -312,9 +312,21 @@ export function makeMockPhase3Result(
         })()
       : undefined
 
+  // Mock degradedConfidence drops toward 0 (confidence in the ORIGINAL verdict);
+  // a flip is simulated once it crosses 0.5. Report the degraded verdict + its
+  // own-verdict confidence (≥ 0.5) like the backend does.
+  const degradedFlipped = degradedConfidence < 0.5
+  const degradedVerdict: 'FAKE' | 'REAL' = degradedFlipped
+    ? baseResult.verdict === 'FAKE'
+      ? 'REAL'
+      : 'FAKE'
+    : baseResult.verdict
   return {
     degradedHeatmapFrames,
-    degradedConfidence,
+    degradedVerdict,
+    degradedConfidence: degradedFlipped ? 1 - degradedConfidence : degradedConfidence,
+    baselineVerdict: baseResult.verdict,
+    baselineConfidence: baseResult.confidence,
     params,
     attentionShift: [
       { region: 'Mouth',      before: 0.84, after: Math.max(0.05, 0.84 - degradation * 0.5) },

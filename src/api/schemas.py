@@ -66,7 +66,15 @@ class AudioRobustnessSchema(BaseModel):
 
 class Phase3ResultSchema(BaseModel):
     degradedHeatmapFrames: list[str]
+    # Verdict AFTER degradation (reported directly; never re-derive it from the
+    # direction-less ``degradedConfidence``, which is always ≥ 0.5).
+    degradedVerdict: Literal["FAKE", "REAL"]
     degradedConfidence: float
+    # Clean baseline from the SAME model as the degraded pass (I1/I3), so the
+    # frontend's "clean vs. degraded" comparison is like-for-like regardless of
+    # the main panel's model toggle.
+    baselineVerdict: Literal["FAKE", "REAL"]
+    baselineConfidence: float
     params: Phase3ParamsSchema
     attentionShift: list[AttentionShiftSchema]
     audioRobustness: AudioRobustnessSchema | None = None
@@ -138,6 +146,8 @@ class RobustnessRequest(BaseModel):
         None, ge=8, le=320, description="AAC audio bitrate in kbps; None = skip audio compression test"
     )
     upscale: bool = Field(False, description="Simulate TikTok/WhatsApp downscale-upscale (640×360 → 1280×720)")
+    use_multimodal: bool = False
+    fusion_mode: Literal["cross_attention", "concat"] = "cross_attention"
 
 
 class AdversarialRequest(BaseModel):

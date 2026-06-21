@@ -12,6 +12,8 @@ from src.api.clip_registry import get_clip_video_path
 from src.api.inference import (
     ModelNotReadyError,
     run_audio_robustness_inference,
+    run_multimodal_inference,
+    run_multimodal_robustness_inference,
     run_robustness_inference,
     run_video_inference,
 )
@@ -27,6 +29,7 @@ def _cache_key(req: RobustnessRequest) -> str:
     return (
         f"{req.clip_id}__robustness_crf{req.crf}_fps{req.fps}"
         f"_noise{req.noise_sigma}_up{int(req.upscale)}_ab{req.audio_bitrate}"
+        f"_mm{int(req.use_multimodal)}_{req.fusion_mode}"
     )
 
 
@@ -40,17 +43,36 @@ def _run(req: RobustnessRequest) -> Phase3ResultSchema:
     if clip_path is None or not clip_path.exists():
         raise FileNotFoundError(f"Video file not found for clip '{req.clip_id}'.")
 
-    base = run_video_inference(clip_path)
-    result = run_robustness_inference(
-        clip_path=clip_path,
-        crf=req.crf,
-        fps=req.fps,
-        noise_sigma=req.noise_sigma,
-        base_anomaly_regions=base["anomalyRegions"],
-        upscale=req.upscale,
-    )
-    if req.audio_bitrate is not None:
-        result["audioRobustness"] = run_audio_robustness_inference(clip_path, req.audio_bitrate)
+    # Clean baseline + degraded pass MUST come from the same model (I1/I3): a
+    # multimodal request grades the degraded clip with the fusion model and folds
+    # audio degradation into that same clip, so there is no separate Wav2Vec pass.
+    if req.use_multimodal:
+        base = run_multimodal_inference(clip_path, fusion_mode=req.fusion_mode)
+        result = run_multimodal_robustness_inference(
+            clip_path=clip_path,
+            crf=req.crf,
+            fps=req.fps,
+            noise_sigma=req.noise_sigma,
+            base_anomaly_regions=base["anomalyRegions"],
+            upscale=req.upscale,
+            audio_bitrate=req.audio_bitrate,
+            fusion_mode=req.fusion_mode,
+        )
+    else:
+        base = run_video_inference(clip_path)
+        result = run_robustness_inference(
+            clip_path=clip_path,
+            crf=req.crf,
+            fps=req.fps,
+            noise_sigma=req.noise_sigma,
+            base_anomaly_regions=base["anomalyRegions"],
+            upscale=req.upscale,
+        )
+        if req.audio_bitrate is not None:
+            result["audioRobustness"] = run_audio_robustness_inference(clip_path, req.audio_bitrate)
+
+    result["baselineVerdict"] = base["verdict"]
+    result["baselineConfidence"] = base["confidence"]
 
     schema = Phase3ResultSchema(**result)
     save_cache(cache_key, schema)

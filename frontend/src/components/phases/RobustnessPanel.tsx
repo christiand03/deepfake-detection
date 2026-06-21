@@ -114,14 +114,19 @@ function ConfidenceDelta({
   confidence,
   verdict,
   isBefore,
+  flipped,
 }: {
   label: string
   confidence: number
   verdict: 'FAKE' | 'REAL'
   isBefore: boolean
+  flipped?: boolean
 }) {
   const color = verdict === 'FAKE' ? '#ef4444' : '#3b82f6'
   const glow = verdict === 'FAKE' ? 'rgba(239,68,68,0.25)' : 'rgba(59,130,246,0.25)'
+  // On a verdict flip the degraded box is highlighted amber, identical to the
+  // adversarial lab's "ATTACKED" box.
+  const flippedHighlight = flipped && !isBefore
   return (
     <div
       style={{
@@ -129,8 +134,12 @@ function ConfidenceDelta({
         backgroundColor: '#0d0f14',
         borderRadius: 8,
         padding: '10px 14px',
-        border: `1px solid ${isBefore ? '#2a2f42' : color}`,
-        boxShadow: isBefore ? 'none' : `0 0 12px ${glow}`,
+        border: `1px solid ${isBefore ? '#2a2f42' : flippedHighlight ? '#f59e0b' : color}`,
+        boxShadow: isBefore
+          ? 'none'
+          : flippedHighlight
+            ? '0 0 12px rgba(245,158,11,0.2)'
+            : `0 0 12px ${glow}`,
         textAlign: 'center',
       }}
     >
@@ -340,6 +349,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
   const [noiseSigma, setNoiseSigma] = useState(0)
   const [audioEnabled, setAudioEnabled] = useState(false)
   const [audioBitrate, setAudioBitrate] = useState(64)
+  const [useMultimodal, setUseMultimodal] = useState(false)
   const [phase3, setPhase3] = useState<Phase3Result | null>(null)
   const [isRunning, setIsRunning] = useState(false)
 
@@ -356,7 +366,14 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
     setPhase3(null)
     runRobustnessTest(
       result.clipId,
-      { crf, fps, noiseSigma, audioBitrate: audioEnabled ? audioBitrate : undefined },
+      {
+        crf,
+        fps,
+        noiseSigma,
+        audioBitrate: audioEnabled ? audioBitrate : undefined,
+        useMultimodal,
+        fusionMode: 'cross_attention',
+      },
       result,
     )
       .then(p3 => setPhase3(p3))
@@ -484,6 +501,46 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
             )}
           </div>
 
+          {/* Multimodal toggle — only when the clip has an audio track */}
+          {result?.audio != null && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #2a2f42' }}>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  cursor: isRunning ? 'not-allowed' : 'pointer',
+                  opacity: isRunning ? 0.5 : 1,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={useMultimodal}
+                  onChange={e => setUseMultimodal(e.target.checked)}
+                  disabled={isRunning}
+                  style={{ accentColor: '#a855f7', cursor: 'inherit' }}
+                />
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    color: useMultimodal ? '#a855f7' : '#e8eaf0',
+                    fontWeight: 600,
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  MULTIMODAL MODEL
+                </span>
+              </label>
+              <div style={{ marginTop: 4, fontSize: 9, fontFamily: 'monospace', color: '#4d5470' }}>
+                Re-score the degraded clip with the joint video+audio model
+                {useMultimodal && audioEnabled
+                  ? ' — audio is degraded in-clip; the separate audio test is redundant.'
+                  : '.'}
+              </div>
+            </div>
+          )}
+
           <button
             onClick={handleRun}
             disabled={!hasResult || isRunning}
@@ -592,37 +649,50 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                 <div style={{ display: 'flex', gap: 10, alignItems: 'stretch' }}>
                   <ConfidenceDelta
                     label="CLEAN"
-                    confidence={result.confidence}
-                    verdict={result.verdict}
+                    confidence={phase3.baselineConfidence}
+                    verdict={phase3.baselineVerdict}
                     isBefore
                   />
                   <div
                     style={{
                       display: 'flex',
+                      flexDirection: 'column',
                       alignItems: 'center',
-                      color: '#4d5470',
-                      fontSize: 18,
+                      gap: 2,
                     }}
                   >
-                    →
+                    <span style={{ fontSize: 18, color: '#4d5470' }}>→</span>
+                    {phase3.baselineVerdict !== phase3.degradedVerdict && (
+                      <span
+                        style={{
+                          fontSize: 8,
+                          fontFamily: 'monospace',
+                          color: '#f59e0b',
+                          fontWeight: 700,
+                          letterSpacing: '0.08em',
+                          backgroundColor: 'rgba(245,158,11,0.12)',
+                          border: '1px solid rgba(245,158,11,0.4)',
+                          borderRadius: 3,
+                          padding: '1px 4px',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        FLIPPED!
+                      </span>
+                    )}
                   </div>
                   <ConfidenceDelta
                     label="DEGRADED"
                     confidence={phase3.degradedConfidence}
-                    verdict={
-                      phase3.degradedConfidence > 0.5
-                        ? result.verdict
-                        : result.verdict === 'FAKE'
-                          ? 'REAL'
-                          : 'FAKE'
-                    }
+                    verdict={phase3.degradedVerdict}
                     isBefore={false}
+                    flipped={phase3.baselineVerdict !== phase3.degradedVerdict}
                   />
                 </div>
 
                 {/* Breaking point */}
                 <BreakingPoint
-                  original={result.confidence}
+                  original={phase3.baselineConfidence}
                   degraded={phase3.degradedConfidence}
                   params={phase3.params}
                 />
