@@ -13,6 +13,7 @@ from src.api.inference import (
     ModelNotReadyError,
     run_adversarial_inference,
     run_multimodal_adversarial_inference,
+    run_multimodal_inference,
     run_video_inference,
 )
 from src.api.schemas import AdversarialRequest, Phase4ResultSchema
@@ -40,8 +41,10 @@ def _run(req: AdversarialRequest) -> Phase4ResultSchema:
     if clip_path is None or not clip_path.exists():
         raise FileNotFoundError(f"Video file not found for clip '{req.clip_id}'.")
 
-    # We need the clean result for attention-shift computation
-    base = run_video_inference(clip_path)
+    # Clean baseline (verdict + anomaly regions for the attention-shift). It MUST
+    # come from the same model as the attack so "clean" vs. "attacked" is a valid
+    # like-for-like comparison (I3): multimodal attack → multimodal baseline.
+    base = run_multimodal_inference(clip_path) if req.use_multimodal else run_video_inference(clip_path)
 
     if req.use_multimodal:
         result = run_multimodal_adversarial_inference(

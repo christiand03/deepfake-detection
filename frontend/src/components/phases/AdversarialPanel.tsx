@@ -224,14 +224,11 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
   const hasResult = result !== null
   const showResults = phase4 !== null
 
-  const perturbedVerdict =
-    phase4 && result
-      ? phase4.perturbedConfidence > 0.5
-        ? result.verdict
-        : result.verdict === 'FAKE'
-          ? 'REAL'
-          : 'FAKE'
-      : null
+  // Both sides come from the SAME model as the attack (I3): the clean baseline
+  // (phase4.cleanVerdict/cleanConfidence) and the attacked verdict
+  // (phase4.perturbedVerdict, reported directly — it cannot be re-derived from
+  // the direction-less perturbedConfidence). Independent of the main panel toggle.
+  const perturbedVerdict = phase4?.perturbedVerdict ?? null
 
   return (
     <div style={{ padding: '16px 20px' }}>
@@ -686,8 +683,8 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
               >
                 {/* Verdict comparison */}
                 <VerdictCompare
-                  original={result.verdict}
-                  originalConf={result.confidence}
+                  original={phase4.cleanVerdict}
+                  originalConf={phase4.cleanConfidence}
                   perturbed={perturbedVerdict}
                   perturbedConf={phase4.perturbedConfidence}
                 />

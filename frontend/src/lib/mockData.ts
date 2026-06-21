@@ -349,12 +349,24 @@ export function makeMockPhase4Result(
   )
   const differenceFrames = baseResult.perFrameScores.map(() => makeDifferenceDataUri(epsilon))
 
+  // Mock perturbedConfidence drops toward 0 (confidence in the ORIGINAL class);
+  // a flip is simulated once it crosses 0.5. Report the perturbed verdict + its
+  // own-verdict confidence (≥ 0.5) like the backend does.
+  const flipped = perturbedConfidence < 0.5
+  const perturbedVerdict: 'FAKE' | 'REAL' = flipped
+    ? baseResult.verdict === 'FAKE'
+      ? 'REAL'
+      : 'FAKE'
+    : baseResult.verdict
   const base: Phase4Result = {
     perturbedFrames,
-    perturbedConfidence,
+    perturbedVerdict,
+    perturbedConfidence: flipped ? 1 - perturbedConfidence : perturbedConfidence,
     differenceFrames,
     attackMethod,
     epsilon,
+    cleanVerdict: baseResult.verdict,
+    cleanConfidence: baseResult.confidence,
     attentionShift: [
       { region: 'Mouth', before: 0.84, after: Math.max(0.04, 0.84 - attackStrength * 0.9) },
       { region: 'Left Eye', before: 0.41, after: Math.max(0.03, 0.41 - attackStrength * 0.6) },

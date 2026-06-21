@@ -69,6 +69,9 @@ export interface Phase3Result {
 
 export interface Phase4Result {
   perturbedFrames: string[]
+  /** Verdict after the attack (reported by the backend; never re-derive it). */
+  perturbedVerdict: 'FAKE' | 'REAL'
+  /** Confidence in the attacked verdict (always ≥ 0.5). */
   perturbedConfidence: number
   differenceFrames: string[]
   attackMethod: 'FGSM' | 'PGD'
@@ -76,6 +79,13 @@ export interface Phase4Result {
   attentionShift: AttentionShift[]
   audioAttentionShift?: AttentionShift[]
   attackModalities?: string
+  /**
+   * Clean baseline from the SAME model as the attack (I3) — use these for the
+   * "clean" side of the comparison instead of the main analysis result, which
+   * may have been produced by a different model (unimodal vs. multimodal).
+   */
+  cleanVerdict: 'FAKE' | 'REAL'
+  cleanConfidence: number
 }
 
 export interface CropBox {

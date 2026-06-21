@@ -80,6 +80,11 @@ class AttentionShiftSchema(BaseModel):
 
 class Phase4ResultSchema(BaseModel):
     perturbedFrames: list[str]
+    # Verdict AFTER the attack and the confidence in THAT verdict (always ≥ 0.5).
+    # ``perturbedVerdict`` must be reported explicitly — it cannot be re-derived
+    # from ``perturbedConfidence`` alone, which is direction-less (a flip is
+    # otherwise invisible to the frontend).
+    perturbedVerdict: Literal["FAKE", "REAL"]
     perturbedConfidence: float
     differenceFrames: list[str]
     attackMethod: Literal["FGSM", "PGD"]
@@ -87,6 +92,11 @@ class Phase4ResultSchema(BaseModel):
     attentionShift: list[AttentionShiftSchema]
     audioAttentionShift: list[AttentionShiftSchema] | None = None
     attackModalities: str | None = None
+    # Clean baseline from the SAME model as the attack (I3), so the frontend can
+    # show a like-for-like "clean vs. attacked" comparison independent of the main
+    # panel's model toggle.
+    cleanVerdict: Literal["FAKE", "REAL"]
+    cleanConfidence: float
 
 
 class CropBoxSchema(BaseModel):

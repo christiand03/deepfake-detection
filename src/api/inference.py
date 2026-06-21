@@ -1810,6 +1810,7 @@ def _run_adversarial_fullframe(
     with torch.no_grad():
         probs_adv = torch.softmax(model.net(pixel_values=adv_pv).logits, dim=-1)[0]
     adv_fake_prob = probs_adv[1].item()
+    adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
     adv_confidence = adv_fake_prob if adv_fake_prob > 0.5 else probs_adv[0].item()
 
     try:
@@ -1835,11 +1836,14 @@ def _run_adversarial_fullframe(
     ]
     return {
         "perturbedFrames": perturbed_frames,
+        "perturbedVerdict": adv_verdict,
         "perturbedConfidence": adv_confidence,
         "differenceFrames": difference_frames,
         "attackMethod": method,
         "epsilon": epsilon,
         "attentionShift": attention_shift,
+        "cleanVerdict": base_result["verdict"],
+        "cleanConfidence": base_result["confidence"],
     }
 
 
@@ -1949,11 +1953,14 @@ def run_adversarial_inference(
 
     return {
         "perturbedFrames": perturbed_frames,
+        "perturbedVerdict": adv_verdict,
         "perturbedConfidence": adv_confidence,
         "differenceFrames": difference_frames,
         "attackMethod": method,
         "epsilon": epsilon,
         "attentionShift": attention_shift,
+        "cleanVerdict": base_result["verdict"],
+        "cleanConfidence": base_result["confidence"],
     }
 
 
@@ -2282,6 +2289,7 @@ def run_multimodal_adversarial_inference(
 
     return {
         "perturbedFrames": perturbed_frames,
+        "perturbedVerdict": adv_verdict,
         "perturbedConfidence": adv_confidence,
         "differenceFrames": difference_frames,
         "attackMethod": method,
@@ -2289,6 +2297,8 @@ def run_multimodal_adversarial_inference(
         "attentionShift": attention_shift,
         "audioAttentionShift": audio_attention_shift,
         "attackModalities": attack_modalities,
+        "cleanVerdict": base_result["verdict"],
+        "cleanConfidence": base_result["confidence"],
     }
 
 
