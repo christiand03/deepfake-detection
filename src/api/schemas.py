@@ -65,7 +65,13 @@ class AudioRobustnessSchema(BaseModel):
 
 
 class Phase3ResultSchema(BaseModel):
+    # Crop-space (224) heatmaps overlaid on the face-crop before/after players (I2).
     degradedHeatmapFrames: list[str]
+    cleanHeatmapFrames: list[str] = []
+    # Face-crop video URLs (served at /media) behind the heatmaps. None on the
+    # face-less fallback / older cached results.
+    cleanVideoUrl: str | None = None
+    degradedVideoUrl: str | None = None
     # Verdict AFTER degradation (reported directly; never re-derive it from the
     # direction-less ``degradedConfidence``, which is always ≥ 0.5).
     degradedVerdict: Literal["FAKE", "REAL"]
@@ -87,6 +93,14 @@ class AttentionShiftSchema(BaseModel):
 
 
 class Phase4ResultSchema(BaseModel):
+    # ``perturbedFrames``/``differenceFrames`` are crop-space (224) heatmaps
+    # overlaid on the face-crop before/after players (I2). ``cleanHeatmapFrames``
+    # is the clean-crop heatmap for the "before" player.
+    cleanHeatmapFrames: list[str] = []
+    # Face-crop video URLs (served at /media) behind the heatmaps. None on the
+    # face-less fallback / older cached results.
+    cleanVideoUrl: str | None = None
+    attackedVideoUrl: str | None = None
     perturbedFrames: list[str]
     # Verdict AFTER the attack and the confidence in THAT verdict (always ≥ 0.5).
     # ``perturbedVerdict`` must be reported explicitly — it cannot be re-derived

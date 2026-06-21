@@ -56,7 +56,12 @@ export interface AudioRobustness {
 }
 
 export interface Phase3Result {
+  /** Crop-space (224) heatmaps overlaid on the face-crop before/after players (I2). */
   degradedHeatmapFrames: string[]
+  cleanHeatmapFrames: string[]
+  /** Face-crop video URLs (served at /media) behind the heatmaps. */
+  cleanVideoUrl?: string | null
+  degradedVideoUrl?: string | null
   /** Verdict after degradation (reported by the backend; never re-derive it). */
   degradedVerdict: 'FAKE' | 'REAL'
   degradedConfidence: number
@@ -77,7 +82,12 @@ export interface Phase3Result {
 }
 
 export interface Phase4Result {
+  /** Crop-space (224) heatmaps for the face-crop before/after players (I2). */
   perturbedFrames: string[]
+  cleanHeatmapFrames: string[]
+  /** Face-crop video URLs (served at /media) behind the heatmaps. */
+  cleanVideoUrl?: string | null
+  attackedVideoUrl?: string | null
   /** Verdict after the attack (reported by the backend; never re-derive it). */
   perturbedVerdict: 'FAKE' | 'REAL'
   /** Confidence in the attacked verdict (always ≥ 0.5). */

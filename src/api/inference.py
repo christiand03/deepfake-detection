@@ -33,11 +33,13 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 from PIL import Image
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision import transforms
 
+from src.api.phase_media import media_path, media_url
 from src.utils.vision_constants import IMAGENET_MEAN, IMAGENET_STD
 
 if TYPE_CHECKING:
@@ -281,6 +283,81 @@ def _upproject_heatmap(
     y2c = min(y1 + crop_h, orig_h)
     canvas[y1:y2c, x1:x2c] = scaled[: y2c - y1, : x2c - x1]
     return canvas
+
+
+# ── Crop-video encoding (Phase-3/4 labs, I2) ──────────────────────────────────
+
+
+def _crop_heatmap_frames(heatmap_np: np.ndarray) -> list[str]:
+    """Render per-frame 224x224 heatmaps as data-URIs (no upprojection).
+
+    The Phase-3/4 crop player overlays the heatmap directly on the 224x224 face
+    crop video, so the heatmaps stay in crop space (unlike the full-frame
+    upprojected heatmaps of the main analysis panel).
+    """
+    return [_array_to_data_uri(heatmap_np[i], magnitude_alpha=True) for i in range(len(heatmap_np))]
+
+
+def _encode_crop_video(
+    frames_norm: torch.Tensor,
+    fps: int,
+    filename: str,
+    reuse_existing: bool = False,
+) -> str:
+    """Encode ImageNet-normalised crop frames to a browser-playable MP4.
+
+    Inverts :func:`_normalize_uint8_frames` (``x*std + mean`` -> ``[0, 1]`` ->
+    uint8 RGB) and pipes the raw frames to FFmpeg as H.264/yuv420p so the clip
+    plays in the browser.  The file is written under the served media directory
+    and its public URL is returned.
+
+    Args:
+        frames_norm:    Float tensor ``(N, 3, 224, 224)`` (ImageNet-normalised).
+        fps:            Playback frame rate (25 for the clean / adversarial crop,
+                        the degradation fps for the degraded crop).
+        filename:       Destination filename inside the media directory.
+        reuse_existing: When ``True`` and the file already exists, return its URL
+                        without re-encoding.  Used for the CLEAN crop, which only
+                        depends on the clip (identical across every parameter set
+                        and both phases) so it is encoded once per clip.
+
+    Returns:
+        The public ``/media/...`` URL for the encoded clip.
+    """
+    import ffmpeg
+
+    if reuse_existing and media_path(filename).exists():
+        return media_url(filename)
+
+    mean = torch.tensor(IMAGENET_MEAN, dtype=torch.float32).view(1, 3, 1, 1)
+    std = torch.tensor(IMAGENET_STD, dtype=torch.float32).view(1, 3, 1, 1)
+    denorm = (frames_norm.detach().cpu().float() * std + mean).clamp(0.0, 1.0)
+    frames_u8 = (denorm * 255.0).round().to(torch.uint8)  # (N, 3, H, W)
+    frames_hwc = rearrange(frames_u8, "n c h w -> n h w c").contiguous().numpy()
+    _, h, w, _ = frames_hwc.shape
+
+    out_path = media_path(filename)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = (
+            ffmpeg.input("pipe:", format="rawvideo", pix_fmt="rgb24", s=f"{w}x{h}", r=fps)
+            .output(
+                str(out_path),
+                pix_fmt="yuv420p",
+                vcodec="libx264",
+                r=fps,
+                movflags="+faststart",
+                loglevel="error",
+            )
+            .overwrite_output()
+            .run_async(pipe_stdin=True)
+        )
+        proc.stdin.write(frames_hwc.tobytes())
+        proc.stdin.close()
+        proc.wait()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Crop-video encoding failed for {filename}: {exc}") from exc
+    return media_url(filename)
 
 
 # ── Video preprocessing ───────────────────────────────────────────────────────
@@ -827,6 +904,11 @@ def _video_result_with_heatmaps(
             "origW": orig_w,
             "origH": orig_h,
         },
+        # Raw crop-space artifacts for the Phase-3/4 crop player (I2). Private
+        # (underscore) keys: ignored by the API schemas, used only internally by
+        # the robustness paths to encode the crop video + crop-space heatmaps.
+        "_cropFrames": all_frames,
+        "_heatmapNp": heatmap_np,
     }
 
 
@@ -867,6 +949,10 @@ def _run_video_inference_fullframe(clip_path: Path) -> dict:
         "perFrameScores": per_frame_scores,
         "heatmapFrames": heatmap_frames,
         "anomalyRegions": anomaly_regions,
+        # Crop-space artifacts for the Phase-3 crop player (I2); here the "crop" is
+        # the full 224 frame (no face box). Private keys, ignored by the schema.
+        "_cropFrames": all_frames,
+        "_heatmapNp": heatmap_np,
     }
 
 
@@ -1547,6 +1633,10 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
             "origH": prepared.orig_h,
         },
         "audio": audio_block,
+        # Raw crop-space artifacts for the Phase-3 crop player (I2); private keys,
+        # ignored by the API schema (see _video_result_with_heatmaps).
+        "_cropFrames": all_frames,
+        "_heatmapNp": heatmap_np,
     }
 
 
@@ -1707,63 +1797,70 @@ def _pgd_attack(
 # ── Robustness inference ──────────────────────────────────────────────────────
 
 
-def run_robustness_inference(
+def _ffmpeg_degrade(
     clip_path: Path,
+    out_path: Path,
     crf: int,
     fps: int,
     noise_sigma: int,
-    base_anomaly_regions: list[dict],
-    upscale: bool = False,
-) -> dict:
-    """Apply social-media degradation via FFmpeg and re-run video inference.
+    upscale: bool,
+    audio_kwargs: dict,
+) -> None:
+    """Apply the social-media degradation filter chain via FFmpeg.
 
-    Args:
-        clip_path: Path to the original MP4.
-        crf: H.264 CRF (18–51).
-        fps: Output frame rate.
-        noise_sigma: Gaussian noise σ in pixel units.
-        base_anomaly_regions: Anomaly-region scores from the clean clip
-            (``_extract_anomaly_regions`` format: list of
-            ``{"region": str, "score": float}``).  Used to compute the
-            attention-shift between clean and degraded passes.
-        upscale: When ``True``, simulate TikTok/WhatsApp re-encoding by
-            downscaling to 640×360 then upscaling back to 1280×720.
-
-    Returns:
-        Phase3Result dict.
+    *audio_kwargs* selects the audio handling: ``{"acodec": "copy"}`` keeps the
+    original track (unimodal), ``{"acodec": "aac", "audio_bitrate": "64k"}``
+    re-encodes it (multimodal audio degradation).
     """
-    import tempfile
-
     import ffmpeg
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        degraded_path = Path(tmpdir) / "degraded.mp4"
-        video_filter = f"fps={fps}"
-        if upscale:
-            video_filter += ",scale=640:360,scale=1280:720"
-        if noise_sigma > 0:
-            video_filter += f",noise=alls={noise_sigma}:allf=t+u"
-        try:
-            (
-                ffmpeg.input(str(clip_path))
-                .output(
-                    str(degraded_path),
-                    vf=video_filter,
-                    vcodec="libx264",
-                    crf=crf,
-                    acodec="copy",
-                    loglevel="error",
-                )
-                .overwrite_output()
-                .run()
+    video_filter = f"fps={fps}"
+    if upscale:
+        video_filter += ",scale=640:360,scale=1280:720"
+    if noise_sigma > 0:
+        video_filter += f",noise=alls={noise_sigma}:allf=t+u"
+    try:
+        (
+            ffmpeg.input(str(clip_path))
+            .output(
+                str(out_path),
+                vf=video_filter,
+                vcodec="libx264",
+                crf=crf,
+                loglevel="error",
+                **audio_kwargs,
             )
-        except Exception as exc:
-            raise RuntimeError(f"FFmpeg degradation failed: {exc}") from exc
+            .overwrite_output()
+            .run()
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"FFmpeg degradation failed: {exc}") from exc
 
-        degraded = run_video_inference(degraded_path)
 
-    # Attention-shift: compare clean vs. degraded anomaly-region scores
-    clean_by_region = {r["region"]: r["score"] for r in base_anomaly_regions}
+def _robustness_payload(
+    clean: dict,
+    degraded: dict,
+    crf: int,
+    fps: int,
+    noise_sigma: int,
+    upscale: bool,
+    media_prefix: str,
+    clip_stem: str,
+) -> dict:
+    """Assemble the Phase-3 dict from a clean + degraded inference result (I2).
+
+    Both results must come from the SAME model. Encodes the degraded (*fps*)
+    face-crop video for the player, reuses the per-clip clean crop video (encoded
+    once, *clip_stem*-keyed), renders the crop-space heatmaps, and computes the
+    clean-vs-degraded attention shift. The ``_cropFrames``/``_heatmapNp`` keys are
+    the private crop-space artifacts the inference functions stash for this.
+    """
+    clean_video_url = _encode_crop_video(
+        clean["_cropFrames"], TARGET_FPS, f"{clip_stem}_clean.mp4", reuse_existing=True
+    )
+    degraded_video_url = _encode_crop_video(degraded["_cropFrames"], fps, f"{media_prefix}_degraded.mp4")
+
+    clean_by_region = {r["region"]: r["score"] for r in clean["anomalyRegions"]}
     attention_shift = [
         {
             "region": r["region"],
@@ -1774,12 +1871,44 @@ def run_robustness_inference(
     ]
 
     return {
-        "degradedHeatmapFrames": degraded["heatmapFrames"],
+        "degradedHeatmapFrames": _crop_heatmap_frames(degraded["_heatmapNp"]),
         "degradedVerdict": degraded["verdict"],
         "degradedConfidence": degraded["confidence"],
+        "baselineVerdict": clean["verdict"],
+        "baselineConfidence": clean["confidence"],
+        "cleanHeatmapFrames": _crop_heatmap_frames(clean["_heatmapNp"]),
+        "cleanVideoUrl": clean_video_url,
+        "degradedVideoUrl": degraded_video_url,
         "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma, "upscale": upscale},
         "attentionShift": attention_shift,
     }
+
+
+def run_robustness_inference(
+    clip_path: Path,
+    crf: int,
+    fps: int,
+    noise_sigma: int,
+    upscale: bool = False,
+    media_prefix: str = "robustness",
+) -> dict:
+    """Degrade a clip via FFmpeg and re-score it with the unimodal video model.
+
+    Computes the clean baseline and the degraded pass with the SAME model so the
+    crop player shows a like-for-like before/after (I2). Audio is stream-copied
+    (the separate Wav2Vec audio test is handled by the router).
+
+    Returns:
+        Phase3Result dict (incl. clean/degraded crop video URLs + crop heatmaps).
+    """
+    import tempfile
+
+    clean = run_video_inference(clip_path)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        degraded_path = Path(tmpdir) / "degraded.mp4"
+        _ffmpeg_degrade(clip_path, degraded_path, crf, fps, noise_sigma, upscale, {"acodec": "copy"})
+        degraded = run_video_inference(degraded_path)
+    return _robustness_payload(clean, degraded, crf, fps, noise_sigma, upscale, media_prefix, clip_path.stem)
 
 
 def run_multimodal_robustness_inference(
@@ -1787,87 +1916,34 @@ def run_multimodal_robustness_inference(
     crf: int,
     fps: int,
     noise_sigma: int,
-    base_anomaly_regions: list[dict],
     upscale: bool = False,
     audio_bitrate: int | None = None,
     fusion_mode: str = "cross_attention",
+    media_prefix: str = "robustness_mm",
 ) -> dict:
     """Social-media degradation re-scored by the MULTIMODAL fusion model (I1).
 
-    Mirrors :func:`run_robustness_inference` but routes the degraded clip through
-    ``MultimodalDeepfakeModule`` so the verdict, heatmaps, and attention-shift come
-    from the fused model rather than VideoMAE alone.  Because the fusion model
+    Mirrors :func:`run_robustness_inference` but routes the clean baseline and the
+    degraded clip through ``MultimodalDeepfakeModule``. Because the fusion model
     grades audio intrinsically, audio degradation is folded into the SAME degraded
     clip (AAC re-encode at *audio_bitrate*) instead of the separate Wav2Vec audio
     pass — there is no separate ``audioRobustness`` block for the multimodal path.
 
-    Args:
-        clip_path:           Path to the original MP4.
-        crf:                 H.264 CRF (18–51).
-        fps:                 Output frame rate.
-        noise_sigma:         Gaussian noise σ in pixel units.
-        base_anomaly_regions: Clean multimodal anomaly-region scores (for the
-                             attention-shift), in ``_extract_anomaly_regions`` format.
-        upscale:             Simulate downscale-upscale re-encoding when ``True``.
-        audio_bitrate:       AAC bitrate in kbps for the audio track; ``None`` keeps
-                             the original audio (stream copy).
-        fusion_mode:         Fusion variant for the multimodal model.
-
     Returns:
-        Phase3Result dict.
+        Phase3Result dict (incl. clean/degraded crop video URLs + crop heatmaps).
     """
     import tempfile
 
-    import ffmpeg
-
+    clean = run_multimodal_inference(clip_path, fusion_mode=fusion_mode)
+    # Degrade audio in-place (the fusion model grades it) or copy it through.
+    audio_kwargs = (
+        {"acodec": "aac", "audio_bitrate": f"{audio_bitrate}k"} if audio_bitrate is not None else {"acodec": "copy"}
+    )
     with tempfile.TemporaryDirectory() as tmpdir:
         degraded_path = Path(tmpdir) / "degraded.mp4"
-        video_filter = f"fps={fps}"
-        if upscale:
-            video_filter += ",scale=640:360,scale=1280:720"
-        if noise_sigma > 0:
-            video_filter += f",noise=alls={noise_sigma}:allf=t+u"
-        # Degrade audio in-place (fusion model grades it) or copy it through.
-        audio_kwargs = (
-            {"acodec": "aac", "audio_bitrate": f"{audio_bitrate}k"} if audio_bitrate is not None else {"acodec": "copy"}
-        )
-        try:
-            (
-                ffmpeg.input(str(clip_path))
-                .output(
-                    str(degraded_path),
-                    vf=video_filter,
-                    vcodec="libx264",
-                    crf=crf,
-                    loglevel="error",
-                    **audio_kwargs,
-                )
-                .overwrite_output()
-                .run()
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"FFmpeg degradation failed: {exc}") from exc
-
+        _ffmpeg_degrade(clip_path, degraded_path, crf, fps, noise_sigma, upscale, audio_kwargs)
         degraded = run_multimodal_inference(degraded_path, fusion_mode=fusion_mode)
-
-    # Attention-shift: clean vs. degraded anomaly-region scores (same model).
-    clean_by_region = {r["region"]: r["score"] for r in base_anomaly_regions}
-    attention_shift = [
-        {
-            "region": r["region"],
-            "before": float(clean_by_region.get(r["region"], 0.0)),
-            "after": float(r["score"]),
-        }
-        for r in degraded["anomalyRegions"]
-    ]
-
-    return {
-        "degradedHeatmapFrames": degraded["heatmapFrames"],
-        "degradedVerdict": degraded["verdict"],
-        "degradedConfidence": degraded["confidence"],
-        "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma, "upscale": upscale},
-        "attentionShift": attention_shift,
-    }
+    return _robustness_payload(clean, degraded, crf, fps, noise_sigma, upscale, media_prefix, clip_path.stem)
 
 
 # ── Adversarial inference ─────────────────────────────────────────────────────
@@ -1879,12 +1955,13 @@ def _run_adversarial_fullframe(
     epsilon: float,
     steps: int,
     base_result: dict,
+    media_prefix: str = "adversarial",
 ) -> dict:
     """Single-window adversarial fallback for face-less clips (out-of-distribution).
 
     Attacks one evenly-sampled 16-frame full-frame window — the only sensible
-    option when no face crop is available.  Mirrors the whole-clip path's
-    rendering (magnitude-alpha heatmaps) so the frontend triptych looks the same.
+    option when no face crop is available.  Here the 224 frame IS the "crop", so
+    the before/after player shows the clean vs. adversarial full frame.
     """
     model = get_video_model()
     pixel_values = _preprocess_video_fullframe(clip_path).to(_device)
@@ -1903,15 +1980,21 @@ def _run_adversarial_fullframe(
     adv_confidence = adv_fake_prob if adv_fake_prob > 0.5 else probs_adv[0].item()
 
     try:
-        hm_tensor, _ = model.explain(pixel_values=adv_pv, target_class=1)
-        hm_np = hm_tensor.detach().cpu().numpy()[0]  # (T, H, W) — already [-1, 1]
+        clean_hm_np = model.explain(pixel_values=pixel_values, target_class=1)[0].detach().cpu().numpy()[0]
+    except Exception:  # noqa: BLE001
+        clean_hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    try:
+        hm_np = model.explain(pixel_values=adv_pv, target_class=1)[0].detach().cpu().numpy()[0]
     except Exception:  # noqa: BLE001
         hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
-    perturbed_frames = [_array_to_data_uri(hm_np[i], magnitude_alpha=True) for i in range(NUM_FRAMES)]
 
     diff = (adv_pv - pixel_values).abs().detach().cpu().numpy()[0].mean(axis=1)  # (T, H, W)
     diff_norm = diff / (diff.max() + 1e-8)
-    difference_frames = [_array_to_data_uri(diff_norm[i], magnitude_alpha=True) for i in range(NUM_FRAMES)]
+
+    clean_video_url = _encode_crop_video(
+        pixel_values[0], TARGET_FPS, f"{clip_path.stem}_clean.mp4", reuse_existing=True
+    )
+    attacked_video_url = _encode_crop_video(adv_pv[0], TARGET_FPS, f"{media_prefix}_attacked.mp4")
 
     adv_regions = _extract_anomaly_regions(hm_np)
     clean_by_region = {r["region"]: r["score"] for r in base_result["anomalyRegions"]}
@@ -1924,10 +2007,13 @@ def _run_adversarial_fullframe(
         for r in adv_regions
     ]
     return {
-        "perturbedFrames": perturbed_frames,
+        "perturbedFrames": _crop_heatmap_frames(hm_np),
         "perturbedVerdict": adv_verdict,
         "perturbedConfidence": adv_confidence,
-        "differenceFrames": difference_frames,
+        "differenceFrames": _crop_heatmap_frames(diff_norm),
+        "cleanHeatmapFrames": _crop_heatmap_frames(clean_hm_np),
+        "cleanVideoUrl": clean_video_url,
+        "attackedVideoUrl": attacked_video_url,
         "attackMethod": method,
         "epsilon": epsilon,
         "attentionShift": attention_shift,
@@ -1942,16 +2028,16 @@ def run_adversarial_inference(
     epsilon: float,
     steps: int,
     base_result: dict,
+    media_prefix: str = "adversarial",
 ) -> dict:
     """Generate an adversarial perturbation over the WHOLE clip and measure xAI impact.
 
     Implements FGSM (steps=1) and PGD natively via PyTorch autograd, attacking
     every 16-frame window of the clip (the same chunking as the Phase-1 heatmap
     pipeline) so the perturbed heatmaps, difference maps, and verdict span the
-    full video rather than a single chunk.  The attack maximises CE loss to push
-    the model away from its clean prediction; per-window AttnLRP then yields the
-    perturbed heatmap, upprojected into the original frame canvas (same full-frame
-    format as the Phase-1 'clean' heatmaps for triptych consistency).
+    full video rather than a single chunk.  Per-window AttnLRP yields the clean
+    AND adversarial heatmaps in crop space; the clean + adversarial face-crop
+    videos are encoded for the before/after player (I2).
 
     Returns:
         Phase4Result dict.
@@ -1965,11 +2051,9 @@ def run_adversarial_inference(
             "full-frame window; the result is out-of-distribution.",
             clip_path.name,
         )
-        return _run_adversarial_fullframe(clip_path, method, epsilon, steps, base_result)
+        return _run_adversarial_fullframe(clip_path, method, epsilon, steps, base_result, media_prefix)
 
-    all_frames, per_window_boxes = _load_all_frames_cropped_per_window(
-        prepared.video_path, prepared.chunk_box_map, prepared.crop_box
-    )
+    all_frames, _ = _load_all_frames_cropped_per_window(prepared.video_path, prepared.chunk_box_map, prepared.crop_box)
     n_frames = all_frames.shape[0]
 
     clean_verdict: Literal["FAKE", "REAL"] = base_result["verdict"]
@@ -1977,8 +2061,10 @@ def run_adversarial_inference(
     n_steps = 1 if method == "FGSM" else steps
     step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
 
+    clean_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     adv_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     diff_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    adv_frames_full = torch.zeros((n_frames, 3, IMG_SIZE, IMG_SIZE), dtype=torch.float32)
     adv_fake_prob = 0.0
 
     n_chunks = -(-n_frames // NUM_FRAMES)  # ceiling division
@@ -1993,21 +2079,28 @@ def run_adversarial_inference(
         pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
 
         adv_pv = _pgd_attack(model, pv, target_class, epsilon, n_steps, step_size)
+        adv_frames_full[frame_start:frame_end] = adv_pv[0, :k].detach().cpu()
 
         # Adversarial fake probability — max-pooled over windows (verdict aggregation).
         with torch.no_grad():
             logits_adv = model.net(pixel_values=adv_pv).logits  # (1, 2)
         adv_fake_prob = max(adv_fake_prob, torch.softmax(logits_adv, dim=-1)[0, 1].item())
 
+        # Clean + adversarial AttnLRP heatmaps (crop space) for the before/after player.
         try:
-            hm_tensor, _ = model.explain(pixel_values=adv_pv, target_class=1)
-            hm = hm_tensor.detach().cpu().numpy()[0]  # (16, H, W) — already [-1, 1]
+            clean_hm = model.explain(pixel_values=pv, target_class=1)[0].detach().cpu().numpy()[0]
+        except Exception:  # noqa: BLE001
+            log.exception("Clean AttnLRP failed for window %d of %s", window_idx, clip_path.name)
+            clean_hm = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        try:
+            hm = model.explain(pixel_values=adv_pv, target_class=1)[0].detach().cpu().numpy()[0]
         except Exception:  # noqa: BLE001
             log.exception("Adversarial AttnLRP failed for window %d of %s", window_idx, clip_path.name)
             hm = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
 
         diff = (adv_pv - pv).abs().detach().cpu().numpy()[0].mean(axis=1)  # (16, H, W)
 
+        clean_hm_full[frame_start:frame_end] = clean_hm[:k]
         adv_hm_full[frame_start:frame_end] = hm[:k]
         diff_full[frame_start:frame_end] = diff[:k]
         log.debug("Adversarial window %d/%d processed.", window_idx + 1, n_chunks)
@@ -2015,18 +2108,11 @@ def run_adversarial_inference(
     adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
     adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
 
-    # Upproject perturbed heatmaps + difference maps into the original frame canvas.
-    # Difference is a non-negative perturbation magnitude → magnitude_alpha renders
-    # it red where the attack changed pixels and transparent (incl. outside the
-    # crop) elsewhere, matching the clean/perturbed full-frame framing.
-    perturbed_frames: list[str] = []
-    difference_frames: list[str] = []
-    for i in range(n_frames):
-        box = per_window_boxes[i // NUM_FRAMES]
-        pf = _upproject_heatmap(adv_hm_full[i], *box, prepared.orig_w, prepared.orig_h)
-        perturbed_frames.append(_array_to_data_uri(pf, magnitude_alpha=True))
-        df = _upproject_heatmap(diff_full[i], *box, prepared.orig_w, prepared.orig_h)
-        difference_frames.append(_array_to_data_uri(df, magnitude_alpha=True))
+    # Crop-space heatmaps overlay the 224 face-crop video directly (I2, no
+    # upprojection): left = clean crop + clean heatmap, right = adversarial crop +
+    # perturbed heatmap. The difference map marks where the attack changed pixels.
+    clean_video_url = _encode_crop_video(all_frames, TARGET_FPS, f"{clip_path.stem}_clean.mp4", reuse_existing=True)
+    attacked_video_url = _encode_crop_video(adv_frames_full, TARGET_FPS, f"{media_prefix}_attacked.mp4")
 
     # Attention shift (clean vs. perturbed anomaly regions over the whole clip).
     adv_regions = _extract_anomaly_regions(adv_hm_full)
@@ -2041,10 +2127,13 @@ def run_adversarial_inference(
     ]
 
     return {
-        "perturbedFrames": perturbed_frames,
+        "perturbedFrames": _crop_heatmap_frames(adv_hm_full),
         "perturbedVerdict": adv_verdict,
         "perturbedConfidence": adv_confidence,
-        "differenceFrames": difference_frames,
+        "differenceFrames": _crop_heatmap_frames(diff_full),
+        "cleanHeatmapFrames": _crop_heatmap_frames(clean_hm_full),
+        "cleanVideoUrl": clean_video_url,
+        "attackedVideoUrl": attacked_video_url,
         "attackMethod": method,
         "epsilon": epsilon,
         "attentionShift": attention_shift,
@@ -2228,6 +2317,7 @@ def run_multimodal_adversarial_inference(
     steps: int,
     attack_modalities: Literal["video", "audio", "both"],
     base_result: dict,
+    media_prefix: str = "adversarial_mm",
 ) -> dict:
     """Multimodal adversarial attack over the WHOLE clip via ``MultimodalDeepfakeModule``.
 
@@ -2268,9 +2358,7 @@ def run_multimodal_adversarial_inference(
             f"Audio extraction failed for {clip_path.name}; multimodal adversarial analysis requires an audio track."
         ) from exc
 
-    all_frames, per_window_boxes = _load_all_frames_cropped_per_window(
-        prepared.video_path, prepared.chunk_box_map, prepared.crop_box
-    )
+    all_frames, _ = _load_all_frames_cropped_per_window(prepared.video_path, prepared.chunk_box_map, prepared.crop_box)
     n_frames = all_frames.shape[0]
 
     # Attack schedule
@@ -2280,8 +2368,10 @@ def run_multimodal_adversarial_inference(
     step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
     step_size_audio = audio_epsilon if method == "FGSM" else audio_epsilon / steps * 2.5
 
+    clean_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     adv_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     diff_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    adv_frames_full = torch.zeros((n_frames, 3, IMG_SIZE, IMG_SIZE), dtype=torch.float32)
     adv_fake_prob = 0.0
     # Per-window video tensors for the band-ablation pass: clean and adversarial so
     # each band-stopped audio window is re-paired with the matching video window.
@@ -2313,12 +2403,19 @@ def run_multimodal_adversarial_inference(
             attack_modalities,
         )
         adv_pv_windows.append(adv_pv)
+        adv_frames_full[frame_start:frame_end] = adv_pv[0, :k].detach().cpu()
 
         # Adversarial fused fake probability -- max-pooled over windows.
         with torch.no_grad():
             logits_adv = model(pixel_values=adv_pv, input_values=adv_iv)  # (1, 2)
         adv_fake_prob = max(adv_fake_prob, torch.softmax(logits_adv, dim=-1)[0, 1].item())
 
+        # Clean + adversarial video heatmaps (crop space) for the before/after player.
+        try:
+            clean_hm = model.explain(pixel_values=pv, input_values=iv, target_class=1)[0].detach().cpu().numpy()[0]
+        except Exception:  # noqa: BLE001
+            log.exception("Multimodal clean AttnLRP failed for window %d of %s", window_idx, clip_path.name)
+            clean_hm = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
         try:
             video_hm_adv, _, _ = model.explain(pixel_values=adv_pv, input_values=adv_iv, target_class=1)
             hm = video_hm_adv.detach().cpu().numpy()[0]  # (16, H, W) -- already [-1, 1]
@@ -2328,6 +2425,7 @@ def run_multimodal_adversarial_inference(
 
         diff = (adv_pv - pv).abs().detach().cpu().numpy()[0].mean(axis=1)  # (16, H, W)
 
+        clean_hm_full[frame_start:frame_end] = clean_hm[:k]
         adv_hm_full[frame_start:frame_end] = hm[:k]
         diff_full[frame_start:frame_end] = diff[:k]
         log.debug("Multimodal adversarial window %d/%d processed.", window_idx + 1, n_chunks)
@@ -2335,18 +2433,10 @@ def run_multimodal_adversarial_inference(
     adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
     adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
 
-    # Perturbed video frames + difference maps (upprojected into the full frame).
-    # Difference is a non-negative perturbation magnitude -> magnitude_alpha renders
-    # it red where the attack changed pixels and transparent elsewhere, matching the
-    # clean/perturbed full-frame framing.
-    perturbed_frames: list[str] = []
-    difference_frames: list[str] = []
-    for i in range(n_frames):
-        box = per_window_boxes[i // NUM_FRAMES]
-        pf = _upproject_heatmap(adv_hm_full[i], *box, prepared.orig_w, prepared.orig_h)
-        perturbed_frames.append(_array_to_data_uri(pf, magnitude_alpha=True))
-        df = _upproject_heatmap(diff_full[i], *box, prepared.orig_w, prepared.orig_h)
-        difference_frames.append(_array_to_data_uri(df, magnitude_alpha=True))
+    # Crop-space heatmaps + face-crop before/after videos (I2, no upprojection):
+    # left = clean crop + clean heatmap, right = adversarial crop + perturbed heatmap.
+    clean_video_url = _encode_crop_video(all_frames, TARGET_FPS, f"{clip_path.stem}_clean.mp4", reuse_existing=True)
+    attacked_video_url = _encode_crop_video(adv_frames_full, TARGET_FPS, f"{media_prefix}_attacked.mp4")
 
     # Video attention shift (clean base_result vs. adversarial whole clip).
     adv_regions = _extract_anomaly_regions(adv_hm_full)
@@ -2377,10 +2467,13 @@ def run_multimodal_adversarial_inference(
     ]
 
     return {
-        "perturbedFrames": perturbed_frames,
+        "perturbedFrames": _crop_heatmap_frames(adv_hm_full),
         "perturbedVerdict": adv_verdict,
         "perturbedConfidence": adv_confidence,
-        "differenceFrames": difference_frames,
+        "differenceFrames": _crop_heatmap_frames(diff_full),
+        "cleanHeatmapFrames": _crop_heatmap_frames(clean_hm_full),
+        "cleanVideoUrl": clean_video_url,
+        "attackedVideoUrl": attacked_video_url,
         "attackMethod": method,
         "epsilon": epsilon,
         "attentionShift": attention_shift,

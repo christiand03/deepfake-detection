@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.inference import ModelNotReadyError, get_audio_model, get_video_model
+from src.api.phase_media import MEDIA_DIR
 from src.api.routers import (
     adversarial_router,
     analyze_router,
@@ -109,6 +110,11 @@ def create_app() -> FastAPI:
         log.info("Serving clip files from %s", clips_dir)
     else:
         log.info("Clips directory not found (%s) — /clips route disabled.", clips_dir)
+
+    # Serve Phase-3/4 crop videos (degraded / adversarial face crops) at /media.
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    application.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+    log.info("Serving phase-lab media from %s", MEDIA_DIR)
 
     # Serve the built React SPA at / (only available after `npm run build`)
     frontend_dist = _PROJECT_ROOT / "frontend" / "dist"

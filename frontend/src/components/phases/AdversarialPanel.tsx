@@ -12,71 +12,10 @@ import { runAdversarialAttack } from '../../api/client'
 import { useErrorToast } from '../../context/ErrorToastContext'
 import type { AnalysisResult, Phase4Result } from '../../types/analysis'
 import { AttentionShiftTable } from '../shared/AttentionShiftTable'
+import { CropComparisonPlayer } from './CropComparisonPlayer'
 
 interface AdversarialPanelProps {
   result: AnalysisResult | null
-}
-
-// ── Frame triptych (Clean | Difference | Perturbed) ──────────────────────────
-
-function FrameTriptych({
-  clean,
-  diff,
-  perturbed,
-}: {
-  clean: string
-  diff: string
-  perturbed: string
-}) {
-  const frames = [
-    { label: 'CLEAN', src: clean, borderColor: '#2a2f42' },
-    { label: 'ΔPERTURBATION', src: diff, borderColor: '#f59e0b' },
-    { label: 'ATTACKED', src: perturbed, borderColor: '#ef4444' },
-  ]
-
-  return (
-    <div>
-      <div
-        style={{
-          fontSize: 9,
-          fontFamily: 'monospace',
-          color: '#4d5470',
-          letterSpacing: '0.12em',
-          marginBottom: 6,
-        }}
-      >
-        FRAME COMPARISON — FRAME #8
-      </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        {frames.map(f => (
-          <div key={f.label} style={{ flex: 1, textAlign: 'center' }}>
-            <img
-              src={f.src}
-              alt={f.label}
-              style={{
-                width: '100%',
-                height: 64,
-                objectFit: 'cover',
-                borderRadius: 4,
-                border: `1px solid ${f.borderColor}`,
-              }}
-            />
-            <div
-              style={{
-                fontSize: 8,
-                fontFamily: 'monospace',
-                color: '#4d5470',
-                marginTop: 3,
-                letterSpacing: '0.06em',
-              }}
-            >
-              {f.label}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
 }
 
 // ── Verdict flip badge ────────────────────────────────────────────────────────
@@ -689,11 +628,21 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
                   perturbedConf={phase4.perturbedConfidence}
                 />
 
-                {/* Frame triptych */}
-                <FrameTriptych
-                  clean={result.heatmapFrames[8] ?? result.heatmapFrames[0]}
-                  diff={phase4.differenceFrames[8] ?? phase4.differenceFrames[0]}
-                  perturbed={phase4.perturbedFrames[8] ?? phase4.perturbedFrames[0]}
+                {/* Whole-clip crop player: clean → attacked (I2) */}
+                <CropComparisonPlayer
+                  title="HEATMAP — WHOLE CLIP (CLEAN → ATTACKED)"
+                  left={{
+                    label: 'CLEAN',
+                    videoUrl: phase4.cleanVideoUrl,
+                    heatmapFrames: phase4.cleanHeatmapFrames,
+                    accent: '#2a2f42',
+                  }}
+                  right={{
+                    label: 'ATTACKED',
+                    videoUrl: phase4.attackedVideoUrl,
+                    heatmapFrames: phase4.perturbedFrames,
+                    accent: '#ef4444',
+                  }}
                 />
 
                 {/* Attention shifts */}

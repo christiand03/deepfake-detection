@@ -12,10 +12,8 @@ from src.api.clip_registry import get_clip_video_path
 from src.api.inference import (
     ModelNotReadyError,
     run_audio_robustness_inference,
-    run_multimodal_inference,
     run_multimodal_robustness_inference,
     run_robustness_inference,
-    run_video_inference,
 )
 from src.api.schemas import Phase3ResultSchema, RobustnessRequest
 
@@ -43,36 +41,33 @@ def _run(req: RobustnessRequest) -> Phase3ResultSchema:
     if clip_path is None or not clip_path.exists():
         raise FileNotFoundError(f"Video file not found for clip '{req.clip_id}'.")
 
-    # Clean baseline + degraded pass MUST come from the same model (I1/I3): a
-    # multimodal request grades the degraded clip with the fusion model and folds
-    # audio degradation into that same clip, so there is no separate Wav2Vec pass.
+    # Clean baseline + degraded pass come from the same model (I1/I3); both
+    # functions compute the clean baseline internally and emit the crop videos +
+    # crop heatmaps (I2). A multimodal request grades the degraded clip with the
+    # fusion model and folds audio degradation into that same clip (no separate
+    # Wav2Vec pass); the unimodal path keeps the standalone audio test.
     if req.use_multimodal:
-        base = run_multimodal_inference(clip_path, fusion_mode=req.fusion_mode)
         result = run_multimodal_robustness_inference(
             clip_path=clip_path,
             crf=req.crf,
             fps=req.fps,
             noise_sigma=req.noise_sigma,
-            base_anomaly_regions=base["anomalyRegions"],
             upscale=req.upscale,
             audio_bitrate=req.audio_bitrate,
             fusion_mode=req.fusion_mode,
+            media_prefix=cache_key,
         )
     else:
-        base = run_video_inference(clip_path)
         result = run_robustness_inference(
             clip_path=clip_path,
             crf=req.crf,
             fps=req.fps,
             noise_sigma=req.noise_sigma,
-            base_anomaly_regions=base["anomalyRegions"],
             upscale=req.upscale,
+            media_prefix=cache_key,
         )
         if req.audio_bitrate is not None:
             result["audioRobustness"] = run_audio_robustness_inference(clip_path, req.audio_bitrate)
-
-    result["baselineVerdict"] = base["verdict"]
-    result["baselineConfidence"] = base["confidence"]
 
     schema = Phase3ResultSchema(**result)
     save_cache(cache_key, schema)

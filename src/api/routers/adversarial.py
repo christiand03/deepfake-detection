@@ -55,6 +55,7 @@ def _run(req: AdversarialRequest) -> Phase4ResultSchema:
             steps=req.steps,
             attack_modalities=req.attack_modalities,  # type: ignore[arg-type]
             base_result=base,
+            media_prefix=cache_key,
         )
     else:
         result = run_adversarial_inference(
@@ -63,6 +64,7 @@ def _run(req: AdversarialRequest) -> Phase4ResultSchema:
             epsilon=req.epsilon,
             steps=req.steps,
             base_result=base,
+            media_prefix=cache_key,
         )
 
     schema = Phase4ResultSchema(**result)

@@ -14,6 +14,7 @@ import { useErrorToast } from '../../context/ErrorToastContext'
 import type { AnalysisResult, Phase3Result } from '../../types/analysis'
 import { AttentionShiftTable } from '../shared/AttentionShiftTable'
 import { AudioFrequencyShift } from '../shared/AudioFrequencyShift'
+import { CropComparisonPlayer } from './CropComparisonPlayer'
 
 interface RobustnessPanelProps {
   result: AnalysisResult | null
@@ -175,76 +176,6 @@ function ConfidenceDelta({
         }}
       >
         {verdict}
-      </div>
-    </div>
-  )
-}
-
-// ── Heatmap frame comparison ──────────────────────────────────────────────────
-
-function HeatmapComparison({
-  original,
-  degraded,
-}: {
-  original: string
-  degraded: string
-}) {
-  return (
-    <div>
-      <div
-        style={{
-          fontSize: 9,
-          fontFamily: 'monospace',
-          color: '#4d5470',
-          letterSpacing: '0.12em',
-          marginBottom: 6,
-        }}
-      >
-        HEATMAP COMPARISON — FRAME #8
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <div style={{ flex: 1, textAlign: 'center' }}>
-          <img
-            src={original}
-            alt="Original heatmap"
-            style={{
-              width: '100%',
-              height: 70,
-              objectFit: 'cover',
-              borderRadius: 4,
-              border: '1px solid #2a2f42',
-            }}
-          />
-          <div style={{ fontSize: 9, fontFamily: 'monospace', color: '#4d5470', marginTop: 3 }}>
-            ORIGINAL
-          </div>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            color: '#4d5470',
-            fontSize: 14,
-          }}
-        >
-          →
-        </div>
-        <div style={{ flex: 1, textAlign: 'center' }}>
-          <img
-            src={degraded}
-            alt="Degraded heatmap"
-            style={{
-              width: '100%',
-              height: 70,
-              objectFit: 'cover',
-              borderRadius: 4,
-              border: '1px solid #4d5470',
-            }}
-          />
-          <div style={{ fontSize: 9, fontFamily: 'monospace', color: '#4d5470', marginTop: 3 }}>
-            DEGRADED
-          </div>
-        </div>
       </div>
     </div>
   )
@@ -667,6 +598,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'center',
+                      justifyContent: 'center',
                       gap: 2,
                     }}
                   >
@@ -706,12 +638,21 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                   params={phase3.params}
                 />
 
-                {/* Heatmap comparison */}
-                <HeatmapComparison
-                  original={result.heatmapFrames[8] ?? result.heatmapFrames[0]}
-                  degraded={
-                    phase3.degradedHeatmapFrames[8] ?? phase3.degradedHeatmapFrames[0]
-                  }
+                {/* Whole-clip crop player: clean → degraded (I2) */}
+                <CropComparisonPlayer
+                  title="HEATMAP — WHOLE CLIP (CLEAN → DEGRADED)"
+                  left={{
+                    label: 'CLEAN',
+                    videoUrl: phase3.cleanVideoUrl,
+                    heatmapFrames: phase3.cleanHeatmapFrames,
+                    accent: '#2a2f42',
+                  }}
+                  right={{
+                    label: 'DEGRADED',
+                    videoUrl: phase3.degradedVideoUrl,
+                    heatmapFrames: phase3.degradedHeatmapFrames,
+                    accent: '#4d5470',
+                  }}
                 />
 
                 {/* Attention shift */}

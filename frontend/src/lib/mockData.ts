@@ -323,6 +323,9 @@ export function makeMockPhase3Result(
     : baseResult.verdict
   return {
     degradedHeatmapFrames,
+    cleanHeatmapFrames: degradedHeatmapFrames,
+    cleanVideoUrl: null,
+    degradedVideoUrl: null,
     degradedVerdict,
     degradedConfidence: degradedFlipped ? 1 - degradedConfidence : degradedConfidence,
     baselineVerdict: baseResult.verdict,
@@ -372,6 +375,9 @@ export function makeMockPhase4Result(
     : baseResult.verdict
   const base: Phase4Result = {
     perturbedFrames,
+    cleanHeatmapFrames: perturbedFrames,
+    cleanVideoUrl: null,
+    attackedVideoUrl: null,
     perturbedVerdict,
     perturbedConfidence: flipped ? 1 - perturbedConfidence : perturbedConfidence,
     differenceFrames,
