@@ -454,7 +454,9 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
             disabled={isRunning}
           />
 
-          {/* Audio compression toggle */}
+          {/* Audio compression toggle — standalone Wav2Vec audio test; only
+              meaningful in unimodal mode (the fusion model grades audio jointly),
+              so it is disabled while MULTIMODAL is active. */}
           <div
             style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #2a2f42' }}
           >
@@ -463,15 +465,15 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                cursor: isRunning ? 'not-allowed' : 'pointer',
-                opacity: isRunning ? 0.5 : 1,
+                cursor: isRunning || useMultimodal ? 'not-allowed' : 'pointer',
+                opacity: isRunning || useMultimodal ? 0.4 : 1,
               }}
             >
               <input
                 type="checkbox"
                 checked={audioEnabled}
                 onChange={e => setAudioEnabled(e.target.checked)}
-                disabled={isRunning}
+                disabled={isRunning || useMultimodal}
                 style={{ accentColor: '#00e5ff', cursor: 'inherit' }}
               />
               <span
@@ -485,19 +487,25 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                 TEST AUDIO COMPRESSION
               </span>
             </label>
-            {audioEnabled && (
-              <SliderRow
-                label="Audio Bitrate"
-                sublabel="AAC target bitrate (kbps)"
-                value={audioBitrate}
-                min={8}
-                max={320}
-                step={8}
-                leftLabel="8 kbps"
-                rightLabel="320 kbps"
-                onChange={setAudioBitrate}
-                disabled={isRunning}
-              />
+            {useMultimodal ? (
+              <div style={{ marginTop: 4, fontSize: 9, fontFamily: 'monospace', color: '#4d5470' }}>
+                Disabled — the multimodal model already grades audio jointly.
+              </div>
+            ) : (
+              audioEnabled && (
+                <SliderRow
+                  label="Audio Bitrate"
+                  sublabel="AAC target bitrate (kbps)"
+                  value={audioBitrate}
+                  min={8}
+                  max={320}
+                  step={8}
+                  leftLabel="8 kbps"
+                  rightLabel="320 kbps"
+                  onChange={setAudioBitrate}
+                  disabled={isRunning}
+                />
+              )
             )}
           </div>
 
@@ -516,7 +524,11 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                 <input
                   type="checkbox"
                   checked={useMultimodal}
-                  onChange={e => setUseMultimodal(e.target.checked)}
+                  onChange={e => {
+                    setUseMultimodal(e.target.checked)
+                    // Mutually exclusive with the standalone Wav2Vec audio test.
+                    if (e.target.checked) setAudioEnabled(false)
+                  }}
                   disabled={isRunning}
                   style={{ accentColor: '#a855f7', cursor: 'inherit' }}
                 />
@@ -533,10 +545,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                 </span>
               </label>
               <div style={{ marginTop: 4, fontSize: 9, fontFamily: 'monospace', color: '#4d5470' }}>
-                Re-score the degraded clip with the joint video+audio model
-                {useMultimodal && audioEnabled
-                  ? ' — audio is degraded in-clip; the separate audio test is redundant.'
-                  : '.'}
+                Re-score the degraded clip with the joint video+audio fusion model.
               </div>
             </div>
           )}
