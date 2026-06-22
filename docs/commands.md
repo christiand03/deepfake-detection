@@ -285,14 +285,37 @@ $env:VIDEOMAE_CKPT_PATH = "checkpoints/videomae_adv.ckpt"
 python scripts/eval_adversarial_sweep.py
 ```
 
-**Training fortsetzen (echtes Resume statt Warm-Start):**
+**Lauf pausieren und später fortsetzen (echtes Resume statt Warm-Start):**
+
+Checkpoints werden automatisch in `logs/train/runs/<timestamp>/checkpoints/` gespeichert;
+`save_last: true` (`configs/callbacks/default.yaml`) hält dort zusätzlich ein `last.ckpt`
+aktuell. **Wichtig:** Geschrieben wird nur am **Epochen-Ende** (`check_val_every_n_epoch: 1`,
+`every_n_train_steps`/`every_n_epochs`/`save_on_train_epoch_end` = `null` — kein Mid-Epoch-Save).
+Lightning legt bei `Ctrl+C` **keinen** zusätzlichen Checkpoint an. Ein Abbruch mitten in der
+Epoche setzt also beim letzten **abgeschlossenen** Epochen-Checkpoint wieder auf — der Fortschritt
+der laufenden Epoche geht verloren. Bei langen Epochen daher möglichst bis zum nächsten
+Epochen-Checkpoint warten (neue `last.ckpt`-Schreibzeit beobachten) oder vorab häufiger
+checkpointen: `callbacks.model_checkpoint.every_n_train_steps=<N>`.
+
+Sauber pausieren: **einmal** `Ctrl+C` (SIGINT) im Terminal des Laufs und das geordnete
+Herunterfahren abwarten — **nicht** mehrfach `Ctrl+C` und **kein** `taskkill /F`, sonst kann ein
+Hard-Kill während des Checkpoint-Schreibens `last.ckpt` beschädigen.
 
 ```bash
-# Stellt Gewichte + Optimizer + LR-Scheduler + Epoch-Zähler wieder her
+# Stellt Gewichte + Optimizer + LR-Scheduler + Epoch-Zähler wieder her.
+# Gleiches experiment= wie beim Originallauf verwenden.
 python src/train.py experiment=train_multimodal ckpt_path=logs/train/runs/<timestamp>/checkpoints/last.ckpt
 ```
 
-Checkpoints werden automatisch in `logs/train/runs/<timestamp>/checkpoints/` gespeichert.
+> **Phase-2-Configs (`*_phase2`, `*_adversarial`) setzen `warmstart_ckpt`** — das kollidiert mit
+> `ckpt_path` (Guard in `src/train.py`: „Set either warmstart_ckpt … or ckpt_path — not both"
+> wirft). Beim Resume daher `warmstart_ckpt=null` mitgeben:
+>
+> ```bash
+> python src/train.py experiment=train_multimodal_phase2 \
+>     warmstart_ckpt=null \
+>     ckpt_path=logs/train/runs/<timestamp>/checkpoints/last.ckpt
+> ```
 
 **Automatischer Export für die API/Frontend:** Nach jedem Training wird der beste
 Checkpoint (höchste `val/auc_video`, `mode: max` — s. `configs/callbacks/default.yaml`)
