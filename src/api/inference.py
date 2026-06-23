@@ -474,20 +474,23 @@ def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
     )
 
 
-def _chunked_fake_prob(model: VideoMAEModule, chunks: torch.Tensor) -> float:
-    """Max-pooled fake probability over per-chunk forward passes.
+def _chunked_fake_probs(model: VideoMAEModule, chunks: torch.Tensor) -> list[float]:
+    """Per-chunk fake probabilities from one forward pass per chunk.
 
-    The same aggregation the evaluation uses (``reduce="amax"`` per video in
-    ``BaseDeepfakeModule._video_eval_epoch_end``): a video is as fake as its
-    most suspicious chunk.  Chunks run one at a time to stay VRAM-safe.
+    Returns one fake probability per 16-frame chunk (the raw per-window
+    classification, kept for the A1 confidence timeline). The verdict still
+    max-pools this list — the same aggregation the evaluation uses
+    (``reduce="amax"`` per video in ``BaseDeepfakeModule._video_eval_epoch_end``):
+    a video is as fake as its most suspicious chunk.  Chunks run one at a time to
+    stay VRAM-safe.
     """
-    fake_prob = 0.0
+    probs: list[float] = []
     with torch.no_grad():
         for chunk in chunks:
             pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
             logits = model.net(pixel_values=pv).logits  # (1, 2)
-            fake_prob = max(fake_prob, torch.softmax(logits, dim=-1)[0, 1].item())
-    return fake_prob
+            probs.append(torch.softmax(logits, dim=-1)[0, 1].item())
+    return probs
 
 
 def _preprocess_video_chunked(clip_path: Path) -> tuple[torch.Tensor, int]:
@@ -792,7 +795,7 @@ def _load_all_frames_cropped_per_window(
 def _compute_heatmaps_chunked(
     model: VideoMAEModule,
     all_frames: torch.Tensor,
-) -> np.ndarray:
+) -> tuple[np.ndarray, list[float]]:
     """Return a per-frame LRP heatmap for every frame in *all_frames*.
 
     Processes the sequence in non-overlapping 16-frame windows.  The last
@@ -804,10 +807,22 @@ def _compute_heatmaps_chunked(
         all_frames: Float tensor of shape ``(N, C, H, W)``.
 
     Returns:
-        Float32 numpy array of shape ``(N, IMG_SIZE, IMG_SIZE)``.
+        Tuple ``(heatmap_np, per_window_conf)`` where *heatmap_np* is a
+        ``(N, IMG_SIZE, IMG_SIZE)`` float32 array and *per_window_conf* is the
+        per-window fake probability — ONE value per 16-frame window, in the same
+        order as the windows, so the A1 confidence timeline aligns 1:1 with the
+        relevance timeline derived from the same windows.
+
+    The relevance is collected RAW (un-normalized) per window and normalized ONCE
+    across the whole clip (99th-percentile, sign-preserving), instead of scaling
+    each 16-frame window to its own peak.  Per-window normalization stretched every
+    window — even a barely-relevant one — to full intensity, which destroyed
+    cross-window comparability (the overlay's temporal honesty and any per-chunk
+    relevance aggregation).  Clip-global normalization keeps weak windows weak.
     """
     n = all_frames.shape[0]
     heatmap_np = np.zeros((n, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    per_window_conf: list[float] = []
     n_chunks = -(-n // NUM_FRAMES)  # ceiling division
     for chunk_idx, chunk_start in enumerate(range(0, n, NUM_FRAMES)):
         chunk_end = min(chunk_start + NUM_FRAMES, n)
@@ -834,14 +849,42 @@ def _compute_heatmaps_chunked(
         # Explain the FAKE class (1) so the seismic heatmap's sign is consistent
         # across REAL and FAKE clips (red = fake-supporting). Defaulting to the
         # predicted class would invert the colours on every REAL clip.
-        heatmap_tensor, _ = model.explain(pixel_values=pv, target_class=1)
+        # Collect RAW relevance (normalize=False) so the whole clip is normalized
+        # together below, not each window to its own peak.
+        # Per-window fake probability (A1 confidence timeline) over the SAME window
+        # the heatmap is computed for, so confidence and relevance always align.
+        with torch.no_grad():
+            logits = model.net(pixel_values=pv).logits  # (1, 2)
+        per_window_conf.append(torch.softmax(logits, dim=-1)[0, 1].item())
+        heatmap_tensor, _ = model.explain(pixel_values=pv, target_class=1, normalize=False)
         hm = heatmap_tensor.detach().cpu().numpy()[0]  # (16, H, W)
         heatmap_np[chunk_start:chunk_end] = hm[: chunk_end - chunk_start]
         log.debug("Heatmap chunk %d/%d processed.", chunk_idx + 1, n_chunks)
-    return heatmap_np
+
+    # Clip-global, sign-preserving normalization (99th-percentile) over all windows
+    # at once — keeps genuinely weak windows weak (cross-window comparable).
+    return _percentile_normalize(heatmap_np), per_window_conf
 
 
 # ── Video inference ───────────────────────────────────────────────────────────
+
+
+def _per_chunk_relevance(heatmap_np: np.ndarray) -> tuple[list[float], list[float]]:
+    """Per-16-frame-window relevance magnitude and sign from per-frame heatmaps.
+
+    For the A1 relevance-hybrid timeline: one value per chunk (window) over the
+    frames it covers — magnitude ``mean(|relevance|)`` (height) and the sign of
+    the net relevance ``sign(mean(relevance))`` (direction: + fake-supporting,
+    − real-supporting). Mirrors the per-frame ``mean(|·|)`` score aggregation.
+    """
+    n_frames = heatmap_np.shape[0]
+    magnitudes: list[float] = []
+    signs: list[float] = []
+    for start in range(0, n_frames, NUM_FRAMES):
+        window = heatmap_np[start : start + NUM_FRAMES]
+        magnitudes.append(float(np.clip(np.mean(np.abs(window)), 0.0, 1.0)))
+        signs.append(float(np.sign(np.mean(window))))
+    return magnitudes, signs
 
 
 def _video_result_with_heatmaps(
@@ -875,7 +918,9 @@ def _video_result_with_heatmaps(
         per_window_boxes = None
     n_frames = all_frames.shape[0]
 
-    heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
+    # Per-window confidence comes back from the SAME windows as the heatmaps, so
+    # the A1 confidence and relevance timelines always have matching length.
+    heatmap_np, per_chunk_confidence = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
 
     # Per-frame scores: mean absolute LRP relevance
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
@@ -890,10 +935,17 @@ def _video_result_with_heatmaps(
 
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
 
+    # Per-chunk timelines (A1): confidence (per-window fake prob) + relevance
+    # hybrid (magnitude + sign), one value per 16-frame window.
+    rel_magnitude, rel_sign = _per_chunk_relevance(heatmap_np)
+
     return {
         "verdict": verdict,
         "confidence": confidence,
         "perFrameScores": per_frame_scores,
+        "perChunkConfidence": per_chunk_confidence or [],
+        "perChunkRelevanceMagnitude": rel_magnitude,
+        "perChunkRelevanceSign": rel_sign,
         "heatmapFrames": heatmap_frames,
         "anomalyRegions": anomaly_regions,
         "cropBox": {
@@ -936,17 +988,25 @@ def _run_video_inference_fullframe(clip_path: Path) -> dict:
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     confidence = fake_prob if verdict == "FAKE" else probs[0].item()
 
-    # Heatmap: one AttnLRP pass per 16-frame chunk — covers the full video
-    heatmap_np = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
+    # Heatmap: one AttnLRP pass per 16-frame chunk — covers the full video. The
+    # per-window confidence comes from the same windows so the A1 timelines align.
+    heatmap_np, per_chunk_confidence = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
 
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
     heatmap_frames = [_array_to_data_uri(heatmap_np[i], magnitude_alpha=True) for i in range(n_frames)]
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
 
+    # Per-chunk timelines (A1): one value per 16-frame window of the full-frame
+    # heatmaps, so confidence and relevance share the same windows.
+    rel_magnitude, rel_sign = _per_chunk_relevance(heatmap_np)
+
     return {
         "verdict": verdict,
         "confidence": confidence,
         "perFrameScores": per_frame_scores,
+        "perChunkConfidence": per_chunk_confidence,
+        "perChunkRelevanceMagnitude": rel_magnitude,
+        "perChunkRelevanceSign": rel_sign,
         "heatmapFrames": heatmap_frames,
         "anomalyRegions": anomaly_regions,
         # Crop-space artifacts for the Phase-3 crop player (I2); here the "crop" is
@@ -987,7 +1047,10 @@ def run_video_inference(
         )
         return _run_video_inference_fullframe(clip_path)
 
-    fake_prob = _chunked_fake_prob(model, prepared.chunks)
+    # Verdict max-pools the per-chunk fake probs over the training-identical chunks.
+    # (The A1 confidence timeline is recomputed inside _video_result_with_heatmaps
+    # over the heatmap windows so it aligns 1:1 with the relevance timeline.)
+    fake_prob = max(_chunked_fake_probs(model, prepared.chunks), default=0.0)
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     confidence = fake_prob if verdict == "FAKE" else 1.0 - fake_prob
 
@@ -1039,11 +1102,14 @@ def run_video_inference_h5(
     # Verdict/confidence: max-pool the fake probability over ALL chunks of the clip
     # (E1). Each chunk is the exact 16-frame training tensor; chunks run one at a
     # time inside _chunked_fake_prob (VRAM-safe).
+    # Verdict max-pools the per-chunk fake probs. (The A1 confidence timeline is
+    # recomputed inside _video_result_with_heatmaps over the heatmap windows so it
+    # aligns 1:1 with the relevance timeline.)
     if h5_chunks:
         all_chunks = torch.stack(
             [_load_from_hdf5(c.h5_path, c.h5_index).squeeze(0) for c in h5_chunks]
         )  # (M, T, C, H, W)
-        fake_prob = _chunked_fake_prob(model, all_chunks)
+        fake_prob = max(_chunked_fake_probs(model, all_chunks), default=0.0)
     else:
         pixel_values = _load_from_hdf5(h5_metadata.h5_path, h5_metadata.h5_index).to(_device)
         with torch.no_grad():
@@ -1094,7 +1160,7 @@ def run_video_inference_fast(clip_path: Path) -> tuple[str, float]:
 
     prepared = _prepare_uploaded_video(clip_path)
     if prepared is not None:
-        fake_prob = _chunked_fake_prob(model, prepared.chunks)
+        fake_prob = max(_chunked_fake_probs(model, prepared.chunks), default=0.0)
     else:
         log.warning(
             "No face detected in %s — falling back to full-frame sampling; the input is out-of-distribution.",
@@ -1544,7 +1610,8 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
 
     heatmap_np = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     audio_relevance_full = np.zeros(len(waveform_np), dtype=np.float32)
-    fused_fake_prob = 0.0
+    # Per-window fused fake probs (A1 confidence timeline); verdict max-pools these.
+    per_chunk_conf: list[float] = []
     # Per-window video tensors, reused by the band-ablation pass so it pairs each
     # band-stopped audio window with the same video the verdict saw.
     pv_windows: list[torch.Tensor] = []
@@ -1563,13 +1630,18 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         # Fused verdict contribution (max-pool over windows).
         with torch.no_grad():
             logits = model(pixel_values=pv, input_values=iv)  # (1, 2)
-        fused_fake_prob = max(fused_fake_prob, torch.softmax(logits, dim=-1)[0, 1].item())
+        per_chunk_conf.append(torch.softmax(logits, dim=-1)[0, 1].item())
 
         # Joint AttnLRP — single shared backward pass over both modalities.
         # Explain the FAKE class (1) for a sign convention consistent with the
         # unimodal paths (positive = fake-supporting), regardless of verdict.
         try:
-            video_hm, audio_rel, _ = model.explain(pixel_values=pv, input_values=iv, target_class=1)
+            # Raw video relevance (normalize_video=False) so the whole clip is
+            # normalized together below, not each window to its own peak. Audio
+            # relevance stays per-window-normalized (handled as before).
+            video_hm, audio_rel, _ = model.explain(
+                pixel_values=pv, input_values=iv, target_class=1, normalize_video=False
+            )
             hm = video_hm.detach().cpu().numpy()[0]  # (16, H, W)
             heatmap_np[frame_start:frame_end] = hm[: frame_end - frame_start]
             rel = audio_rel.detach().cpu().numpy()[0]  # (10240,)
@@ -1583,8 +1655,14 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         if a_end > a_start:
             audio_relevance_full[a_start:a_end] = rel[: a_end - a_start]
 
+    fused_fake_prob = max(per_chunk_conf, default=0.0)
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fused_fake_prob > 0.5 else "REAL"
     confidence = fused_fake_prob if verdict == "FAKE" else 1.0 - fused_fake_prob
+
+    # Clip-global, sign-preserving normalization (99th-percentile) of the raw video
+    # relevance over all windows at once — keeps weak windows weak so the per-frame
+    # scores, heatmap overlay and per-chunk relevance are cross-window comparable.
+    heatmap_np = _percentile_normalize(heatmap_np)
 
     # ── Video panel: per-frame scores + upprojected heatmaps + anomaly regions ──
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
@@ -1594,6 +1672,7 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         full_frame = _upproject_heatmap(heatmap_np[i], *box, prepared.orig_w, prepared.orig_h)
         heatmap_frames.append(_array_to_data_uri(full_frame, magnitude_alpha=True))
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
+    rel_magnitude, rel_sign = _per_chunk_relevance(heatmap_np)
 
     # ── Audio panel: relevance timeline + frequency bands + word segments ───────
     # Band evidence via ablation on THE FUSION MODEL itself (signed, decision-
@@ -1622,6 +1701,9 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         "verdict": verdict,
         "confidence": confidence,
         "perFrameScores": per_frame_scores,
+        "perChunkConfidence": per_chunk_conf,
+        "perChunkRelevanceMagnitude": rel_magnitude,
+        "perChunkRelevanceSign": rel_sign,
         "heatmapFrames": heatmap_frames,
         "anomalyRegions": anomaly_regions,
         "cropBox": {

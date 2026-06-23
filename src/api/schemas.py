@@ -137,6 +137,13 @@ class AnalysisResultSchema(BaseModel):
     verdict: Literal["FAKE", "REAL"]
     confidence: float
     perFrameScores: list[float]
+    # Per-16-frame-chunk timelines (A1). Confidence = the raw per-window fake
+    # probability (NOT max-pooled — the verdict still is); relevance hybrid =
+    # magnitude (mean |relevance|) + sign (direction of net relevance). Empty on
+    # older cached results.
+    perChunkConfidence: list[float] = []
+    perChunkRelevanceMagnitude: list[float] = []
+    perChunkRelevanceSign: list[float] = []
     heatmapFrames: list[str]
     anomalyRegions: list[AnomalyRegionSchema]
     audio: AudioAnalysisSchema | None = None

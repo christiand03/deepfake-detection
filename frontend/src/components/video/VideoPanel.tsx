@@ -9,7 +9,7 @@
 import { useEffect, useState } from 'react'
 import { DemoSelector } from './DemoSelector'
 import { VideoAnalysisPlayer } from './VideoAnalysisPlayer'
-import { FrameTimeline } from './FrameTimeline'
+import { ChunkTimelines } from './ChunkTimelines'
 import { AnalysisControls } from './AnalysisControls'
 import { useAnalysis } from '../../hooks/useAnalysis'
 import { useVideoSync } from '../../hooks/useVideoSync'
@@ -131,10 +131,12 @@ export function VideoPanel({
       />
 
       {result && (
-        <FrameTimeline
-          scores={result.perFrameScores}
+        <ChunkTimelines
+          confidence={result.perChunkConfidence}
+          relevanceMagnitude={result.perChunkRelevanceMagnitude}
+          relevanceSign={result.perChunkRelevanceSign}
           currentFrame={frameIndex}
-          verdict={result.verdict}
+          totalFrames={result.perFrameScores.length}
         />
       )}
 

@@ -198,6 +198,7 @@ class VideoMAEModule(BaseDeepfakeModule):
         pixel_values: torch.Tensor,
         target_class: int | None = None,
         normalize_mode: Literal["per_frame", "global"] = "global",
+        normalize: bool = True,
     ):
         """Compute AttnLRP heatmaps for a batch of video clips.
 
@@ -210,6 +211,11 @@ class VideoMAEModule(BaseDeepfakeModule):
             normalize_mode: ``"global"`` (default) normalizes all T frames of a sample
                 together, preserving temporal dynamics. ``"per_frame"`` normalizes each
                 frame independently to [-1, 1].
+            normalize: when ``True`` (default) the heatmap is scaled to [-1, 1] per
+                ``normalize_mode``. Pass ``False`` to return the RAW signed relevance
+                (channel-summed, patch-pooled, upsampled, but un-normalized) so the
+                caller can normalize across a whole clip instead of per 16-frame
+                window — required for cross-window-comparable per-chunk relevance.
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
         self._require_eager_attention(self.net)
@@ -247,7 +253,10 @@ class VideoMAEModule(BaseDeepfakeModule):
         # Upsample back to original spatial resolution
         heatmap_4d = F_nn.interpolate(heatmap_patches, size=(H, W), mode="bilinear", align_corners=False)
 
-        if normalize_mode == "global":
+        if not normalize:
+            # Raw signed relevance — caller normalizes across the whole clip.
+            heatmap = rearrange(heatmap_4d, "(b t) 1 h w -> b t h w", b=B, t=T)
+        elif normalize_mode == "global":
             # Global normalization: all T frames per sample normalized together,
             # preserving temporal dynamics (frames with weaker relevance stay weaker).
             heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> b (t h w)", b=B, t=T)

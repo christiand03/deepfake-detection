@@ -17,10 +17,11 @@ import src.api.inference as inf
 from src.api.inference import (
     AUDIO_SAMPLES_PER_CHUNK,
     NUM_FRAMES,
-    _chunked_fake_prob,
+    _chunked_fake_probs,
     _compute_frequency_bands,
     _ensure_target_fps,
     _normalize_uint8_frames,
+    _per_chunk_relevance,
     _prepare_uploaded_video,
     _resolve_per_window_boxes,
     _windowed_audio_fake_prob,
@@ -189,10 +190,10 @@ def test_prepare_uploaded_video_normalization_matches_hdf5_path(tmp_path: Path):
     np.testing.assert_allclose(got, expected, rtol=1e-5)
 
 
-# ── _chunked_fake_prob ────────────────────────────────────────────────────────
+# ── _chunked_fake_probs ───────────────────────────────────────────────────────
 
 
-def test_chunked_fake_prob_max_pools_over_chunks():
+def test_chunked_fake_probs_returns_per_chunk_and_max_pools():
     # Three chunks: fake logit dominant only in the second one.
     model = _SequenceModel(
         [
@@ -203,12 +204,45 @@ def test_chunked_fake_prob_max_pools_over_chunks():
     )
     chunks = torch.zeros(3, NUM_FRAMES, 3, 4, 4)
 
-    fake_prob = _chunked_fake_prob(model, chunks)
+    probs = _chunked_fake_probs(model, chunks)
 
-    expected = torch.softmax(torch.tensor([0.0, 3.0]), dim=-1)[1].item()
-    assert abs(fake_prob - expected) < 1e-6
+    # One probability per chunk (A1 confidence timeline), in chunk order.
+    assert len(probs) == 3
+    expected_each = [
+        torch.softmax(torch.tensor([2.0, 0.0]), dim=-1)[1].item(),
+        torch.softmax(torch.tensor([0.0, 3.0]), dim=-1)[1].item(),
+        torch.softmax(torch.tensor([1.0, 1.0]), dim=-1)[1].item(),
+    ]
+    for got, exp in zip(probs, expected_each, strict=True):
+        assert abs(got - exp) < 1e-6
+    # The verdict still max-pools the per-chunk list.
+    assert abs(max(probs) - expected_each[1]) < 1e-6
     # One forward per chunk, each with batch size 1 (VRAM-safe).
     assert model.calls == [(1, NUM_FRAMES, 3, 4, 4)] * 3
+
+
+# ── _per_chunk_relevance ──────────────────────────────────────────────────────
+
+
+def test_per_chunk_relevance_magnitude_and_sign_per_window():
+    # Two 16-frame windows: first net-positive (fake), second net-negative (real).
+    pos = np.full((NUM_FRAMES, 4, 4), 0.5, dtype=np.float32)
+    neg = np.full((NUM_FRAMES, 4, 4), -0.25, dtype=np.float32)
+    heatmap = np.concatenate([pos, neg], axis=0)
+
+    magnitude, sign = _per_chunk_relevance(heatmap)
+
+    assert len(magnitude) == 2 and len(sign) == 2
+    assert abs(magnitude[0] - 0.5) < 1e-6  # mean(|0.5|)
+    assert abs(magnitude[1] - 0.25) < 1e-6  # mean(|-0.25|)
+    assert sign == [1.0, -1.0]  # direction of the net relevance per window
+
+
+def test_per_chunk_relevance_partial_last_window():
+    # 20 frames → one full window + a 4-frame remainder window.
+    heatmap = np.ones((20, 4, 4), dtype=np.float32)
+    magnitude, sign = _per_chunk_relevance(heatmap)
+    assert len(magnitude) == 2 and len(sign) == 2
 
 
 # ── _windowed_audio_fake_prob ─────────────────────────────────────────────────

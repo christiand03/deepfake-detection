@@ -572,6 +572,7 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         pixel_values: torch.Tensor,
         input_values: torch.Tensor,
         target_class: int | torch.Tensor | None = None,
+        normalize_video: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute joint AttnLRP heatmaps for both modalities.
 
@@ -583,9 +584,15 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
             pixel_values:  ``(B, 16, 3, 224, 224)`` float32 video tensor.
             input_values:  ``(B, T_samples)`` float32 audio waveform tensor.
             target_class:  Class to explain (None / int / Tensor[B]).
+            normalize_video: when ``True`` (default) the video heatmap is scaled to
+                [-1, 1] across its 16 frames. Pass ``False`` to return the RAW signed
+                video relevance so the caller can normalize across a whole clip
+                instead of per 16-frame window (cross-window-comparable per-chunk
+                relevance). Audio relevance is always normalized as before.
 
         Returns:
-            video_heatmap:   ``(B, T, H, W)`` signed relevance in [-1, 1].
+            video_heatmap:   ``(B, T, H, W)`` signed relevance ([-1, 1], or raw when
+                             ``normalize_video=False``).
             audio_relevance: ``(B, T_samples)`` signed relevance in [-1, 1].
             resolved_target: ``(B,)`` long tensor of explained class indices.
         """
@@ -635,9 +642,13 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         heatmap_4d = rearrange(heatmap, "b t h w -> (b t) 1 h w")
         heatmap_patches = F_nn.avg_pool2d(heatmap_4d, kernel_size=16, stride=16)
         heatmap_4d = F_nn.interpolate(heatmap_patches, size=(H, W), mode="bilinear", align_corners=False)
-        heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> b (t h w)", b=B, t=T)
-        heatmap_2d = normalize_relevance(heatmap_2d)
-        video_heatmap = rearrange(heatmap_2d, "b (t h w) -> b t h w", b=B, t=T, h=H, w=W)
+        if normalize_video:
+            heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> b (t h w)", b=B, t=T)
+            heatmap_2d = normalize_relevance(heatmap_2d)
+            video_heatmap = rearrange(heatmap_2d, "b (t h w) -> b t h w", b=B, t=T, h=H, w=W)
+        else:
+            # Raw signed relevance — caller normalizes across the whole clip.
+            video_heatmap = rearrange(heatmap_4d, "(b t) 1 h w -> b t h w", b=B, t=T)
 
         # Post-process audio (identical to Wav2Vec2DeepfakeModule.explain)
         audio_relevance = normalize_relevance(audio_rel)

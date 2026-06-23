@@ -125,6 +125,17 @@ export interface AnalysisResult {
   /** Per-frame confidence scores, length = number of video frames */
   perFrameScores: number[]
   /**
+   * Per-16-frame-chunk timelines (A1). One value per chunk (window):
+   * - `perChunkConfidence` — raw per-window fake probability (0–1, NOT max-pooled;
+   *   the verdict still is). The confidence timeline classifies each chunk so a
+   *   short manipulation shows as FAKE only where it occurs.
+   * - `perChunkRelevanceMagnitude` — `mean(|relevance|)` per chunk (timeline height).
+   * - `perChunkRelevanceSign` — sign of net relevance (+1 fake-supporting / −1 real).
+   */
+  perChunkConfidence: number[]
+  perChunkRelevanceMagnitude: number[]
+  perChunkRelevanceSign: number[]
+  /**
    * Per-frame AttnLRP heatmap images encoded as base64 data URIs.
    * Each string is a full "data:image/png;base64,..." URI ready for canvas drawImage.
    */

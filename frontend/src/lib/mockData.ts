@@ -187,11 +187,29 @@ export function makeMockResult(clip: ClipMeta): AnalysisResult {
       })()
     : null
 
+  // Per-chunk timelines (A1): one value per 16-frame chunk. For the FAKE mock the
+  // manipulation sits in the middle chunks, so only those classify as FAKE.
+  const nChunks = Math.max(1, Math.ceil(nFrames / 16))
+  const perChunkConfidence = Array.from({ length: nChunks }, (_, c) => {
+    const t = nChunks === 1 ? 0.5 : c / (nChunks - 1)
+    if (!isFake) return 0.1 + Math.random() * 0.15
+    return 0.2 + 0.75 * Math.exp(-((t - 0.55) ** 2) / 0.04) + (Math.random() - 0.5) * 0.04
+  })
+  // Small absolute values, like the real clip-global-normalised mean(|relevance|)
+  // per chunk (the frontend applies a display gain).
+  const perChunkRelevanceMagnitude = perChunkConfidence.map(
+    p => Math.abs(p - 0.5) * 0.4 + Math.random() * 0.02,
+  )
+  const perChunkRelevanceSign = perChunkConfidence.map(p => (p > 0.5 ? 1 : -1))
+
   return {
     clipId: clip.id,
     verdict: clip.label,
     confidence,
     perFrameScores: scores,
+    perChunkConfidence,
+    perChunkRelevanceMagnitude,
+    perChunkRelevanceSign,
     heatmapFrames,
     anomalyRegions: isFake
       ? [
