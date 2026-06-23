@@ -183,6 +183,9 @@ export function WordTokenChart({ wordSegments, videoRef }: WordTokenChartProps) 
               fontSize: 11,
               color: '#e8eaf0',
             }}
+            // Force the value row white too — otherwise Recharts colours it with the
+            // bar's seismic fill, which is near-black for near-zero/strong relevance.
+            itemStyle={{ color: '#e8eaf0' }}
             formatter={(v) => [typeof v === 'number' ? v.toFixed(3) : '0.000', 'Relevance']}
           />
           <Bar
