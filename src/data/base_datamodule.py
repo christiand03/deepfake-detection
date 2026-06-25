@@ -49,15 +49,28 @@ class BaseDeepfakeDataModule(LightningDataModule):
         raise NotImplementedError
 
     def setup(self, stage: str | None = None) -> None:
-        if self.train_dataset is None:
+        """Build only the split datasets the current Lightning ``stage`` needs.
+
+        Each dataset opens its ``{split}.h5`` in ``__init__``, so building all
+        three unconditionally would force ``train.h5``/``val.h5`` to exist even
+        for a test-only run.  Honouring ``stage`` lets ``trainer.test()`` (which
+        Lightning calls with ``stage="test"``) evaluate a directory that holds
+        just ``test.h5`` — the cross-dataset eval case.  ``stage=None`` (the
+        explicit ``setup()`` calls in tests and the train-only helpers below)
+        still builds everything it is asked for.
+        """
+        if stage in (None, "fit") and self.train_dataset is None:
             self.train_dataset = self._make_dataset("train")
+        if stage in (None, "fit", "validate") and self.val_dataset is None:
             self.val_dataset = self._make_dataset("val")
+        if stage in (None, "test", "predict") and self.test_dataset is None:
             self.test_dataset = self._make_dataset("test")
 
     def _train_labels(self) -> np.ndarray:
         """Per-chunk labels of the train split, read from the SAME column the
         train dataset serves (``self.hparams.label_type``)."""
-        self.setup()
+        # "fit" so class-weight / sampler computation never requires test.h5.
+        self.setup(stage="fit")
         dataset = self.train_dataset
         with h5py.File(dataset.h5_path, "r") as f:
             return f[dataset.label_type][:].astype(np.int64)

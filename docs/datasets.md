@@ -72,6 +72,36 @@ die deterministische Per-Identität-Hash-Zuordnung in `split_utils.assign_splits
 > dieselbe Audiospur, ebenso die beiden Varianten mit *gefälschtem* Audio (`audio_modified`,
 > `both_modified`). Records bleiben dennoch verschieden, da sich die Videospur unterscheidet.
 
+### Externe Test-Datensätze (Cross-Dataset-Generalisierung)
+
+Zusätzlich zu AV-Deepfake1M können **fremde Datensätze** ausschließlich zur
+*Evaluation* vorhandener Checkpoints herangezogen werden — ein Cross-Dataset-Test
+misst, wie gut ein Modell auf einem in Training/Test ungesehenen Generator
+generalisiert. Solche Quellen besitzen weder die
+`{identity}/{clip}/{segment}/{variant}.mp4`-Struktur noch JSON-Sidecars und laufen
+daher **nicht** über `src.data_processing.preprocess`, sondern über den
+konfigurationsgesteuerten Pfad `scripts/preprocess_loose_videos.py` (s.
+`commands.md` §2). Die Auswahl erfolgt über `conf/datasets/<name>.yaml`; ein neuer
+Datensatz ist ein einzelner Config-Drop. Das Ergebnis landet **isoliert** in
+`data/processed/<name>/` und überschreibt die primären `train/val/test.h5` nie.
+
+**SWAN-DF** (`conf/datasets/swan.yaml`) ist der erste solche Datensatz:
+
+- **Inhalt:** Face-Swap-Klips unter `data/SWAN/SWAN-DF_256x256/SWAN-DF/256x256/{identity}/*.mp4`
+  (5.760 Klips, ~50 Identitäten, je ~7 s). Audiovisueller Deepfake — Video *und*
+  Audio sind manipuliert → `modify_type: both_modified` (label = label_video =
+  label_audio = 1). Damit sind alle drei Modell-Familien (Video/Audio/Multimodal)
+  aus *einem* Preprocessing-Lauf testbar.
+- **Nur Fakes:** Der abgelegte Ordner enthält **keine** Bona-fide-Klips. Bei reinen
+  Positiv-Mengen sind AUC/EER undefiniert; aussagekräftig ist die
+  **Fake-Erkennungsrate (Recall / Accuracy auf Fakes)**. Für eine echte AUC müssen
+  Negative ergänzt werden (echte SWAN-Klips als zweites Dataset-Config mit
+  `modify_type: real`, oder reale Chunks aus dem bestehenden `test.h5` beimischen).
+- **Speicher-Cap:** Alle 5.760 Klips ≈ 150 GB HDF5 (≈ 11 Chunks/Klip à ~2,45 MB).
+  `max_videos` deckelt die Klipzahl (Default 400 ≈ 11 GB); die Auswahl wird
+  round-robin über die Identitäts-Ordner verteilt, damit der Cap diverse
+  Identitäten statt aller Varianten weniger Personen abdeckt.
+
 ## 2. Kritische Fehlerquellen & Checkliste (Vermeidung von "Silent Bugs")
 
 ### A: Identity Leakage (Der Noten-Killer)
