@@ -36,6 +36,11 @@ DDP ist PyTorchs Multi-GPU-Trainingsstrategie, bei der das Modell auf jede GPU r
 
 ## 2. Evaluationsmetriken
 
+> **Vollständige Metrik-Referenz** (alle Keys, Chunk- vs. Video-Ebene,
+> Recall@FPR, Robustheits- & Adversarial-Sweeps, Monitor-Metrik):
+> siehe [`../metrics.md`](../metrics.md). Dieser Abschnitt erklärt die
+> wichtigsten Begriffe im Detail.
+
 ### AUC-ROC (Area Under the Receiver Operating Curve)
 
 Die AUC-ROC misst die Wahrscheinlichkeit, dass das Modell einem zufällig gewählten positiven Sample (FAKE) einen höheren Score zuweist als einem zufällig gewählten negativen Sample (REAL), aggregiert über alle Entscheidungsschwellen. Ein Wert von 1,0 ist perfekt; 0,5 entspricht Zufallsklassifikation. AUC ist die primäre Metrik dieses Projekts, weil sie schwellenwertunabhängig und robust gegenüber Klassenimbalancen ist – anders als Accuracy.

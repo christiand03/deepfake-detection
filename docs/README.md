@@ -27,6 +27,7 @@ Neu im Projekt? Lies in dieser Reihenfolge:
 | [`process.md`](process.md) | **End-to-End-Prozess**: Rohvideos → Preprocessing → Datenladen → Training → Eval/xAI, Schritt für Schritt mit Code-Verweisen |
 | [`datasets.md`](datasets.md) | Datensätze (AV-Deepfake1M, SWAN-DF), Preprocessing-Pipeline, Fehlerquellen, JSON-Sidecar-Referenz, QA |
 | [`model.md`](model.md) | Architekturen (VideoMAE, Wav2Vec2, Cross-Attention), VRAM-Optimierung, Baselines & Läufe, Ablationen |
+| [`metrics.md`](metrics.md) | **Alle erfassten Metriken**: Chunk- vs. Video-Ebene, Trainings-/Eval-Metriken (AUC, PR-AUC, Recall@FPR), Robustheits- & Adversarial-Metriken, Monitor-Metrik |
 | [`commands.md`](commands.md) | Vollständige Befehls-Referenz (Preprocessing → Training → Eval → xAI → Sweeps → Server) |
 | [`full_run_runbook.md`](full_run_runbook.md) | **Runbook Vollständiger Lauf**: alle `wandb launch`-Befehle Phase 1 → 2 → 4 + SOTA-Track, in Abhängigkeitsreihenfolge, inkl. Checkpoint-Linien |
 | [`phase34_runbook.md`](phase34_runbook.md) | **Runbook Phase 3 & 4**: exakte Sweep-Befehle (inkl. multimodal) + Zuordnung W&B-Spalte → Forschungsfrage |
