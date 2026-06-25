@@ -37,20 +37,37 @@ log = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parents[1]
 
-_CSV_CANDIDATES = [
-    _PROJECT_ROOT / "data/processed/test_metadata.csv",
-    _PROJECT_ROOT / "data/processed/val_metadata.csv",
-    _PROJECT_ROOT / "data/processed/train_metadata.csv",
+_PROCESSED_DIR = _PROJECT_ROOT / "data/processed"
+
+# Standard split CSVs, listed first so they take precedence on video_id clashes.
+_PRIORITY_CSVS = [
+    _PROCESSED_DIR / "test_metadata.csv",
+    _PROCESSED_DIR / "val_metadata.csv",
+    _PROCESSED_DIR / "train_metadata.csv",
 ]
+
+
+def _csv_candidates() -> list[Path]:
+    """Return every ``*_metadata.csv`` under the processed dir.
+
+    The three standard split CSVs come first (test > val > train precedence);
+    any additional metadata CSVs — e.g. ``swan_metadata.csv`` written by
+    ``scripts/preprocess_loose_videos.py`` — follow in sorted order. This mirrors
+    the API's clip registry, which globs the same pattern.
+    """
+    priority = [p for p in _PRIORITY_CSVS if p.exists()]
+    extra = sorted(p for p in _PROCESSED_DIR.glob("*_metadata.csv") if p not in _PRIORITY_CSVS)
+    return priority + extra
 
 
 def _load_csv_index() -> dict[str, dict[str, str]]:
     """Return a dict mapping *video_id* -> first CSV row for that video_id.
 
-    All three split CSVs are merged; test takes priority over val over train.
+    All metadata CSVs are merged; test takes priority over val over train, then
+    any extra CSVs (e.g. swan_metadata.csv).
     """
     index: dict[str, dict[str, str]] = {}
-    for csv_path in _CSV_CANDIDATES:
+    for csv_path in _csv_candidates():
         if not csv_path.exists():
             log.debug("CSV not found (skipping): %s", csv_path)
             continue
