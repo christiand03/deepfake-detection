@@ -171,11 +171,15 @@ class VideoMAEModule(BaseDeepfakeModule):
         self.val_f1(preds, labels)
         self.val_auc(positive_probs, labels)
         self.val_ap(positive_probs, labels)
+        self.val_recall_fpr_1pct(positive_probs, labels)
+        self.val_recall_fpr_0p1pct(positive_probs, labels)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/auc", self.val_auc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/ap", self.val_ap, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/recall_at_fpr_0p01", self.val_recall_fpr_1pct, on_step=False, on_epoch=True)
+        self.log("val/recall_at_fpr_0p001", self.val_recall_fpr_0p1pct, on_step=False, on_epoch=True)
 
     def test_step(self, batch: Any, batch_idx: int):
         loss, preds, labels, logits = self.model_step(batch)
@@ -187,11 +191,15 @@ class VideoMAEModule(BaseDeepfakeModule):
         self.test_f1(preds, labels)
         self.test_auc(positive_probs, labels)
         self.test_ap(positive_probs, labels)
+        self.test_recall_fpr_1pct(positive_probs, labels)
+        self.test_recall_fpr_0p1pct(positive_probs, labels)
         self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/f1", self.test_f1, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/auc", self.test_auc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/ap", self.test_ap, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/recall_at_fpr_0p01", self.test_recall_fpr_1pct, on_step=False, on_epoch=True)
+        self.log("test/recall_at_fpr_0p001", self.test_recall_fpr_0p1pct, on_step=False, on_epoch=True)
 
     def explain(
         self,

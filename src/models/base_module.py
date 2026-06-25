@@ -46,6 +46,8 @@ from torchmetrics.functional.classification import (
     binary_f1_score,
 )
 
+from .metrics import RecallAtFixedFPR, recall_at_fixed_fpr
+
 if TYPE_CHECKING:
     import torch.nn as nn
 
@@ -299,6 +301,13 @@ class BaseDeepfakeModule(LightningModule):
         self.val_ap = BinaryAveragePrecision()
         self.test_ap = BinaryAveragePrecision()
 
+        # Recall at a fixed false-alarm budget — the deployment-relevant number
+        # under imbalance (a high AUROC can hide a low recall at 1% FPR).
+        self.val_recall_fpr_1pct = RecallAtFixedFPR(max_fpr=0.01)
+        self.test_recall_fpr_1pct = RecallAtFixedFPR(max_fpr=0.01)
+        self.val_recall_fpr_0p1pct = RecallAtFixedFPR(max_fpr=0.001)
+        self.test_recall_fpr_0p1pct = RecallAtFixedFPR(max_fpr=0.001)
+
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
@@ -484,6 +493,11 @@ class BaseDeepfakeModule(LightningModule):
         self.log(f"{stage}/acc_video", binary_accuracy(video_probs, video_labels))
         self.log(f"{stage}/f1_video", binary_f1_score(video_probs, video_labels))
         self.log(f"{stage}/ap_video", binary_average_precision(video_probs, video_labels))
+        # 1% FPR only: a few hundred eval videos cannot resolve a 0.1% budget.
+        self.log(
+            f"{stage}/recall_at_fpr_0p01_video",
+            recall_at_fixed_fpr(video_probs, video_labels, 0.01),
+        )
 
         if stage == "test":
             # Per-category diagnosis: real videos vs one fake category each.
