@@ -1377,8 +1377,17 @@ def _compute_word_segments(
     sample_rate: int,
     relevance: np.ndarray,
     cache_dir: Path,
+    window_probs: np.ndarray | None = None,
+    samples_per_window: int = AUDIO_SAMPLES_PER_CHUNK,
 ) -> list[dict]:
-    """Compute word-level timestamps and per-word relevance scores via WhisperX.
+    """Compute word-level timestamps + per-word relevance and confidence via WhisperX.
+
+    Per-word ``relevance`` is the signed value at the |relevance|-peak sample in
+    the word window ("most suspicious sample"), percentile-normalised across
+    words.  Per-word ``confidence`` (B4) is the **max** fake-probability over the
+    0.64-s windows the word overlaps — the same "most suspicious" aggregation as
+    the verdict — taken from *window_probs* (raw fake-prob 0–1); it is ``0.0``
+    when *window_probs* is ``None``.
 
     Uses a SHA-256 keyed disk cache so transcription is skipped on subsequent
     calls with the same waveform. Returns ``[]`` if WhisperX is not installed.
@@ -1411,13 +1420,26 @@ def _compute_word_segments(
     # Per-word relevance = the signed value at the sample with the largest
     # |relevance| in the word window (the "most suspicious sample"). A mean would
     # cancel opposing signs and push most words to ~0.
+    n_windows = len(window_probs) if window_probs is not None else 0
     raw_word_rels: list[float] = []
+    word_confs: list[float] = []
     for seg in raw_segs:
         s = int(seg["start"] * sample_rate)
         e = int(seg["end"] * sample_rate)
         chunk = relevance[s:e]
         word_rel = float(chunk[int(np.argmax(np.abs(chunk)))]) if len(chunk) > 0 else 0.0
         raw_word_rels.append(word_rel)
+
+        # Confidence = max fake-prob over the windows the word overlaps ("most
+        # suspicious window") — same aggregation as the verdict.
+        if n_windows > 0:
+            w_start = s // samples_per_window
+            w_end = max(w_start, (e - 1) // samples_per_window)
+            w_start = min(w_start, n_windows - 1)
+            w_end = min(w_end, n_windows - 1)
+            word_confs.append(float(window_probs[w_start : w_end + 1].max()))
+        else:
+            word_confs.append(0.0)
 
     # Percentile-normalise across words so the bars use the full colour range
     # (a global abs-max would let one spike flatten every other word to ~0).
@@ -1428,8 +1450,9 @@ def _compute_word_segments(
             "start": seg["start"],
             "end": seg["end"],
             "relevance": float(value),
+            "confidence": conf,
         }
-        for seg, value in zip(raw_segs, norm.tolist(), strict=True)
+        for seg, value, conf in zip(raw_segs, norm.tolist(), word_confs, strict=True)
     ]
 
 
@@ -1438,16 +1461,20 @@ def _compute_word_segments(
 _AUDIO_WINDOW_BATCH = 32  # windows per forward pass — VRAM-safe for long uploads
 
 
-def _windowed_audio_fake_prob(model: Wav2Vec2DeepfakeModule, waveform_np: np.ndarray) -> float:
-    """Max-pooled fake probability over 10,240-sample windows (training format).
+def _windowed_audio_fake_probs(model: Wav2Vec2DeepfakeModule, waveform_np: np.ndarray) -> np.ndarray:
+    """Per-window fake probability over 10,240-sample windows (training format).
 
     Training fed Wav2Vec2 fixed 0.64-s windows; feeding a whole multi-second
     waveform shifts the mean-pooled feature distribution (train/serve skew).
     The waveform is split into non-overlapping training-length windows, each
-    z-scored individually (matching ``normalize_audio``), and the verdict is
-    the max window probability — the evaluation aggregation.  A trailing
-    remainder shorter than one window is dropped (same as preprocessing);
-    clips shorter than one window fall back to a whole-waveform pass.
+    z-scored individually (matching ``normalize_audio``), and each window is
+    scored separately.  A trailing remainder shorter than one window is dropped
+    (same as preprocessing); clips shorter than one window fall back to a single
+    whole-waveform pass (length-1 array).
+
+    Returns the per-window fake probability array.  The verdict is its max
+    (see :func:`_windowed_audio_fake_prob`); the full array drives the per-window
+    Confidence view (B4).
     """
     n_windows = len(waveform_np) // AUDIO_SAMPLES_PER_CHUNK
     if n_windows == 0:
@@ -1455,20 +1482,47 @@ def _windowed_audio_fake_prob(model: Wav2Vec2DeepfakeModule, waveform_np: np.nda
         t = (t - t.mean()) / torch.sqrt(t.var() + 1e-7)
         with torch.no_grad():
             logits = model.net(t).logits  # (1, 2)
-        return torch.softmax(logits, dim=-1)[0, 1].item()
+        return torch.softmax(logits, dim=-1)[:, 1].detach().cpu().numpy()
 
     windows_np = waveform_np[: n_windows * AUDIO_SAMPLES_PER_CHUNK].reshape(n_windows, AUDIO_SAMPLES_PER_CHUNK)
     windows = torch.from_numpy(windows_np.copy())  # (W, 10240)
     # Per-window z-score — matches normalize_audio's per-sample standardisation.
     windows = (windows - windows.mean(dim=1, keepdim=True)) / torch.sqrt(windows.var(dim=1, keepdim=True) + 1e-7)
 
-    fake_prob = 0.0
+    probs: list[np.ndarray] = []
     with torch.no_grad():
         for start in range(0, n_windows, _AUDIO_WINDOW_BATCH):
             batch = windows[start : start + _AUDIO_WINDOW_BATCH].to(_device)
             logits = model.net(batch).logits  # (B, 2)
-            fake_prob = max(fake_prob, torch.softmax(logits, dim=-1)[:, 1].max().item())
-    return fake_prob
+            probs.append(torch.softmax(logits, dim=-1)[:, 1].detach().cpu().numpy())
+    return np.concatenate(probs)
+
+
+def _windowed_audio_fake_prob(model: Wav2Vec2DeepfakeModule, waveform_np: np.ndarray) -> float:
+    """Max-pooled fake probability over 10,240-sample windows — the verdict.
+
+    Thin wrapper over :func:`_windowed_audio_fake_probs`; the verdict is the
+    most-suspicious window (max-pool), the project-wide aggregation.
+    """
+    probs = _windowed_audio_fake_probs(model, waveform_np)
+    return float(probs.max()) if probs.size else 0.0
+
+
+def _confidence_per_sample(window_probs: np.ndarray, n_samples: int) -> list[float]:
+    """Expand per-window fake-probs to a per-sample array of length *n_samples*.
+
+    Each window's probability is repeated across its ``AUDIO_SAMPLES_PER_CHUNK``
+    samples; the trailing remainder (dropped by the windowing) reuses the last
+    window's value so the array length matches ``waveformRelevance`` exactly.
+    This lets the Layer-1 Confidence view reuse the existing per-sample
+    down-sample path with no extra mapping logic (B4).
+    """
+    if window_probs.size == 0 or n_samples == 0:
+        return [0.0] * n_samples
+    per_sample = np.repeat(window_probs, AUDIO_SAMPLES_PER_CHUNK)
+    if len(per_sample) < n_samples:
+        per_sample = np.pad(per_sample, (0, n_samples - len(per_sample)), mode="edge")
+    return per_sample[:n_samples].astype(float).tolist()
 
 
 def run_audio_inference(clip_path: Path) -> dict | None:
@@ -1487,8 +1541,11 @@ def run_audio_inference(clip_path: Path) -> dict | None:
         return None
 
     model = get_audio_model()
-    # Verdict: max-pooled probability over training-length 0.64-s windows.
-    fake_prob = _windowed_audio_fake_prob(model, waveform_np)
+    # Per-window fake probabilities over training-length 0.64-s windows; the
+    # verdict is their max-pool (most-suspicious window), the full array drives
+    # the per-window Confidence view (B4).
+    window_probs = _windowed_audio_fake_probs(model, waveform_np)
+    fake_prob = float(window_probs.max()) if window_probs.size else 0.0
 
     # Whole-waveform tensor for the visualization-only explain() pass below.
     waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0).to(_device)  # (1, T)
@@ -1525,12 +1582,16 @@ def run_audio_inference(clip_path: Path) -> dict | None:
     # segments below (which do their own per-word normalisation).
     relevance_norm = _percentile_normalize(relevance).tolist()
     amplitude = waveform_np.tolist()
+    # Per-sample confidence (B4): the per-window fake-prob expanded to sample
+    # resolution so the Layer-1 Confidence view reuses the relevance down-sample path.
+    waveform_confidence = _confidence_per_sample(window_probs, len(waveform_np))
 
-    # Frequency-band evidence via band ablation (signed by the model's decision),
-    # not relevance-energy — the latter's sign is not a reliable fake/real cue.
+    # Frequency-band evidence (L3). Confidence view: band ablation (signed by the
+    # model's decision). Relevance view (B4): energy-weighted LRP relevance.
     frequency_bands = _band_confidence(waveform_np, sample_rate, lambda w: _audio_mean_fake_margin(model, w))
+    frequency_bands_relevance = _compute_frequency_bands(waveform_np, relevance, sample_rate)
     cache_dir = Path(__file__).parents[2] / ".whisperx_cache"
-    word_segments = _compute_word_segments(waveform_np, sample_rate, relevance, cache_dir)
+    word_segments = _compute_word_segments(waveform_np, sample_rate, relevance, cache_dir, window_probs=window_probs)
 
     audio_verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     audio_confidence = fake_prob if audio_verdict == "FAKE" else 1.0 - fake_prob
@@ -1539,10 +1600,12 @@ def run_audio_inference(clip_path: Path) -> dict | None:
         "verdict": audio_verdict,
         "confidence": audio_confidence,
         "waveformRelevance": relevance_norm,
+        "waveformConfidence": waveform_confidence,
         "waveformAmplitude": amplitude,
         "sampleRate": sample_rate,
         "wordSegments": word_segments,
         "frequencyBands": frequency_bands,
+        "frequencyBandsRelevance": frequency_bands_relevance,
     }
 
 
@@ -1684,17 +1747,28 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         sample_rate,
         lambda w: _multimodal_mean_fake_margin(model, pv_windows, w),
     )
+    # L3 relevance view (B4): energy-weighted LRP relevance of the fused audio.
+    frequency_bands_relevance = _compute_frequency_bands(waveform_np, audio_relevance_full, sample_rate)
+    # Per-window fused fake-probs double as the audio Confidence source (the video
+    # and audio windows are time-aligned 1:1; a ±1 tail mismatch is clamped inside
+    # the helpers).
+    window_probs = np.asarray(per_chunk_conf, dtype=np.float32)
+    waveform_confidence = _confidence_per_sample(window_probs, len(waveform_np))
     cache_dir = Path(__file__).parents[2] / ".whisperx_cache"
-    word_segments = _compute_word_segments(waveform_np, sample_rate, audio_relevance_full, cache_dir)
+    word_segments = _compute_word_segments(
+        waveform_np, sample_rate, audio_relevance_full, cache_dir, window_probs=window_probs
+    )
 
     audio_block = {
         "verdict": verdict,
         "confidence": confidence,
         "waveformRelevance": _percentile_normalize(audio_relevance_full).tolist(),
+        "waveformConfidence": waveform_confidence,
         "waveformAmplitude": waveform_np.tolist(),
         "sampleRate": sample_rate,
         "wordSegments": word_segments,
         "frequencyBands": frequency_bands,
+        "frequencyBandsRelevance": frequency_bands_relevance,
     }
 
     return {

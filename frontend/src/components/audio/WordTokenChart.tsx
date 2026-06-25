@@ -20,11 +20,13 @@ import {
 } from 'recharts'
 import { relevanceToRgb } from '../../lib/seismicColormap'
 import { useActiveWordIndex } from '../../hooks/useActiveWordIndex'
-import type { WordSegment } from '../../types/analysis'
+import type { AudioView, WordSegment } from '../../types/analysis'
 
 interface WordTokenChartProps {
   wordSegments: WordSegment[]
   videoRef: React.RefObject<HTMLVideoElement | null>
+  /** Relevance (signed) vs. Confidence (per-word fake-prob) view (B4). */
+  view: AudioView
 }
 
 interface BarEntry {
@@ -95,22 +97,22 @@ function ActiveBarShape(props: Record<string, unknown>) {
   )
 }
 
-export function WordTokenChart({ wordSegments, videoRef }: WordTokenChartProps) {
+export function WordTokenChart({ wordSegments, videoRef, view }: WordTokenChartProps) {
   // Re-renders only when the active word changes (not on every time tick), so
   // the chart stays stable (no per-frame jitter); the index is still checked
   // every animation frame, so fast words are not skipped.
   const activeIdx = useActiveWordIndex(videoRef, wordSegments)
 
   // Memoised so a re-render never hands Recharts a fresh array reference, which
-  // would otherwise restart the bar animation.
+  // would otherwise restart the bar animation. In the Confidence view the
+  // per-word fake-prob (0–1) is mapped onto the seismic scale with 2*p - 1.
   const data: BarEntry[] = useMemo(
     () =>
-      wordSegments.map(w => ({
-        word: w.word,
-        value: w.relevance,
-        fill: seismicFill(w.relevance),
-      })),
-    [wordSegments],
+      wordSegments.map(w => {
+        const value = view === 'confidence' ? 2 * w.confidence - 1 : w.relevance
+        return { word: w.word, value, fill: seismicFill(value) }
+      }),
+    [wordSegments, view],
   )
 
   return (
@@ -124,7 +126,7 @@ export function WordTokenChart({ wordSegments, videoRef }: WordTokenChartProps) 
           marginBottom: 6,
         }}
       >
-        LAYER 2 — WORD-LEVEL RELEVANCE
+        LAYER 2 — WORD-LEVEL {view === 'confidence' ? 'CONFIDENCE' : 'RELEVANCE'}
       </div>
 
       <ResponsiveContainer width="100%" height={150}>
@@ -186,7 +188,14 @@ export function WordTokenChart({ wordSegments, videoRef }: WordTokenChartProps) 
             // Force the value row white too — otherwise Recharts colours it with the
             // bar's seismic fill, which is near-black for near-zero/strong relevance.
             itemStyle={{ color: '#e8eaf0' }}
-            formatter={(v) => [typeof v === 'number' ? v.toFixed(3) : '0.000', 'Relevance']}
+            formatter={(v) =>
+              view === 'confidence'
+                ? [
+                    typeof v === 'number' ? `${((v + 1) * 50).toFixed(1)}%` : '0%',
+                    'P(fake)',
+                  ]
+                : [typeof v === 'number' ? v.toFixed(3) : '0.000', 'Relevance']
+            }
           />
           <Bar
             dataKey="value"
@@ -227,8 +236,9 @@ export function WordTokenChart({ wordSegments, videoRef }: WordTokenChartProps) 
         {activeIdx >= 0 && (
           <>
             ▶ "{wordSegments[activeIdx].word}"
-            {' — relevance '}
-            {wordSegments[activeIdx].relevance.toFixed(3)}
+            {view === 'confidence'
+              ? ` — P(fake) ${(wordSegments[activeIdx].confidence * 100).toFixed(1)}%`
+              : ` — relevance ${wordSegments[activeIdx].relevance.toFixed(3)}`}
           </>
         )}
       </div>

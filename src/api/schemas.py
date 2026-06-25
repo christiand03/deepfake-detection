@@ -27,6 +27,9 @@ class WordSegmentSchema(BaseModel):
     start: float
     end: float
     relevance: float
+    # Per-word fake-probability (0–1) for the Confidence view (B4); max over the
+    # windows the word overlaps. Defaults to 0 for older cached results.
+    confidence: float = 0.0
 
 
 class FrequencyBandsSchema(BaseModel):
@@ -39,10 +42,16 @@ class AudioAnalysisSchema(BaseModel):
     verdict: Literal["FAKE", "REAL"]
     confidence: float
     waveformRelevance: list[float]
+    # Per-sample fake-probability (0–1) for the Layer-1 Confidence view (B4),
+    # same length as waveformRelevance. Empty for older cached results.
+    waveformConfidence: list[float] = []
     waveformAmplitude: list[float]
     sampleRate: int
     wordSegments: list[WordSegmentSchema]
     frequencyBands: FrequencyBandsSchema
+    # Energy-weighted LRP relevance per band for the Layer-3 Relevance view (B4);
+    # frequencyBands stays the ablation-based Confidence view. None when absent.
+    frequencyBandsRelevance: FrequencyBandsSchema | None = None
 
 
 class AnomalyRegionSchema(BaseModel):

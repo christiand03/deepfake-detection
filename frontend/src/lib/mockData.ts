@@ -155,34 +155,47 @@ export function makeMockResult(clip: ClipMeta): AnalysisResult {
   const audio = clip.hasAudio
     ? (() => {
         const { amplitude, relevance, sampleRate } = makeMockAudioData(isFake)
+        // Mock per-sample confidence: map signed relevance onto a fake-prob 0–1
+        // (0.5 neutral) so the Confidence view (B4) reads coherently.
+        const waveformConfidence = relevance.map(r =>
+          Math.min(1, Math.max(0, 0.5 + 0.5 * r)),
+        )
+        const rawWords = isFake
+          ? [
+              { word: 'We', start: 0.3, end: 0.5, relevance: 0.12 },
+              { word: 'must', start: 0.55, end: 0.8, relevance: 0.81 },
+              { word: 'act', start: 0.85, end: 1.05, relevance: 0.93 },
+              { word: 'now', start: 1.1, end: 1.3, relevance: 0.77 },
+              { word: 'to', start: 1.4, end: 1.55, relevance: 0.08 },
+              { word: 'address', start: 1.6, end: 2.0, relevance: 0.62 },
+              { word: 'this', start: 2.05, end: 2.2, relevance: 0.31 },
+              { word: 'crisis', start: 2.25, end: 2.7, relevance: 0.89 },
+            ]
+          : [
+              { word: 'Thank', start: 0.2, end: 0.5, relevance: -0.05 },
+              { word: 'you', start: 0.55, end: 0.7, relevance: -0.12 },
+              { word: 'all', start: 0.75, end: 0.9, relevance: -0.08 },
+              { word: 'for', start: 0.95, end: 1.1, relevance: -0.03 },
+              { word: 'being', start: 1.15, end: 1.5, relevance: -0.19 },
+              { word: 'here', start: 1.55, end: 1.8, relevance: -0.07 },
+            ]
         return {
           verdict: isFake ? ('FAKE' as const) : ('REAL' as const),
           confidence: isFake ? 0.924 : 0.871,
           waveformRelevance: relevance,
+          waveformConfidence,
           waveformAmplitude: amplitude,
           sampleRate,
-          wordSegments: isFake
-            ? [
-                { word: 'We', start: 0.3, end: 0.5, relevance: 0.12 },
-                { word: 'must', start: 0.55, end: 0.8, relevance: 0.81 },
-                { word: 'act', start: 0.85, end: 1.05, relevance: 0.93 },
-                { word: 'now', start: 1.1, end: 1.3, relevance: 0.77 },
-                { word: 'to', start: 1.4, end: 1.55, relevance: 0.08 },
-                { word: 'address', start: 1.6, end: 2.0, relevance: 0.62 },
-                { word: 'this', start: 2.05, end: 2.2, relevance: 0.31 },
-                { word: 'crisis', start: 2.25, end: 2.7, relevance: 0.89 },
-              ]
-            : [
-                { word: 'Thank', start: 0.2, end: 0.5, relevance: -0.05 },
-                { word: 'you', start: 0.55, end: 0.7, relevance: -0.12 },
-                { word: 'all', start: 0.75, end: 0.9, relevance: -0.08 },
-                { word: 'for', start: 0.95, end: 1.1, relevance: -0.03 },
-                { word: 'being', start: 1.15, end: 1.5, relevance: -0.19 },
-                { word: 'here', start: 1.55, end: 1.8, relevance: -0.07 },
-              ],
+          wordSegments: rawWords.map(w => ({
+            ...w,
+            confidence: Math.min(1, Math.max(0, 0.5 + 0.5 * w.relevance)),
+          })),
           frequencyBands: isFake
             ? { low: 0.21, mid: 0.54, high: 0.25 }
             : { low: -0.15, mid: -0.52, high: -0.33 },
+          frequencyBandsRelevance: isFake
+            ? { low: 0.18, mid: 0.6, high: 0.22 }
+            : { low: -0.12, mid: -0.58, high: -0.3 },
         }
       })()
     : null

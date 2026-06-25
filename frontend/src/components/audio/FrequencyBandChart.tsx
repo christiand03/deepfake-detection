@@ -16,10 +16,12 @@
 
 import { motion } from 'framer-motion'
 import { relevanceToRgb } from '../../lib/seismicColormap'
-import type { FrequencyBands } from '../../types/analysis'
+import type { AudioView, FrequencyBands } from '../../types/analysis'
 
 interface FrequencyBandChartProps {
   bands: FrequencyBands
+  /** Confidence (band ablation) vs. Relevance (energy-weighted LRP) view (B4). */
+  view: AudioView
 }
 
 const BAND_DEFS = [
@@ -58,7 +60,7 @@ function bandGlow(value: number): string {
   return 'transparent'
 }
 
-export function FrequencyBandChart({ bands }: FrequencyBandChartProps) {
+export function FrequencyBandChart({ bands, view }: FrequencyBandChartProps) {
   return (
     <div>
       <div
@@ -70,7 +72,7 @@ export function FrequencyBandChart({ bands }: FrequencyBandChartProps) {
           marginBottom: 8,
         }}
       >
-        LAYER 3 — FREQUENCY BAND RELEVANCE
+        LAYER 3 — FREQUENCY BAND {view === 'confidence' ? 'CONFIDENCE' : 'RELEVANCE'}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

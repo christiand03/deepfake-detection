@@ -20,6 +20,8 @@ export interface WordSegment {
   start: number
   end: number
   relevance: number
+  /** Per-word fake-probability (0–1) for the Confidence view (B4). */
+  confidence: number
 }
 
 export interface FrequencyBands {
@@ -34,11 +36,23 @@ export interface AudioAnalysis {
   confidence: number
   /** Per-sample AttnLRP relevance, normalised to [-1, 1]. Length = T_samples. */
   waveformRelevance: number[]
+  /**
+   * Per-sample fake-probability (0–1) for the Confidence view (B4), same length
+   * as waveformRelevance. Map to the seismic scale with `2*p - 1`. May be empty
+   * for older cached results.
+   */
+  waveformConfidence: number[]
   /** Per-sample raw waveform amplitude for display. Length = T_samples. */
   waveformAmplitude: number[]
   sampleRate: number
   wordSegments: WordSegment[]
+  /** Ablation-based band evidence — the Layer-3 Confidence view. */
   frequencyBands: FrequencyBands
+  /**
+   * Energy-weighted LRP relevance per band — the Layer-3 Relevance view (B4).
+   * Falls back to frequencyBands when null (older cached results).
+   */
+  frequencyBandsRelevance: FrequencyBands | null
 }
 
 export interface AttentionShift {
@@ -154,6 +168,9 @@ export interface AnalysisResult {
 
 export type FusionMode = 'cross_attention' | 'concat'
 export type ModelMode = 'unimodal' | 'multimodal'
+
+/** Audio-panel view toggle (B4): signed relevance vs. per-window confidence. */
+export type AudioView = 'relevance' | 'confidence'
 
 export type AnalysisState =
   | { status: 'idle' }

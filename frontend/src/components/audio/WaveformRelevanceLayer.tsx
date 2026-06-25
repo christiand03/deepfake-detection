@@ -11,13 +11,15 @@
 
 import { useEffect, useRef } from 'react'
 import { relevanceToRgb } from '../../lib/seismicColormap'
-import type { AudioAnalysis } from '../../types/analysis'
+import type { AudioAnalysis, AudioView } from '../../types/analysis'
 
 interface WaveformRelevanceLayerProps {
   audio: AudioAnalysis
   videoRef: React.RefObject<HTMLVideoElement | null>
   /** Clip duration in seconds, used for the playhead position */
   duration: number
+  /** Relevance (signed AttnLRP) vs. Confidence (per-window fake-prob) view (B4). */
+  view: AudioView
 }
 
 const CANVAS_W = 900
@@ -50,13 +52,16 @@ function mean(chunk: number[]): number {
 function drawWaveform(
   ctx: CanvasRenderingContext2D,
   audio: AudioAnalysis,
+  signal: number[],
   w: number,
   h: number,
 ) {
   ctx.clearRect(0, 0, w, h)
 
   const ampBuckets = downsample(audio.waveformAmplitude, w, rms)
-  const relBuckets = downsample(audio.waveformRelevance, w, mean)
+  // `signal` is already on the seismic scale [-1, 1] (relevance is signed; the
+  // confidence view is mapped with 2*p - 1 by the caller).
+  const relBuckets = downsample(signal, w, mean)
 
   // ── Relevance strip (top) ──────────────────────────────────────────────
   for (let x = 0; x < w; x++) {
@@ -126,18 +131,26 @@ export function WaveformRelevanceLayer({
   audio,
   videoRef,
   duration,
+  view,
 }: WaveformRelevanceLayerProps) {
   const baseCanvasRef = useRef<HTMLCanvasElement>(null)
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
 
-  // Draw waveform once on data change
+  // Redraw on data OR view change. Confidence (fake-prob 0–1) is mapped onto the
+  // seismic scale via 2*p - 1 (0.5 → neutral white, → 1 red/fake, → 0 blue/real);
+  // relevance is already signed. Confidence falls back to relevance when the
+  // per-sample array is missing (older cached results).
   useEffect(() => {
     const canvas = baseCanvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    drawWaveform(ctx, audio, CANVAS_W, CANVAS_H)
-  }, [audio])
+    const signal =
+      view === 'confidence' && audio.waveformConfidence.length > 0
+        ? audio.waveformConfidence.map(p => 2 * p - 1)
+        : audio.waveformRelevance
+    drawWaveform(ctx, audio, signal, CANVAS_W, CANVAS_H)
+  }, [audio, view])
 
   // Playhead: drawn imperatively in a requestAnimationFrame loop straight from
   // the <video> element, so it stays smooth (~60 Hz) WITHOUT triggering any
@@ -171,7 +184,9 @@ export function WaveformRelevanceLayer({
           justifyContent: 'space-between',
         }}
       >
-        <span>LAYER 1 — WAVEFORM RELEVANCE</span>
+        <span>
+          LAYER 1 — WAVEFORM {view === 'confidence' ? 'CONFIDENCE' : 'RELEVANCE'}
+        </span>
         <span style={{ color: '#2a2f42' }}>
           <span style={{ color: '#3b4cc0', marginRight: 8 }}>■ real</span>
           <span style={{ color: '#b40426' }}>■ fake</span>

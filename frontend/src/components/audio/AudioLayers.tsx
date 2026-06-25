@@ -12,16 +12,69 @@
  * panel does not re-render on every animation frame.
  */
 
+import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { WaveformRelevanceLayer } from './WaveformRelevanceLayer'
 import { WordTokenChart } from './WordTokenChart'
 import { FrequencyBandChart } from './FrequencyBandChart'
-import type { AnalysisResult, ClipMeta } from '../../types/analysis'
+import type { AnalysisResult, AudioView, ClipMeta } from '../../types/analysis'
 
 interface AudioLayersProps {
   result: AnalysisResult | null
   clip: ClipMeta | null
   videoRef: React.RefObject<HTMLVideoElement | null>
+}
+
+// Panel-wide Relevance/Confidence toggle (B4). Switches all three layers at once.
+function ViewToggle({
+  view,
+  onChange,
+}: {
+  view: AudioView
+  onChange: (v: AudioView) => void
+}) {
+  const options: { value: AudioView; label: string }[] = [
+    { value: 'relevance', label: 'RELEVANCE' },
+    { value: 'confidence', label: 'CONFIDENCE' },
+  ]
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 2,
+        padding: 2,
+        borderRadius: 6,
+        backgroundColor: '#0d0f14',
+        border: '1px solid #2a2f42',
+      }}
+    >
+      {options.map(opt => {
+        const active = view === opt.value
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            style={{
+              fontSize: 9,
+              fontFamily: 'monospace',
+              letterSpacing: '0.1em',
+              padding: '3px 8px',
+              borderRadius: 4,
+              border: 'none',
+              cursor: 'pointer',
+              color: active ? '#0d0f14' : '#8b92a8',
+              backgroundColor: active ? '#00e5ff' : 'transparent',
+              fontWeight: active ? 700 : 400,
+              transition: 'background-color 0.15s, color 0.15s',
+            }}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 // Layer sub-header label
@@ -67,6 +120,7 @@ function LayerCard({
 export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
   const audio = result?.audio ?? null
   const duration = clip?.duration ?? 1
+  const [view, setView] = useState<AudioView>('relevance')
 
   return (
     <div
@@ -93,6 +147,7 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
           AUDIO ANALYSIS
         </span>
         <div style={{ flex: 1, height: 1, backgroundColor: '#1e2233' }} />
+        {audio !== null && <ViewToggle view={view} onChange={setView} />}
         <span style={{ fontSize: 10, fontFamily: 'monospace', color: '#2a2f42' }}>
           Wav2Vec 2.0 · AttnLRP
         </span>
@@ -138,12 +193,15 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
           >
             {/* L1 — Waveform Relevance */}
             <div>
-              <LayerLabel>L1 — WAVEFORM RELEVANCE</LayerLabel>
+              <LayerLabel>
+                L1 — WAVEFORM {view === 'confidence' ? 'CONFIDENCE' : 'RELEVANCE'}
+              </LayerLabel>
               <LayerCard>
                 <WaveformRelevanceLayer
                   audio={audio}
                   videoRef={videoRef}
                   duration={duration}
+                  view={view}
                 />
               </LayerCard>
             </div>
@@ -161,6 +219,7 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
                   <WordTokenChart
                     wordSegments={audio.wordSegments}
                     videoRef={videoRef}
+                    view={view}
                   />
                 </LayerCard>
               ) : (
@@ -184,7 +243,14 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
             <div>
               <LayerLabel>L3 — FREQUENCY BANDS</LayerLabel>
               <LayerCard>
-                <FrequencyBandChart bands={audio.frequencyBands} />
+                <FrequencyBandChart
+                  bands={
+                    view === 'confidence'
+                      ? audio.frequencyBands
+                      : audio.frequencyBandsRelevance ?? audio.frequencyBands
+                  }
+                  view={view}
+                />
               </LayerCard>
             </div>
           </motion.div>
