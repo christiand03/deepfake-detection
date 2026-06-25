@@ -13,14 +13,19 @@ abgegrenzt. Datei-Referenzen verweisen auf den Stand zum Zeitpunkt der Analyse.
 
 ---
 
-## Abarbeitungs-Reihenfolge
+## Abarbeitungs-Reihenfolge (ALT — überholt; Etappe 0–2 + C1 + F2 erledigt, siehe „Abarbeitungs-Reihenfolge (NEU)" unten)
+
+> **Veraltet.** Diese ursprüngliche Reihenfolge ist abgearbeitet bis einschließlich
+> Etappe 2 (E2/E1/A2-Box) plus C1 und F2. Die verbleibenden Punkte sind in der
+> **neuen** Reihenfolge direkt darunter sortiert. Diese Liste bleibt nur zur
+> Historie stehen.
 
 Sortiert nach Prinzip **„kleine/schnelle und risikoarme Sachen zuerst, kosmetische
 zuletzt"**, unter Beachtung der Abhängigkeiten. Aufwand: **S** = klein (Minuten bis
 ~1 h), **M** = mittel, **L** = groß. Die Buchstaben-Kürzel verweisen auf die
 Detailblöcke weiter unten.
 
-### Etappe 0 — Quick Wins (winzig, risikoarm, sofort)
+### Etappe 0 — Quick Wins (winzig, risikoarm, sofort)  ✅ abgeschlossen
 
 Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
 
@@ -31,7 +36,7 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
 5. **A2 (seamless)** — Magnitude-basiertes Alpha in `_array_to_data_uri` (harte
    Heatmap-Kante weg). Unabhängig, hohe Wirkung. *(S)*
 
-### Etappe 1 — Logik-Konsistenz & Audio-Berechnung (keine neue Infrastruktur)
+### Etappe 1 — Logik-Konsistenz & Audio-Berechnung (keine neue Infrastruktur)  ✅ abgeschlossen
 
 6. **D3** — Layer-3-Metrik in Phase 3/4 auf `_band_confidence` vereinheitlichen. *(M)*
 7. **B1 + B5** — Wort- und Band-Normierung gemeinsam auf Perzentil-Basis umstellen
@@ -63,7 +68,7 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
 ### Etappe 4 — Kosmetik & Politur (zuletzt)
 
 18. **H2** — Thumbnails (erster Frame, `/thumbnail`-Endpoint mit Cache); nach H1. *(S–M)*
-19. **C1** — Multimodal-Verdict-Panel-Größe an die unimodalen Panels angleichen. *(S)*
+19. ✅ **C1** — Multimodal-Verdict-Panel-Größe an die unimodalen Panels angleichen. *(S)*
 20. **F2** — Blau-Lesbarkeit / Blend-Modus final festlegen (zusammen mit A2-seamless
     am realen Bild bewerten). *(S)*
 21. **F1** — Erklärtexte zu jeder Visualisierung. *(M)*
@@ -73,6 +78,63 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
 - **G1** — Layer-3-Vorzeichen-Inversion: Modellseite (Training/Overfitting des
   multimodalen Modells). Unabhängig von den obigen Etappen; nach E1/A2 erneut
   bewerten.
+
+---
+
+## Abarbeitungs-Reihenfolge (NEU — verbleibende Punkte)
+
+> Aktuelle, gültige Reihenfolge. Stand: Etappe 0/1/2 + C1 + F2 erledigt. Verbleibend:
+> **H1/H2, A1, B4, F1, G1, I1–I4**.
+>
+> Sortier-Prinzip: zuerst die Punkte, die direkt auf der fertigen Phase-3/4-Arbeit
+> (D5/D6/A2-Box) aufbauen und sofort sichtbaren Nutzen bringen; dann Visualisierungs-
+> Features mit neuen API-Arrays; dann der große Auswahl-Umbau; danach die Punkte, die
+> auf die **echten (noch trainierenden) Modelle** bzw. ein **Re-Preprocessing** des
+> Datensatzes warten; ganz zuletzt die Erklärtexte.
+
+### Etappe 3 — Phase-3/4-Labs vervollständigen (baut auf D5/D6/A2-Box auf)
+
+1. **I3** — Phase-4 Clean-Baseline auf **demselben Modell** wie der Angriff berechnen
+   (kein Unimodal-vs-Multimodal-Mismatch). *(S–M, Backend)*
+2. **I1** — Phase 3 (Robustness) **multimodal-fähig** machen (Toggle +
+   `run_multimodal_robustness_inference`). *(M, Backend)*
+3. **I2** — Whole-Clip-Heatmap-Anzeige in Phase 3 & 4: Player/Overlay über den ganzen
+   Clip, **Original-/degradiertes/adversariales Video dahinter** + **Video-Opacity-
+   Slider**; „Frame #8" entfällt. Inkl. Backend-Persistenz des degradierten/
+   adversarialen Videos als abspielbare Quelle. *(M–L, Backend + Frontend)*
+
+### Etappe 4 — Confidence/Relevance-Sichten (neue API-Arrays)
+
+4. **A1** — zwei Timelines (Per-Chunk-Konfidenz + signierte Relevanz-Hybrid); API
+   liefert die Per-Chunk-Arrays. *(M–L)*
+5. **B4** — panel-weiter Confidence/Relevance-Toggle (braucht Per-Fenster-Confidence-
+   Array fürs Audio). *(M)*
+
+> A1 und B4 zusammen, weil beide dieselbe Per-Fenster-Confidence-/Relevanz-
+> Infrastruktur in der API brauchen.
+
+### Etappe 5 — Clip-Auswahl & Vorschau (großer Frontend-Block)
+
+6. **H1** — dynamische Registry + dreistufige Auswahl (Identität → Segment →
+   2×2-Varianten-Matrix); `build_clips_json.py` um identity/segment/variant erweitern
+   + neue Auswahl-UI. *(L)* — koppelt mit einem **Re-Preprocessing-Lauf**, der alle
+   gewünschten Clips nach `data/normalized/` + `clips.json` bringt.
+7. **H2** — Thumbnails (erster Frame, `/thumbnail`-Endpoint mit Cache); nach H1. *(S–M)*
+
+### Etappe 6 — Gated auf echte Modelle / Re-Preprocessing
+
+8. **I4** — Landmark-basierte Attention-Regionen statt fester Pixel-Rechtecke
+   (MediaPipe-Landmarks zur Preprocessing-Zeit speichern, Schema-Migration,
+   Datensatz-Neu-Preprocessing). *(L)* — am besten im **selben** Re-Preprocessing-Lauf
+   wie H1.
+9. **G1** — Layer-3-Vorzeichen-Inversion im multimodalen Modell — erst mit dem
+   **fertig trainierten** multimodalen Modell beurteil-/fixbar (aktuell nur
+   epoch-0-Platzhalter). Modellseite, separat. *(?)*
+
+### Etappe 7 — Politur, ganz zuletzt
+
+10. **F1** — Erklärtexte zu jeder Visualisierung (bewusst am Ende, wenn alle
+    Visualisierungen final sind). *(M)*
 
 ---
 
@@ -176,6 +238,8 @@ nebeneinander und kann beides interpretieren.
 
 ### A2. Heatmap wandert nicht mit der Bounding Box mit
 
+> **Status: ⚠️ Teilweise.** Seamless-Darstellung (magnitude-basiertes Alpha in `_array_to_data_uri`) ist umgesetzt (Etappe 0). Die mitwandernde Per-Chunk-Bounding-Box (A2-Box) ist noch offen (Etappe 2, verzahnt mit E1).
+
 **Gewollter Zustand**
 
 Die Heatmap soll über dem **gesamten** Clip (nicht nur dem ausgeschnittenen
@@ -245,6 +309,8 @@ scharfer Kante. Verstärkt durch `mixBlendMode: 'screen'`
 
 ### B1. Layer 2 — Wort-Aggregation liefert Balken nahe null
 
+> **Status: ✅ Erledigt.** `_compute_word_segments` nutzt jetzt den signierten Peak (`argmax(|rel|)`) je Wort + Perzentil-Normierung (`_percentile_normalize`) statt globalem Abs-Max.
+
 **Gewollter Zustand**
 
 Pro Wort (via WhisperX-Zeitstempel) soll ein aussagekräftiger Real/Fake-Wert
@@ -279,6 +345,8 @@ Wörter fallen (nur mit Ergebnis-Aggregation, nicht mit reinem Max möglich).
 
 ### B2. Layer 2 — Wort-Highlighting aktualisiert zu langsam
 
+> **Status: ✅ Erledigt.** Highlighting läuft über `requestAnimationFrame` (Hook `useActiveWordIndex`), State-Update nur bei Wechsel des aktiven Worts — kein 60-fps-Re-Render mehr.
+
 **Gewollter Zustand**
 
 Beim Abspielen soll das aktuell gesprochene Wort flüssig und korrekt hervorgehoben
@@ -303,6 +371,8 @@ werden — ohne übersprungene oder verspätet markierte Wörter.
 ---
 
 ### B3. Layer 2 — Wort-Beschriftung der X-Achse
+
+> **Status: ✅ Erledigt.** Gewählte Variante: alle Wort-Labels um -45° gedreht (Custom-Tick in `WordTokenChart`), aktives Wort hervorgehoben — statt der ursprünglich angedachten Tooltip-only-Lösung.
 
 **Gewollter Zustand**
 
@@ -359,6 +429,8 @@ ist dann clientseitig frei umschaltbar.
 
 ### B5. Layer 1 — Relevanz-Band fast nie eingefärbt (Normierung)
 
+> **Status: ✅ Erledigt.** `waveformRelevance` wird vor der Ausgabe mit `_percentile_normalize` skaliert (unimodal `run_audio_inference` + multimodal `run_multimodal_inference`) — das Band nutzt den vollen Farbbereich.
+
 **Gewollter Zustand**
 
 Das Relevanz-Band in Layer 1 (und analog die Wort-Balken in L2) soll deutlich
@@ -395,6 +467,8 @@ Zwei sich addierende Effekte:
 
 ### C1. Multimodal-Verdict-Panel zu groß (reine UI-Sache)
 
+> **Status: ✅ Erledigt.** Multimodal-Gauge auf `calc(50% - 12.5px)` Breite gesetzt und zentriert (`VerdictPanel.tsx`) — entspricht jetzt der Größe der unimodalen Panels.
+
 **Gewollter Zustand**
 
 Das Multimodal-Verdict-Panel soll genauso groß sein wie die unimodalen
@@ -429,6 +503,8 @@ Verdict-Panels.
 
 ### D1. Adversarial-`explain()` ohne `target_class=1`
 
+> **Status: ✅ Erledigt.** Alle Adversarial-`explain()`-Aufrufe nutzen `target_class=1` (Vorzeichen konsistent mit Phase 1/2).
+
 **Gewollter Zustand**
 
 Alle xAI-Pfade erklären konsistent die **FAKE-Klasse (1)**, damit positive Relevanz
@@ -457,6 +533,8 @@ immer „fake-stützend" bedeutet (rot) — unabhängig vom Verdict.
 
 ### D2. Robustheits-Audio-`explain()` mit argmax statt fix FAKE
 
+> **Status: ✅ Erledigt (durch D3 abgelöst).** `_run_audio_for_robustness` ruft gar kein `explain()` mehr auf, sondern nutzt `_band_confidence` (Band-Ablation) — die argmax-vs-FAKE-Frage entfällt damit.
+
 **Gewollter Zustand**
 
 Wie D1 — die Audio-Relevanz im Robustheits-Pfad erklärt fix die FAKE-Klasse.
@@ -474,6 +552,8 @@ Wie D1 — die Audio-Relevanz im Robustheits-Pfad erklärt fix die FAKE-Klasse.
 ---
 
 ### D3. Layer-3-Audio-Metrik unterscheidet sich zwischen Phase 1/2 und 3/4
+
+> **Status: ✅ Erledigt.** Phase 3/4 nutzen jetzt durchgängig `_band_confidence` (Band-Ablation, entscheidungs-fundiertes Vorzeichen) wie Phase 1/2. `_compute_frequency_bands` bleibt für B4 erhalten.
 
 **Gewollter Zustand**
 
@@ -502,6 +582,8 @@ Ausschlag soll bedeuten, wie sicher das Modell ist, dass der Bereich real/fake i
 
 ### D4. Video-Heatmap-Normierung: unimodal „global" vs. multimodal „per-frame"
 
+> **Status: ✅ Erledigt.** `MultimodalDeepfakeModule.explain` normiert die Video-Heatmap jetzt global (`rearrange` → `b (t h w)` → normalize → zurück), wie `VideoMAEModule`.
+
 **Gewollter Zustand**
 
 Video-Heatmaps werden in Phase 1 (unimodal) und Phase 2 (multimodal) **identisch**
@@ -528,6 +610,12 @@ normiert, damit Heatmaps und daraus abgeleitete Per-Frame-Werte vergleichbar sin
 
 ### D5. Adversarial läuft auf einem einzelnen Chunk statt dem ganzen Clip
 
+> **Status: ✅ Erledigt.** Entscheidung: ganzer Clip (GPU macht es praktikabel —
+> ~7,7× schneller als CPU, Whole-Clip-FGSM ~20–55 s, gecacht). `run_adversarial_inference`
+> und `run_multimodal_adversarial_inference` greifen jetzt jedes 16-Frame-Fenster an
+> (gleiche Chunking-/Max-Pool-Logik wie Phase 1/2); Batch-Sweeps bleiben Einzel-Chunk
+> (reine Eval-Metrik). Face-lose Clips: Single-Window-Fallback.
+
 **Gewollter Zustand**
 
 Der Adversarial-Pfad arbeitet auf derselben Datengrundlage wie Phase 1/2 — ganzer
@@ -549,6 +637,12 @@ Clip, gleiche Aggregation —, damit Verdicts und Heatmaps vergleichbar sind.
 ---
 
 ### D6. Adversarial-Heatmaps: keine Upprojektion + Doppel-Normierung
+
+> **Status: ✅ Erledigt.** Teil 1 (Doppel-Normierung entfernt) in Etappe 0; Teil 2
+> mit dem D5-Umbau: `perturbedFrames` **und** `differenceFrames` werden jetzt via
+> `_upproject_heatmap` ins Vollbild projiziert und mit `magnitude_alpha` gerendert —
+> dasselbe Format wie die „clean"-Heatmaps (Triptychon-Konsistenz). Die Difference-Map
+> (nicht-negative Perturbationsmagnitude) wird rot/transparent statt blau/rot dargestellt.
 
 **Gewollter Zustand**
 
