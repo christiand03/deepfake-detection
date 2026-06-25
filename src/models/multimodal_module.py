@@ -107,6 +107,13 @@ class CrossAttentionFusion(nn.Module):
         self.v_norm = nn.LayerNorm(fusion_dim)
         self.a_norm = nn.LayerNorm(fusion_dim)
 
+        # Both attention blocks are built unconditionally (~2.10M params total:
+        # 1,050,624 each), but the forward pass only runs them in "cross_attention"
+        # mode.  In "concat" / "*_only" modes they stay at random init, receive no
+        # gradient, and never affect the output (valid ablation) — so the logged
+        # model/params/trainable count OVERSTATES those modes by 2,101,248.  The
+        # concat head actually trains ~1.32M params (projections + 2 LayerNorms +
+        # classifier); report that figure, not the 3.42M total, in any param table.
         # Block 1: Video queries Audio
         self.v_to_a_attn = nn.MultiheadAttention(
             embed_dim=fusion_dim,
