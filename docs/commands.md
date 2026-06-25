@@ -97,6 +97,40 @@ python scripts/build_clips_json.py \
 
 ---
 
+### Externe Datensätze (ohne Sidecars) auswählen — z. B. SWAN-DF
+
+Fremde Test-Datensätze (kein AV-Deepfake1M-Layout, keine JSON-Sidecars) werden
+**nicht** über `src.data_processing.preprocess` verarbeitet, sondern über
+`scripts/preprocess_loose_videos.py`. Welcher Datensatz verarbeitet wird, wählt
+`--dataset <name>` aus `conf/datasets/<name>.yaml` (Schema: `name`, `root`,
+`glob`, `modify_type`, `split`, `output_dir`, `max_videos`). Ein neuer Datensatz
+ist ein einzelner Config-Drop. Die Ausgabe landet **isoliert** in
+`data/processed/<name>/` (Split-Dateiname, Default `test.h5`) und rührt die
+primären `train/val/test.h5` nicht an (ein Schutz-Guard verweigert das Schreiben
+auf `data/processed/{train,val,test}.h5`).
+
+```bash
+# Tasks nur auflisten (verarbeitet nichts) — prüft Pfade & Anzahl
+python -m scripts.preprocess_loose_videos --dataset swan --dry-run
+
+# SWAN-DF verarbeiten (Cap aus conf/datasets/swan.yaml, Default 400 Klips)
+python -m scripts.preprocess_loose_videos --dataset swan
+
+# Cap überschreiben (kleiner Smoke-Test)
+python -m scripts.preprocess_loose_videos --dataset swan --max-videos 20
+```
+
+**Ausgaben:** `data/processed/swan/test.h5` + `data/processed/swan/test_metadata.csv`
+(plus `data/normalized/{video_id}.mp4`). Der `test.h5`-Dateiname macht das Ergebnis
+direkt für `src/eval.py` konsumierbar (s. §5.1). Erneute Läufe überschreiben die
+swan-eigene Ausgabe (für Anhängen: `--append`).
+
+> **Hinweis:** SWAN-DF enthält nur Fakes (`both_modified`); alle 5.760 Klips ≈ 150 GB
+> — daher der `max_videos`-Cap. Details & Metrik-Caveat: `docs/datasets.md` §1
+> (*Externe Test-Datensätze*).
+
+---
+
 ## 3. Checkpoint eines vortrainierten Modells einbinden
 
 Eine bereitgestellte Checkpoint-File (`.ckpt`) wird **nicht**
@@ -417,6 +451,44 @@ python src/eval.py experiment=train_audio \
     model=wav2vec2 \
     ckpt_path=checkpoints/wav2vec2.ckpt
 ```
+
+---
+
+### 5.1 Cross-Dataset-Evaluation (z. B. SWAN-DF)
+
+Vorhandene Checkpoints auf einem fremden, isoliert preprozessierten Datensatz
+testen — **kein neues Eval-Skript nötig**: `src/eval.py` ist vollständig
+config-gesteuert (`trainer.test()`), es genügt der Override `data.data_dir` auf das
+Dataset-Verzeichnis (das `test.h5` enthält). Voraussetzung: der Datensatz wurde via
+`scripts/preprocess_loose_videos.py --dataset <name>` erzeugt (s. §2).
+
+```bash
+# Video (VideoMAE)
+python src/eval.py experiment=train_video data=deepfake_video model=videomae \
+    data.data_dir=data/processed/swan data.label_type=label_video \
+    ckpt_path=checkpoints/videomae.ckpt
+
+# Audio (Wav2Vec2)
+python src/eval.py experiment=train_audio data=deepfake_audio model=wav2vec2 \
+    data.data_dir=data/processed/swan data.label_type=label_audio \
+    ckpt_path=checkpoints/wav2vec2.ckpt
+
+# Multimodal
+python src/eval.py experiment=train_multimodal data=deepfake_multimodal model=multimodal \
+    data.data_dir=data/processed/swan data.label_type=label \
+    ckpt_path=checkpoints/multimodal.ckpt
+```
+
+Pro Checkpoint-Variante (`*_phase2`, `*_adv`, `multimodal_concat`, …) wiederholen.
+
+> **Metrik-Caveat (SWAN-DF):** Der Datensatz enthält nur Fakes → AUC/EER sind
+> undefiniert (torchmetrics liefert einen degenerierten Wert). Maßgeblich ist die
+> **Fake-Erkennungsrate (Recall / Accuracy)** aus der Metrik-Tabelle. Für eine echte
+> AUC Negative ergänzen (s. `docs/datasets.md` §1, *Externe Test-Datensätze*).
+
+> **Voraussetzung im Code:** Das `test`-only-Layout (Ordner mit nur `test.h5`) wird
+> durch die stage-bewusste `BaseDeepfakeDataModule.setup()` getragen — `trainer.test()`
+> baut ausschließlich den Test-Split, sodass `train.h5`/`val.h5` nicht vorhanden sein müssen.
 
 ---
 

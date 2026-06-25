@@ -1,0 +1,37 @@
+# External (sidecar-less) dataset definition for cross-dataset evaluation.
+#
+# Loaded by scripts/preprocess_loose_videos.py via `--dataset swan`. Unlike the
+# main AV-Deepfake1M pipeline (src/data_processing/preprocess.py), the clips
+# carry no JSON sidecars and not the {identity}/{clip}/{segment}/{variant}.mp4
+# layout, so labels are supplied here explicitly via `modify_type`.
+#
+# To add another external dataset, drop a sibling conf/datasets/<name>.yaml.
+
+# Dataset name. Drives the identity_id / video_id prefixes in the metadata CSV
+# and (by default) the output sub-directory.
+name: swan
+
+# Root that is recursively globbed for `glob`. Repo-relative (resolved against
+# the project root). SWAN-DF face-swap clips:
+#   data/SWAN/SWAN-DF_256x256/SWAN-DF/256x256/{identity}/*.mp4
+root: data/SWAN/SWAN-DF_256x256/SWAN-DF/256x256
+glob: "*.mp4"
+
+# Which modalities are fake. SWAN-DF is an audio-visual deepfake set (face-swap
+# video + synthesised audio), so every clip is fake in BOTH streams →
+# label = label_video = label_audio = 1.
+# One of: real | visual_modified | audio_modified | both_modified
+modify_type: both_modified
+
+# Split written to the CSV. "test" so eval (trainer.test) consumes the result
+# with zero extra config: the DataModule loads `<output_dir>/test.h5`.
+split: test
+
+# Isolated output directory — NEVER overwrites data/processed/{train,val,test}.h5.
+# Produces <output_dir>/<split>.h5 + <output_dir>/<split>_metadata.csv.
+output_dir: data/processed/swan
+
+# Cap on the number of clips processed (deterministic order). null = all.
+# Each ~7 s clip yields ~11 chunks (~2.45 MB each), so all 5760 clips ≈ 150 GB —
+# infeasible on the 16 GB box where data/processed is already ~227 GB. 400 ≈ 11 GB.
+max_videos: 400
