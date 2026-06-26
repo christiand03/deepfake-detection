@@ -276,6 +276,11 @@ Fragen.
 - Die offizielle Autoren-Bibliothek (LXT) weist explizit aus, dass Modelle „**best
   paired with contrastive explanations**“ sind — Contrastive ist also kein
   Off-Paper-Hack, sondern eine von denselben Autoren unterstützte Variante.
+- Dass ein **Single-Logit-Target** nicht klassendiskriminativ ist, wurde 2025 unabhängig
+  erneut bestätigt — **Walter, Vreeken & Fischer (2025), „Hidden in Plain Sight — Class
+  Competition Focuses Attribution Maps"** (arXiv:2503.07346): „logits as attribution
+  target" sind die Hauptursache unspezifischer Maps, Multi-Class-Konkurrenz die Abhilfe
+  (= unser §2–§3-Argument).
 
 **Novelty-Einschätzung (ehrlich):** Die **spezifische Komposition** —
 **Magnitude = `|R_fake| + |R_real|`** (Gesamt-Engagement beider Köpfe, ohne
@@ -284,6 +289,20 @@ gerendert als *eine* bivariate Overlay (Alpha = Magnitude, Farbton = Richtung) �
 in der gesichteten Literatur **nicht** als benannte Methode gefunden. Die
 Recherche ergab explizit, dass diese kombinierte Kodierung „doesn't appear as a
 distinct named method“.
+
+**Nächster Verwandter (zitieren + abgrenzen):** Am nächsten an *unserer Motivation* liegt
+**Oh & Noh (2025), „Beyond Softmax: Dual-Branch Sigmoid Architecture for Accurate Class
+Activation Maps"** (arXiv:2511.05590). Das Paper benennt exakt unsere §3-Probleme
+(„additive logit shifts" und „**sign collapse that conflates excitatory and inhibitory
+features**") und „decouples localization from classification … **preserving both magnitude
+and sign**". Drei konkrete Unterschiede tragen die Abgrenzung: (1) **CAM statt LRP/AttnLRP**
+(post-hoc, conservation-faithful, Transformer); (2) **Architektur-Eingriff + Fine-Tuning**
+eines Sigmoid-Zweigs vs. unser **trainingsfreier** 1-Forward-/2-Backward-Pfad; (3) Oh & Noh
+behalten Magnitude + Vorzeichen **innerhalb** einer Pro-Klasse-Map — sie bilden **weder** die
+Union-Magnitude `|R_fake| + |R_real|` **noch** deren Entkopplung von der Contrastive-Margin
+in **einem** saturation-gegateten Overlay. Genau diese Fusion ist der spezifische Beitrag.
+Provenienz der erweiterten Recherche: unabhängige breite Suche (Consensus/Semantic Scholar +
+Web), Juni 2026 — **kein** systematischer Review (s. §11).
 
 Defensible Formulierung für die Belegarbeit: **„eine bewusste Engineering-Komposition
 etablierter Methoden“**, mit einem bescheidenen, ehrlichen Anspruch wie *„nach unserem
@@ -515,6 +534,19 @@ Contrastive-Signal.
   <https://ieeexplore.ieee.org/document/8851770/>
 - Towards Best Practice in Explaining Neural Network Decisions with LRP
   (Kohlbrenner et al., IJCNN 2020): <https://iphome.hhi.de/samek/pdf/KohIJCNN20.pdf>
+
+Nächste Verwandte (Novelty-Abgrenzung, ergänzt durch Recherche Juni 2026):
+
+- Hidden in Plain Sight — Class Competition Focuses Attribution Maps
+  (Walter, Vreeken & Fischer, 2025) — arXiv:2503.07346:
+  <https://arxiv.org/abs/2503.07346>
+  (Bestätigt: Single-Logit-Target ist die Hauptursache unspezifischer Maps;
+  Multi-Class-Konkurrenz ist die Abhilfe — stützt §2–§3.)
+- Beyond Softmax: Dual-Branch Sigmoid Architecture for Accurate Class Activation Maps
+  (Oh & Noh, 2025) — arXiv:2511.05590: <https://arxiv.org/abs/2511.05590>
+  (Nächster Motivations-Verwandter: benennt „sign collapse", entkoppelt Lokalisierung von
+  Klassifikation, „preserving both magnitude and sign" — aber CAM + Architektur-Eingriff,
+  nicht unsere trainingsfreie bivariate LRP-Fusion. Abgrenzung in §7.)
 
 ---
 
