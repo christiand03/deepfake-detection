@@ -2,6 +2,7 @@
 title: Method Taxonomy — Backbones, Explainability, Attacks
 type: knowledge/taxonomy
 created: 2026-06-14
+updated: 2026-06-26
 tags: [MethodTaxonomy, DeepfakeDetection, xAI, Adversarial]
 ---
 
@@ -13,8 +14,8 @@ tags: [MethodTaxonomy, DeepfakeDetection, xAI, Adversarial]
 ## A. Detection paradigm (what is classified)
 | Axis | Option | Sources | Project use |
 |------|--------|---------|-------------|
-| Modality | Video-only | [[videomae-tong-2022\|VideoMAE]], [[lipforensics-haliassos-2021\|LipForensics]] | Phase 1 |
-| | Audio-only | [[wav2vec2-baevski-2020\|wav2vec 2.0]] | Phase 2 (audio stream) |
+| Modality | Video-only | [[videomae-tong-2022\|VideoMAE]], [[lipforensics-haliassos-2021\|LipForensics]] | Phase 1 (video baseline) |
+| | Audio-only | [[wav2vec2-baevski-2020\|wav2vec 2.0]] | Phase 1 (audio baseline) → Phase 2 stream |
 | | **Audio-visual** | [[av-deepfake1m\|AV-Deepfake1M]] (data) | **Phase 2 fusion (target)** |
 | Granularity | Clip/image-level | [[faceforensics-plusplus\|FF++]] | current pipeline |
 | | Temporal localization | [[av-deepfake1m\|AV-Deepfake1M]] | open extension |
@@ -23,7 +24,7 @@ tags: [MethodTaxonomy, DeepfakeDetection, xAI, Adversarial]
 - **Self-attention core** — [[attention-is-all-you-need|Transformer]] (`ER-attn-1`).
 - **Spatial transformer** — [[vit-dosovitskiy-2021|ViT]]: patch tokenization, data-hungry (`ER-vit-1`).
 - **Spatio-temporal, self-supervised** — [[videomae-tong-2022|VideoMAE]]: tube masking 90–95%, data-efficient (`ER-vmae-1/2`). **← Phase 1 choice.**
-- **Self-supervised speech** — [[wav2vec2-baevski-2020|wav2vec 2.0]]: masked-latent contrastive (`ER-w2v-1/2`). **← Phase 2 audio.**
+- **Self-supervised speech** — [[wav2vec2-baevski-2020|wav2vec 2.0]]: masked-latent contrastive (`ER-w2v-1/2`). **← Phase 1 audio baseline; Phase 2 audio stream.**
 
 ## B2. Detection methods (deepfake-specific)
 | Family | Method | Cue / idea | Sources |

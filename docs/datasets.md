@@ -178,7 +178,7 @@ Die Dataloader (PyTorch) dürfen niemals rohe MP4s laden. Die CPU wäre der Bott
      still unterrepräsentieren. Gecrashte Videos werden separat von gesichtslosen gezählt
      (Fehlerquote > 5 % → ERROR-Log).
 4. **Metadaten-CSV:**
-   - Für jeden gespeicherten Chunk eine Zeile: `chunk_id`, `video_id`, `identity_id`, `label_video` (0=Real, 1=Fake), `label_audio` (0=Real, 1=Fake), `label` (0=Real, 1=Fake – kombiniert, für Phase 1 Baseline), `split` (train/val/test), `h5_path`.
+   - Für jeden gespeicherten Chunk eine Zeile: `chunk_id`, `video_id`, `identity_id`, `label_video` (0=Real, 1=Fake), `label_audio` (0=Real, 1=Fake), `label` (0=Real, 1=Fake – kombiniert, für Phase 2 multimodal), `split` (train/val/test), `h5_path`.
    - `label_video` und `label_audio` werden aus den AV-Deepfake1M-Metadaten abgeleitet, die explizit zwischen den drei Manipulationstypen unterscheiden.
    - Begründung: Phase 2 (Cross-Modal Attention) muss zwischen „Fake-Video + echtes Audio", „echtes Video + Fake-Audio" und „beides gefälscht" unterscheiden können. Ein binäres Label kollabiert diese Information und verhindert eine sinnvolle xAI-Analyse.
    - Basis für den identity-basierten Split (Pflicht zur Vermeidung von Identity Leakage, siehe Fehler A).
@@ -198,7 +198,7 @@ Die Dataloader (PyTorch) dürfen niemals rohe MP4s laden. Die CPU wäre der Bott
          split        → str (train/val/test)
      ```
    - ⚠️ Flache Array-Speicherung (`[num_chunks, ...]`) ist das aktuelle Format. Alignment-Sicherheit ist durch das atomare Design von `write_chunk` garantiert: Video und Audio werden stets im selben Aufruf an denselben Index `idx` geschrieben. Ein Face-Skip überspringt beide Modalitäten (`continue` in `_process_video`) — es gibt keinen Codepfad, der Video ohne Audio oder Audio ohne Video schreibt.
-   - *Hinweis zur Audio-Speicherung:* Audio wird im Preprocessing immer extrahiert und gespeichert, auch wenn Phase 1 (Video-only) es nicht verwendet. Der zusätzliche Speicherbedarf ist gering (~40 MB pro 1.000 Chunks) und das Re-Preprocessing für Phase 2 entfällt damit vollständig. Phase 1 DataLoader liest schlicht nur das `video`-Dataset und ignoriert `audio`.
+   - *Hinweis zur Audio-Speicherung:* Audio wird im Preprocessing immer extrahiert und gespeichert. Die Phase-1-**Video**-Baseline (VideoMAE) verwendet es nicht — ihr DataLoader liest nur das `video`-Dataset und ignoriert `audio`; die Phase-1-**Audio**-Baseline (Wav2Vec 2.0) und Phase 2 nutzen es. Der zusätzliche Speicherbedarf ist gering (~40 MB pro 1.000 Chunks), und ein Re-Preprocessing entfällt für die Audio- und Multimodal-Modelle damit vollständig.
 
 ## 4. Modulstruktur (Implementierung in `src/data_processing/`)
 
@@ -302,7 +302,7 @@ Analysiert mit `scripts/analyze_metadata.py` über alle 30.530 JSON-Sidecars des
 > | `label_video` | 15.309 (50 %) | 15.221 (50 %) | ✅ balanciert |
 > | `label_audio` | 15.267 (50 %) | 15.274 (50 %) | ✅ balanciert |
 >
-> **Phase 1 (Video-only) DataLoader muss `label_video` verwenden — nicht `label`.** Erst in Phase 2 (multimodal) ist `label` sinnvoll, da dort beide Modalitäten ausgewertet werden.
+> **Die Phase-1-Video-Baseline (VideoMAE) muss `label_video` verwenden, die Phase-1-Audio-Baseline (Wav2Vec 2.0) `label_audio` — nicht das kombinierte `label`.** Erst in Phase 2 (multimodal) ist `label` sinnvoll, da dort beide Modalitäten gemeinsam ausgewertet werden.
 
 ### TTS-Modell-Verteilung (`audio_model`)
 

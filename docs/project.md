@@ -27,14 +27,21 @@ Im Gegensatz zu traditionellen Benchmark-Studien ("Breadth-over-Depth"), die vie
 Die Arbeit ist methodisch in vier aufeinander aufbauende Phasen mit steigender
 Komplexität gegliedert.
 
-### Phase 1 — Unimodale Video-Erkennung (Baseline)
-- **Ziel:** Isolierte Untersuchung der visuellen Modalität.
-- **Umsetzung:** Fine-Tuning eines Spatio-Temporal Video Transformers. Statt des
+### Phase 1 — Unimodale Video- & Audio-Erkennung (Baselines)
+- **Ziel:** Isolierte Untersuchung jeder Modalität für sich, bevor Phase 2 sie
+  zusammenführt — eine Video- und eine Audio-Baseline.
+- **Umsetzung (Video):** Fine-Tuning eines Spatio-Temporal Video Transformers. Statt des
   ursprünglich präferierten **ISTVT** wird **VideoMAE** (`MCG-NJU/videomae-base`)
   eingesetzt — massiver HuggingFace-Support, AttnLRP-kompatibel; ISTVT wurde nach
   der VideoMAE-Evaluierung nicht mehr benötigt (s. [`model.md`](model.md) §1).
-- **Forschungsfrage:** Welche visuellen Artefakte (Blending-Kanten, fehlendes
-  Blinzeln) priorisiert das Modell zur Fake/Real-Unterscheidung?
+- **Umsetzung (Audio):** Fine-Tuning des vortrainierten **Wav2Vec 2.0**
+  (`facebook/wav2vec2-base`); Feature-Extractor eingefroren, nur Projektor/
+  Klassifikationskopf trainiert (Label `label_audio`, s. [`model.md`](model.md)).
+- **Forschungsfragen:**
+  - *(Video)* Welche visuellen Artefakte (Blending-Kanten, fehlendes Blinzeln)
+    priorisiert das Modell zur Fake/Real-Unterscheidung?
+  - *(Audio)* Welche Audio-Hinweise bzw. Zeitabschnitte nutzt das Wav2Vec-Modell zur
+    Erkennung manipulierter Sprache (Relevanz über die Audio-Timeline, s. [`xai.md`](xai.md))?
 
 ### Phase 2 — Multimodale Erweiterung (Audio + Video)
 - **Ziel:** Erkennung von Lip-Sync-Inkonsistenzen durch Integration der Tonspur.
@@ -77,14 +84,18 @@ aktuellen (post-2026-06-11-)Daten — siehe Runbook [`phase34_runbook.md`](phase
 
 | Phase | Status | Anmerkung |
 | --- | --- | --- |
-| Phase 1 — Unimodal Video | ✅ Abgeschlossen | VideoMAE fine-tuned; AttnLRP & Attention Rollout funktionsfähig |
+| Phase 1 — Unimodal Video & Audio | ✅ Abgeschlossen | VideoMAE (Video, ~0,65) + Wav2Vec 2.0 (Audio, ~0,98 test/auc) fine-tuned; AttnLRP & Attention Rollout funktionsfähig |
 | Phase 2 — Multimodal | ✅ Abgeschlossen | Cross-Modal Attention Head trainiert, Wav2Vec 2.0 LRP integriert |
 | Frontend (React + FastAPI) | ✅ Abgeschlossen | Vollständiges xAI-Demo-Tool (war ursprünglich optional) |
 | Phase 3 — Robustness | 🔄 Code fertig, Ergebnisse ausstehend | Lab + Sweeps (CRF×FPS, Audio-Bitrate, **joint multimodal**) + Attention-Shift implementiert; Sweep-Läufe + Auswertung (§7.14) noch durchzuführen |
 | Phase 4 — Adversarial | 🔄 Code fertig, Ergebnisse ausstehend | FGSM/PGD (uni- & **multimodal**), UAP, adv. Training, Batch-Sweeps implementiert; ε-/Fooling-Kurven + Defense-Eval (§7.15) noch durchzuführen |
 
-**Belastbare Metriken (leakage-bereinigt, Stand der dokumentierten Läufe):** Der
-multimodale Detektor erreicht in **Phase 2 ~0,77 test/auc** (Phase 1 ~0,65).
+**Belastbare Metriken (leakage-bereinigt, Stand der dokumentierten Läufe):** Die
+**Phase-1-Baselines** sind unimodal und auf je eigenem Label evaluiert (daher nicht
+direkt vergleichbar): VideoMAE (Video, `label_video`) **~0,65 test/auc**, die
+eingefrorene Wav2Vec-2.0-Audio-Baseline (`label_audio`) **~0,98 test/auc** (nahe Decke
+auf audio- und vollmanipulierten Fakes). Der multimodale Detektor (kombiniertes
+`label`) erreicht in **Phase 2 ~0,77 test/auc**.
 Fusion schlägt Einzelmodalität klar, **aber Cross-Attention ≈ Concat innerhalb
 des Rauschens** — die "Cross-Attention ist zwingend"-Aussage ist mit den
 aktuellen Daten (~wenige Identitäten) **nicht** haltbar. Details, Tabellen und

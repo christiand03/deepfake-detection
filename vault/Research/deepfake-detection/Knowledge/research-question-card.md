@@ -3,7 +3,7 @@ title: Research Questions — Unmasking Deception (per phase)
 type: knowledge/research-questions
 source_of_truth: docs/project.md §3
 created: 2026-06-14
-updated: 2026-06-14
+updated: 2026-06-26
 tags: [ResearchQuestion, EvidenceGate]
 ---
 
@@ -17,12 +17,20 @@ tags: [ResearchQuestion, EvidenceGate]
 
 ---
 
-## Phase 1 — Unimodal video (baseline) · ✅ complete
-**RQ1.** Which visual artifacts (blending edges, missing blinking) does the model prioritize to distinguish fake/real?
+## Phase 1 — Unimodal video & audio (baselines) · ✅ complete
+Two unimodal baselines, each modality in isolation before Phase 2 fuses them: **VideoMAE** (video) and **Wav2Vec 2.0** (audio).
+
+**RQ1a (video).** Which visual artifacts (blending edges, missing blinking) does the model prioritize to distinguish fake/real?
 - **Status:** complete — VideoMAE fine-tuned (~0.65 test/AUC); AttnLRP + Attention Rollout functional.
-- **Evidence:** trained checkpoint + xAI heatmaps; [[../Sources/Papers/videomae-tong-2022|VideoMAE]], [[../Sources/Papers/attnlrp-achtibat-2024|AttnLRP]], [[../Sources/Papers/face-xray-li-2020|Face X-ray (blending cue)]].
+- **Evidence:** [[../Results/videomae-unimodal-video-baseline|VideoMAE baseline]] + xAI heatmaps; [[../Sources/Papers/videomae-tong-2022|VideoMAE]], [[../Sources/Papers/attnlrp-achtibat-2024|AttnLRP]], [[../Sources/Papers/face-xray-li-2020|Face X-ray (blending cue)]].
 - **Answer mechanism:** qualitative + region-score analysis of AttnLRP/rollout maps on the Phase-1 model.
 - **Next action:** document the dominant artifact regions (xAI write-up).
+
+**RQ1b (audio).** Which audio cues / time segments does the frozen-Wav2Vec 2.0 model rely on to flag manipulated speech?
+- **Status:** complete — frozen `wav2vec2-base` + trained head, **~0.976 test AUC** (`label_audio`; near-ceiling on audio-/both-manipulated fakes); AttnLRP audio relevance timeline functional.
+- **Evidence:** [[../Results/wav2vec2-phase1-audio-baseline|Wav2Vec2 audio baseline]]; [[../Sources/Papers/wav2vec2-baevski-2020|wav2vec 2.0]]. (The visual-only category is degenerate for the audio model — its 0.83 AUC is retracted, do not cite.)
+- **Answer mechanism:** AttnLRP relevance over the audio timeline (3-layer timeline, see [`docs/xai.md`](../../../../docs/xai.md)).
+- **Next action:** document which time segments drive the audio decision (xAI write-up).
 
 ## Phase 2 — Multimodal (audio+video) · ✅ complete
 **RQ2a.** Does accuracy improve on *auditively* manipulated deepfakes? **RQ2b.** Does the attention (xAI) shift to the mouth region?

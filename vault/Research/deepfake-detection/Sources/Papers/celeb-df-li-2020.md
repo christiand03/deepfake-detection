@@ -12,7 +12,7 @@ status: read-full
 evidence-level: full-text
 project-phase: Phase 1
 created: 2026-06-14
-updated: 2026-06-14
+updated: 2026-06-26
 ---
 
 # Celeb-DF (Li et al., 2020)
@@ -21,7 +21,7 @@ updated: 2026-06-14
 > **Authors:** Li, Yang, Sun, Qi, Lyu · **Year/Venue:** 2020 · CVPR (arXiv:1909.12962, Celeb-DF v2) · **Evidence level:** full-text (2026-06-14)
 
 ## Project Relevance
-A standard **cross-dataset robustness** benchmark (higher visual quality than FF++). Used to test generalization of our detector beyond the training distribution (Phase 1/3 evaluation). Its benchmark established the headline "detectors collapse on 2nd-generation data" finding that motivates our robustness focus.
+A standard **cross-dataset robustness** benchmark in the literature (higher visual quality than FF++). Its benchmark established the headline "detectors collapse on 2nd-generation data" finding that motivates our robustness focus. **Not part of our data:** the project trains/validates/tests on AV-Deepfake1M and reserves **SWAN-DF** as its external cross-dataset probe (s. [`docs/datasets.md`](../../../../../docs/datasets.md) §1); Celeb-DF appears here only as prior literature.
 
 ## Summary
 A large DeepFake video benchmark: **590 real (YouTube celebrity) + 5,639 synthesized = 6,229 videos**. An improved synthesis pipeline removes visible artifacts of earlier sets — **256×256** synthesized faces (vs 64/128), color correction, and better masks — making detection markedly harder. Benchmarks the field: on 2nd-generation datasets (DFD, DFDC, Celeb-DF) average detector AUC is **<70%**, vs ~80% on 1st-generation sets; the best method (DSP-FWA) reaches only 87.4% overall.
@@ -31,7 +31,7 @@ A large DeepFake video benchmark: **590 real (YouTube celebrity) + 5,639 synthes
   - Claim type: author result · strength: **strong** · Evidence: full text Table 1 + synthesis-improvement figures (256×256, color correction, mask) (provenance: full-text)
   - Method: improved face-swap synthesis; frame-level AUC benchmark of existing detectors; H.264 compression robustness study
   - Limitation: visual-only, identity-swap; no audio; celebrity domain
-  - Project relevance: cross-dataset generalization test set
+  - Project relevance: prior-literature benchmark for the generalization gap (our own cross-dataset probe is SWAN-DF, not Celeb-DF)
 - **[ER-celeb-2]** On 2nd-generation data (incl. Celeb-DF) detectors **degrade to <70% average AUC**.
   - Claim type: author result · strength: **supported** · Evidence: full text §benchmark + Figs 7–8 (2nd-gen avg AUC <70% vs ~80% 1st-gen; DSP-FWA best at 87.4%) (provenance: full-text)
   - Project relevance: empirical motivation for the generalization/robustness gap (Phase 3)

@@ -37,7 +37,7 @@ The project already implements **all** needed components (per `CLAUDE.md` + `pro
 4. **Explanation-shift metrics:** IoU and Spearman-rank correlation of relevance maps (clean vs. adversarial); deletion/insertion-AUC faithfulness ((In)fidelity & Sensitivity, Yeh et al. 2019) to verify the maps are faithful in the first place.
 
 ## 6. Experimental design
-- **Data:** AV-Deepfake1M (primary); FaceForensics++/Celeb-DF for cross-dataset robustness checks.
+- **Data:** **AV-Deepfake1M only** — train/val/test on an identity-disjoint split (the project's sole training + in-distribution evaluation source). **SWAN-DF (Korshunov et al. 2023) is reserved as a held-out external cross-dataset generalization probe** (planned; fake-only → cross-dataset fake-detection *recall*, not AUC). Other benchmarks (FF++, Celeb-DF, DFDC) appear in this work only as prior literature, not as training or evaluation data.
 - **Conditions:** {video-only, multimodal} × {undefended, PGD-trained} × {clean, FGSM, PGD, UAP}.
 - **Primary outcomes:** Δaccuracy and Δexplanation-localization (IoU, rank-corr) under attack; defended vs. undefended difference.
 - **Statistics:** paired tests across samples with multiple-comparison correction; report CIs, not just point estimates (cf. C&W discipline — evaluate against strong attacks).
@@ -58,4 +58,4 @@ The project already implements **all** needed components (per `CLAUDE.md` + `pro
 On a **current (post-2026-06-11) Phase-1 VideoMAE checkpoint**, run the existing Phase-4 attack path (`eval_adversarial_sweep.py`) on a small ε-grid + dump AttnLRP maps clean vs. PGD, then compute the explanation-shift (IoU + rank-corr) via the existing `AttentionShift` infra — a one-detector pilot confirming RQ4b before scaling to the full {video-only, multimodal} × {undefended, PGD-trained} grid. (If IoU/rank-corr isn't already emitted by the schema, that small addition is the only new code.)
 
 ## References
-See [[literature-review]] and the Zotero group `Paper Belegarbeit`; key anchors: Gandhi & Jain (2003.10596), Ghorbani (1710.10547), Adebayo (1810.03292), Yeh (1901.09392), Achtibat AttnLRP (2402.05602), Madry PGD (1706.06083), Cai AV-Deepfake1M (2311.15308).
+See [[literature-review]] and the Zotero group `Paper Belegarbeit`; key anchors: Gandhi & Jain (2003.10596), Ghorbani (1710.10547), Adebayo (1810.03292), Yeh (1901.09392), Achtibat AttnLRP (2402.05602), Madry PGD (1706.06083), Cai AV-Deepfake1M (2311.15308), Korshunov SWAN-DF (2311.17655).

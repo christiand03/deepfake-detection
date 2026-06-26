@@ -3,7 +3,7 @@ type: project-index
 project: deepfake-detection
 title: Index - Deepfake Detection
 status: active
-updated: 2026-06-26T10:34:07Z
+updated: 2026-06-26T11:16:43Z
 ---
 # Index
 

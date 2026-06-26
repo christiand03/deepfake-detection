@@ -71,10 +71,11 @@ Chunk gilt nur dann pro Modalität als fake, wenn er ein Fake-Segment ausreichen
 konzentriert auf die schweren Grenzfälle. *(Effekt: Fake-Rate ~7 % → ~5 %; Audit §1.2.)*
 
 **Getrennte Labels `label_video` / `label_audio` / `label`** — *Was:* Drei
-Label-Spalten aus den AV-Deepfake1M-Metadaten. *Warum:* Phase 1 (Video-only) muss
-`label_video` nutzen — das kombinierte `label` zählt auch audio-only-Fakes (Video
-pixelidentisch zum Real) als fake = reines Label-Noise für einen Videoclassifier;
-zudem ist `label` 75/25-imbalanciert, `label_video`/`label_audio` ~50/50.
+Label-Spalten aus den AV-Deepfake1M-Metadaten. *Warum:* Die Phase-1-Video-Baseline
+muss `label_video` nutzen, die Phase-1-Audio-Baseline `label_audio` — das kombinierte
+`label` zählt auch audio-only-Fakes (Video pixelidentisch zum Real) als fake = reines
+Label-Noise für einen Videoclassifier; zudem ist `label` 75/25-imbalanciert,
+`label_video`/`label_audio` ~50/50.
 *(datasets.md §6, model.md §7.0/§7.1.)*
 
 **Video-Level-Evaluation (Max-Pooling der Chunk-Scores → `auc_video`)** — *Was:*
