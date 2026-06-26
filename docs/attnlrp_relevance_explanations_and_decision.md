@@ -301,6 +301,14 @@ eines Sigmoid-Zweigs vs. unser **trainingsfreier** 1-Forward-/2-Backward-Pfad; (
 behalten Magnitude + Vorzeichen **innerhalb** einer Pro-Klasse-Map — sie bilden **weder** die
 Union-Magnitude `|R_fake| + |R_real|` **noch** deren Entkopplung von der Contrastive-Margin
 in **einem** saturation-gegateten Overlay. Genau diese Fusion ist der spezifische Beitrag.
+
+Auf der **Visualisierungs-Seite** liegt am nächsten **Payne, Patrick & Fernandez (2024),
+„Visualizing and Generalizing Integrated Attributions" (ICPR 2024)**: dort werden *signed*
+und *unsigned* Attribution gemeinsam visuell sichtbar gemacht — aber **pro Farbkanal** aus
+Integrated Gradients, **nicht** als klassenkontrastive Richtung über zwei Klassenköpfe.
+„Magnitude und Vorzeichen gleichzeitig zeigen" ist also nicht neu; neu bleibt die
+**entkoppelte Quelle** (Union-Magnitude beider Köpfe vs. Contrastive-Margin).
+
 Provenienz der erweiterten Recherche: unabhängige breite Suche (Consensus/Semantic Scholar +
 Web), Juni 2026 — **kein** systematischer Review (s. §11).
 
@@ -353,6 +361,14 @@ Overlay, in dem schwach-gerichtete Pixel als helles Neutral statt als flackernde
 Rot/Blau erscheinen. Das Flackern heute ist *hohes Alpha × instabiles Vorzeichen* auf
 Pixeln nahe null — man muss die **Vorzeichen-Quelle** stabilisieren, nicht das Alpha
 senken.
+
+**Perzeptuelle Stützung (Encoding-Wahl):** Dass *Opazität/Sättigung* als „Magnitude" und
+*Farbton* als „Richtung" gelesen werden, ist empirisch gestützt — die
+Colormap-Wahrnehmungsforschung dokumentiert einen **opaque-is-more bias** (Schloss et al.,
+TVCG 2019) und einen **saturated-is-more bias** (Schoenlein et al., 2026): höher
+opake/gesättigtere Regionen werden intuitiv als „mehr" gelesen. Unsere Kodierung
+(Alpha = `|R_fake| + |R_real|`, Sättigung gegated durch `|R_fake − R_real|`) liegt damit
+auf der erwartungskonformen Seite — eine Design-Entscheidung mit Evidenz, kein Geschmack.
 
 ---
 
@@ -547,6 +563,21 @@ Nächste Verwandte (Novelty-Abgrenzung, ergänzt durch Recherche Juni 2026):
   (Nächster Motivations-Verwandter: benennt „sign collapse", entkoppelt Lokalisierung von
   Klassifikation, „preserving both magnitude and sign" — aber CAM + Architektur-Eingriff,
   nicht unsere trainingsfreie bivariate LRP-Fusion. Abgrenzung in §7.)
+- Visualizing and Generalizing Integrated Attributions
+  (Payne, Patrick & Fernandez, ICPR 2024) — DOI 10.1007/978-3-031-78189-6_29:
+  <https://link.springer.com/10.1007/978-3-031-78189-6_29>
+  (Nächster Visualisierungs-seitiger Verwandter: zeigt signed + unsigned Attribution
+  gemeinsam — aber pro Farbkanal aus Integrated Gradients, nicht klassenkontrastive
+  Richtung über zwei Klassenköpfe.)
+
+Visualisierungs-/Wahrnehmungs-Grundlagen (Encoding-Justifikation, Recherche Juni 2026):
+
+- Mapping Color to Meaning in Colormap Data Visualizations (opaque-is-more bias)
+  (Schloss et al., IEEE TVCG 2019):
+  <https://consensus.app/papers/details/ed9de73af25c5931bb256b14aae1e3e4/>
+- Understanding the opaque-is-more bias and saturated-is-more bias for colormap data
+  visualizations (Schoenlein et al., Attention, Perception & Psychophysics 2026):
+  <https://consensus.app/papers/details/f307f1089b2c55f7a8281a73657b6d72/>
 
 ---
 
