@@ -3,7 +3,7 @@ type: project-index
 project: deepfake-detection
 title: Index - Deepfake Detection
 status: active
-updated: 2026-06-16T00:00:00Z
+updated: 2026-06-26T10:34:07Z
 ---
 # Index
 
@@ -59,6 +59,13 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 - [[Sources/Papers/deeperforensics-jiang-2020]]
 - [[Sources/Papers/in-ictu-oculi-li-2018]]
 - [[Sources/Papers/.claude/logs/session-20260614-fc640a00]]
+- [[Sources/Papers/gu-2018-contrastive-lrp]]
+- [[Sources/Papers/iwana-2019-sglrp]]
+- [[Sources/Papers/walter-2025-class-competition]]
+- [[Sources/Papers/oh-2025-beyond-softmax]]
+- [[Sources/Papers/payne-2024-integrated-attributions-viz]]
+- [[Sources/Papers/schloss-2019-colormap-meaning]]
+- [[Sources/Papers/schoenlein-2026-opaque-saturated-bias]]
 
 ### Knowledge
 - [[Knowledge/Claim Map]]
@@ -66,22 +73,24 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 - [[Knowledge/Method Taxonomy]]
 - [[Knowledge/Research Gaps]]
 - [[Knowledge/research-question-card]]
+- [[Knowledge/AttnLRP Bivariate Heatmap]]
 
 ### Experiments
 - None yet.
 
 ### Results
 - [[Results/wav2vec2-phase1-audio-baseline]]
-- [[Results/wav2vec2-phase2-audio-end-to-end]]
-- [[Results/videomae-unimodal-video-baseline]]
 - [[Results/multimodal-fusion-phase1-baseline]]
 - [[Results/multimodal-concat-phase1-ablation]]
+- [[Results/videomae-unimodal-video-baseline]]
+- [[Results/wav2vec2-phase2-audio-end-to-end]]
 
 ### Writing
 - [[Writing/comparison-matrix]]
 - [[Writing/related-work-draft]]
 - [[Writing/literature-review]]
 - [[Writing/research-proposal]]
+- [[Writing/related-work-de]]
 
 ### Maps
 - [[Maps/literature.canvas]]

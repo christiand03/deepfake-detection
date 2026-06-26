@@ -65,6 +65,22 @@ tags: [Inventory, Coverage, Zotero]
 |---|---|---|
 | Robust Deepfake Detection (review) | SCMKRRZ7 | [[robust-deepfake-review-khan-2025]] |
 
+## xAI / Visualization set (added 2026-06-26) — bivariate AttnLRP heatmap
+
+Supports the bivariate magnitude+direction heatmap design + novelty positioning (synthesis: [[../../Knowledge/AttnLRP Bivariate Heatmap]]; repo doc `docs/attnlrp_relevance_explanations_and_decision.md`). Imported to Zotero `Paper Belegarbeit` (QMZYVAXI) 2026-06-26.
+
+| Paper | Zotero key | Note |
+|---|---|---|
+| Contrastive LRP (CLRP) | 7GTEAHGP | [[gu-2018-contrastive-lrp]] |
+| Softmax-Gradient LRP (SGLRP) | T6RW3MHT | [[iwana-2019-sglrp]] |
+| Hidden in Plain Sight (class competition) | FPEBCBJB | [[walter-2025-class-competition]] |
+| Beyond Softmax (dual-branch sigmoid CAM) | 47IZI44N | [[oh-2025-beyond-softmax]] |
+| Visualizing & Generalizing Integrated Attributions | 8PNJGI52 | [[payne-2024-integrated-attributions-viz]] |
+| Mapping Color to Meaning (opaque-is-more) | 5JRVR72K | [[schloss-2019-colormap-meaning]] |
+| Opaque/Saturated-is-more bias | MWEHS6C8 | [[schoenlein-2026-opaque-saturated-bias]] |
+
+> [!note] Status (2026-06-26): all 7 in Zotero with verified IDs; the 7 `\cite{}` keys (`gu2018clrp`, `iwana2019sglrp`, `walter2025classcompetition`, `oh2025beyondsoftmax`, `payne2024integratedviz`, `schloss2019colormap`, `schoenlein2026saturated`) are added to `references.bib`. PDFs attached via `zotero_find_and_attach_pdfs`.
+
 ## Notes
 - **Evidence gate:** 32/34 collection notes full-text-grounded; 2 abstract-only (Rieger, Lips-Are-Lying). The Khan review is a secondary source. ISTVT removed (unused → [[../../Archive/istvt-2023|archived]]).
 - **Registry:** run `/kb-sync` after additions to register new notes (3 added 2026-06-14: In Ictu Oculi, DeeperForensics-1.0, Audio Adversarial Examples).
