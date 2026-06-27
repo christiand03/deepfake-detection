@@ -207,6 +207,7 @@ class VideoMAEModule(BaseDeepfakeModule):
         target_class: int | None = None,
         normalize_mode: Literal["per_frame", "global"] = "global",
         normalize: bool = True,
+        per_class: bool = False,
     ):
         """Compute AttnLRP heatmaps for a batch of video clips.
 
@@ -224,6 +225,13 @@ class VideoMAEModule(BaseDeepfakeModule):
                 (channel-summed, patch-pooled, upsampled, but un-normalized) so the
                 caller can normalize across a whole clip instead of per 16-frame
                 window — required for cross-window-comparable per-chunk relevance.
+            per_class: when ``True`` runs the dual-seed pass and returns the TWO raw
+                single-target maps ``(rel_fake, rel_real, target)`` (channel-summed,
+                patch-pooled, upsampled, but un-normalized — ``normalize`` /
+                ``normalize_mode`` are ignored). The caller derives the bivariate
+                magnitude (``|rel_fake| + |rel_real|``) and contrastive direction
+                (``rel_fake − rel_real``) and normalizes clip-globally. The default
+                single-target signature is unchanged.
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
         self._require_eager_attention(self.net)
@@ -238,7 +246,30 @@ class VideoMAEModule(BaseDeepfakeModule):
         import torch.nn.functional as F_nn
         from einops import rearrange, reduce
 
-        from src.utils.attnlrp import compute_attnlrp, normalize_relevance
+        from src.utils.attnlrp import (
+            compute_attnlrp,
+            compute_attnlrp_per_class,
+            normalize_relevance,
+        )
+
+        def _postprocess_raw(relevance: torch.Tensor) -> torch.Tensor:
+            """Channel-sum → 16×16 patch-pool → bilinear upsample (un-normalized)."""
+            hm = reduce(relevance, "b t c h w -> b t h w", "sum")
+            b, t, h, w = hm.shape
+            hm_4d = rearrange(hm, "b t h w -> (b t) 1 h w")
+            hm_4d = F_nn.avg_pool2d(hm_4d, kernel_size=16, stride=16)
+            hm_4d = F_nn.interpolate(hm_4d, size=(h, w), mode="bilinear", align_corners=False)
+            return rearrange(hm_4d, "(b t) 1 h w -> b t h w", b=b, t=t)
+
+        if per_class:
+            # Dual-seed: one forward, two backwards → raw [R_fake, R_real] maps.
+            (rel_fake, rel_real), resolved = compute_attnlrp_per_class(
+                net=self.net,
+                input_tensor=pixel_values,
+                forward_fn=lambda x: self.net(pixel_values=x).logits,
+                targets=(1, 0),
+            )
+            return _postprocess_raw(rel_fake), _postprocess_raw(rel_real), resolved
 
         relevance, target_class = compute_attnlrp(
             net=self.net,

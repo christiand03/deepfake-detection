@@ -187,6 +187,64 @@ def compute_attnlrp(
     return relevance, resolved
 
 
+def compute_attnlrp_per_class(
+    net: nn.Module,
+    input_tensor: torch.Tensor,
+    forward_fn: Callable[[torch.Tensor], torch.Tensor],
+    targets: tuple[int, ...] = (1, 0),
+) -> tuple[list[torch.Tensor], torch.Tensor]:
+    """Dual-seed AttnLRP: one forward, one backward per target class.
+
+    Computes Input×Gradient relevance for each class in *targets* from a SINGLE
+    shared forward pass.  The LRP backward is linear in the output seed, so the
+    forward graph is reused (``retain_graph=True``) instead of re-running the
+    model: cost is ~1 forward + ``len(targets)`` backwards, not ``len(targets)``
+    full passes.  For the bivariate relevance encoding ``targets=(1, 0)`` yields
+    ``[R_fake, R_real]`` — the two single-target maps whose magnitude
+    (``|R_fake| + |R_real|``) and contrastive direction (``R_fake − R_real``)
+    drive the heatmap.
+
+    Must be called after the relevant lxt monkey_patch has been applied.  Wrapped
+    in ``torch.enable_grad()`` so it is safe to call from ``no_grad`` contexts.
+
+    Args:
+        net: The model. ``zero_grad()``'d before each backward.
+        input_tensor: Raw input tensor; cloned and detached internally.
+        forward_fn: Callable(x) -> logits of shape ``(batch, num_classes)``.
+        targets: Class indices to seed, in order. Default ``(1, 0)``.
+
+    Returns:
+        relevances: List of Input×Gradient tensors (same shape as *input_tensor*),
+            one per entry in *targets*, in the same order.
+        resolved_target: ``argmax(logits)`` per sample (the predicted class),
+            dtype long — for reference only, independent of *targets*.
+    """
+    with torch.enable_grad():
+        x = input_tensor.clone().detach().requires_grad_(True)
+        logits = forward_fn(x)
+        resolved = torch.argmax(logits, dim=1)
+        batch_idx = torch.arange(logits.shape[0], device=logits.device)
+
+        relevances: list[torch.Tensor] = []
+        for i, t in enumerate(targets):
+            net.zero_grad()
+            x.grad = None  # drop the previous seed's gradient before re-seeding
+            target_logits = logits[batch_idx, t]
+            # Keep the graph for all but the final backward so each seed reuses it.
+            target_logits.backward(
+                torch.ones_like(target_logits),
+                retain_graph=i < len(targets) - 1,
+            )
+            if x.grad is None:
+                raise RuntimeError(
+                    f"x.grad is None after backward for target {t} — no differentiable "
+                    "path from input to logits. Ensure lxt monkey_patch has been applied."
+                )
+            relevances.append(x * x.grad)
+
+    return relevances, resolved
+
+
 def normalize_relevance(
     relevance: Float[torch.Tensor, "batch flat"],
 ) -> Float[torch.Tensor, "batch flat"]:

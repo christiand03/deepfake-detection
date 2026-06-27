@@ -555,11 +555,15 @@ def _array_to_data_uri(
     heatmap: np.ndarray,
     alpha_mask: np.ndarray | None = None,
     magnitude_alpha: bool = False,
+    direction: np.ndarray | None = None,
     max_alpha: float = 0.95,
     alpha_gamma: float = 0.5,
     color_gamma: float = 0.5,
     color_gain: float = 3.0,
     color_cap: float = 0.6,
+    dir_gamma: float = 1.6,
+    dir_gain: float = 1.0,
+    dir_cap: float = 0.9,
 ) -> str:
     """Encode a (H, W) float array in [-1, 1] as a base64 RGBA PNG data URI.
 
@@ -606,7 +610,33 @@ def _array_to_data_uri(
     norm = mcolors.Normalize(vmin=-1.0, vmax=1.0)
     cmap = plt.get_cmap("seismic")
 
-    if magnitude_alpha:
+    if direction is not None:
+        # Bivariate encoding (decision doc §8): *heatmap* is the magnitude channel
+        # (|R_fake| + |R_real|, ≥ 0) and *direction* is the contrastive margin
+        # (R_fake − R_real, signed). HUE comes from sign(direction); SATURATION is
+        # gated by |direction| so weak-direction pixels fade to neutral/white at
+        # high alpha instead of strobing red↔blue (the flicker fix). Magnitude and
+        # direction are decoupled on purpose — a strongly-engaged but undecided
+        # patch stays bright but neutral rather than borrowing a confident colour.
+        #
+        # ALPHA uses the magnitude AS-IS — it is already percentile-normalised
+        # CLIP-GLOBAL by to_bivariate, so opacity is comparable ACROSS frames: the
+        # faked chunk reads more opaque than the weakly-engaged real chunks, and a
+        # dead frame (zero magnitude) stays fully transparent. No per-frame re-peak
+        # (that made every frame equally opaque and broke temporal localisation)
+        # and no min-alpha floor (it would forge visibility for unattended frames).
+        # alpha_gamma lifts faint-but-nonzero frames without inventing a floor.
+        mag = np.clip(np.abs(heatmap).astype(np.float32), 0.0, 1.0)
+        d = direction.astype(np.float32)
+        # Gentle curve (NOT the single-target color_gamma/gain/cap, which slam any
+        # tiny |direction| to vivid and would defeat the gate): saturation tracks
+        # |direction| so weak-margin pixels — exactly the frame-to-frame flippers —
+        # render near-neutral while strong-margin patches stay vivid (§8 flicker fix).
+        color_mag = np.clip((np.abs(d) ** dir_gamma) * dir_gain, 0.0, dir_cap)
+        color_val = np.sign(d) * color_mag
+        rgba_float = cmap(norm(color_val))  # (H, W, 4) float [0, 1]
+        rgba_float[..., 3] = np.clip(mag**alpha_gamma * max_alpha, 0.0, max_alpha)
+    elif magnitude_alpha:
         mag = np.abs(heatmap).astype(np.float32)
         peak = float(mag.max())
         if peak > 1e-6:  # noqa: PLR2004 — empty frame stays fully transparent
@@ -795,8 +825,20 @@ def _load_all_frames_cropped_per_window(
 def _compute_heatmaps_chunked(
     model: VideoMAEModule,
     all_frames: torch.Tensor,
-) -> tuple[np.ndarray, list[float]]:
-    """Return a per-frame LRP heatmap for every frame in *all_frames*.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[float]]:
+    """Return bivariate per-frame LRP heatmaps for every frame in *all_frames*.
+
+    Runs the dual-seed AttnLRP pass per 16-frame window (one forward + two
+    backwards) and returns ``(magnitude_np, direction_np, signed_np,
+    per_window_conf)``: *magnitude_np* = ``|R_fake| + |R_real|`` in ``[0, 1]``
+    (alpha/height), *direction_np* = ``R_fake - R_real`` in ``[-1, 1]`` (hue +
+    saturation gate), *signed_np* = the legacy single-target FAKE map
+    (``_percentile_normalize(R_fake)``) kept so the Phase-3/4 crop heatmaps and
+    region scores stay byte-compatible, and *per_window_conf* = per-window fake
+    probability aligned 1:1 with the windows. See the original note below.
+
+    Original behaviour preserved:
+    A per-frame LRP heatmap for every frame in *all_frames*.
 
     Processes the sequence in non-overlapping 16-frame windows.  The last
     window is right-padded with its final frame when ``N % NUM_FRAMES != 0``.
@@ -821,7 +863,8 @@ def _compute_heatmaps_chunked(
     relevance aggregation).  Clip-global normalization keeps weak windows weak.
     """
     n = all_frames.shape[0]
-    heatmap_np = np.zeros((n, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    rel_fake_np = np.zeros((n, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    rel_real_np = np.zeros((n, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     per_window_conf: list[float] = []
     n_chunks = -(-n // NUM_FRAMES)  # ceiling division
     for chunk_idx, chunk_start in enumerate(range(0, n, NUM_FRAMES)):
@@ -846,24 +889,26 @@ def _compute_heatmaps_chunked(
                 chunk_idx + 1,
                 n_chunks,
             )
-        # Explain the FAKE class (1) so the seismic heatmap's sign is consistent
-        # across REAL and FAKE clips (red = fake-supporting). Defaulting to the
-        # predicted class would invert the colours on every REAL clip.
-        # Collect RAW relevance (normalize=False) so the whole clip is normalized
-        # together below, not each window to its own peak.
-        # Per-window fake probability (A1 confidence timeline) over the SAME window
-        # the heatmap is computed for, so confidence and relevance always align.
+        # Dual-seed AttnLRP: raw R_fake (logit 1) and R_real (logit 0), collected
+        # RAW so the whole clip is normalized together below, not each window to
+        # its own peak. Per-window fake probability (A1 confidence timeline) over
+        # the SAME window so confidence and relevance always align.
         with torch.no_grad():
             logits = model.net(pixel_values=pv).logits  # (1, 2)
         per_window_conf.append(torch.softmax(logits, dim=-1)[0, 1].item())
-        heatmap_tensor, _ = model.explain(pixel_values=pv, target_class=1, normalize=False)
-        hm = heatmap_tensor.detach().cpu().numpy()[0]  # (16, H, W)
-        heatmap_np[chunk_start:chunk_end] = hm[: chunk_end - chunk_start]
+        rel_fake_t, rel_real_t, _ = model.explain(pixel_values=pv, per_class=True)
+        rf = rel_fake_t.detach().cpu().numpy()[0]  # (16, H, W)
+        rr = rel_real_t.detach().cpu().numpy()[0]  # (16, H, W)
+        rel_fake_np[chunk_start:chunk_end] = rf[: chunk_end - chunk_start]
+        rel_real_np[chunk_start:chunk_end] = rr[: chunk_end - chunk_start]
         log.debug("Heatmap chunk %d/%d processed.", chunk_idx + 1, n_chunks)
 
-    # Clip-global, sign-preserving normalization (99th-percentile) over all windows
-    # at once — keeps genuinely weak windows weak (cross-window comparable).
-    return _percentile_normalize(heatmap_np), per_window_conf
+    # Clip-global, sign-preserving normalization over all windows at once -- keeps
+    # genuinely weak windows weak (cross-window comparable). signed_np keeps the
+    # legacy single-target FAKE map for the unchanged Phase-3/4 crop paths.
+    magnitude_np, direction_np = to_bivariate(rel_fake_np, rel_real_np)
+    signed_np = _percentile_normalize(rel_fake_np)
+    return magnitude_np, direction_np, signed_np, per_window_conf
 
 
 # ── Video inference ───────────────────────────────────────────────────────────
@@ -884,6 +929,28 @@ def _per_chunk_relevance(heatmap_np: np.ndarray) -> tuple[list[float], list[floa
         window = heatmap_np[start : start + NUM_FRAMES]
         magnitudes.append(float(np.clip(np.mean(np.abs(window)), 0.0, 1.0)))
         signs.append(float(np.sign(np.mean(window))))
+    return magnitudes, signs
+
+
+def _per_chunk_bivariate(
+    magnitude_np: np.ndarray,
+    direction_np: np.ndarray,
+) -> tuple[list[float], list[float]]:
+    """Per-16-frame-window relevance height + sign from the bivariate channels (A1).
+
+    Height = mean magnitude (``|R_fake| + |R_real|``) per window; sign =
+    ``sign(mean(direction))`` = the window's net fake/real lean. The bivariate
+    counterpart to :func:`_per_chunk_relevance`, sourcing height and sign from the
+    two decoupled channels instead of one signed map.
+    """
+    n_frames = magnitude_np.shape[0]
+    magnitudes: list[float] = []
+    signs: list[float] = []
+    for start in range(0, n_frames, NUM_FRAMES):
+        mwin = magnitude_np[start : start + NUM_FRAMES]
+        dwin = direction_np[start : start + NUM_FRAMES]
+        magnitudes.append(float(np.clip(np.mean(mwin), 0.0, 1.0)))
+        signs.append(float(np.sign(np.mean(dwin))))
     return magnitudes, signs
 
 
@@ -918,26 +985,30 @@ def _video_result_with_heatmaps(
         per_window_boxes = None
     n_frames = all_frames.shape[0]
 
-    # Per-window confidence comes back from the SAME windows as the heatmaps, so
-    # the A1 confidence and relevance timelines always have matching length.
-    heatmap_np, per_chunk_confidence = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
+    # Bivariate channels come back from the SAME windows as the confidence, so the
+    # A1 confidence and relevance timelines always have matching length. signed_np
+    # is the legacy single-target FAKE map kept for the Phase-3/4 crop paths.
+    magnitude_np, direction_np, signed_np, per_chunk_confidence = _compute_heatmaps_chunked(model, all_frames)
 
-    # Per-frame scores: mean absolute LRP relevance
-    per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
+    # Per-frame scores: mean magnitude (|R_fake| + |R_real|).
+    per_frame_scores = [float(np.clip(np.mean(magnitude_np[i]), 0.0, 1.0)) for i in range(n_frames)]
 
-    # Upproject each 224×224 heatmap to the original full-frame resolution, using the
-    # same per-window box it was cropped with (A2-Box) so the heatmap tracks the face.
+    # Upproject each 224×224 magnitude + direction map to the original full-frame
+    # resolution with the same per-window box (A2-Box), then render the bivariate
+    # overlay: alpha from magnitude, hue/saturation from direction.
     heatmap_frames: list[str] = []
     for i in range(n_frames):
         box = per_window_boxes[i // NUM_FRAMES] if per_window_boxes else (cx1, cy1, cx2, cy2)
-        full_frame = _upproject_heatmap(heatmap_np[i], *box, orig_w, orig_h)
-        heatmap_frames.append(_array_to_data_uri(full_frame, magnitude_alpha=True))
+        mag_full = _upproject_heatmap(magnitude_np[i], *box, orig_w, orig_h)
+        dir_full = _upproject_heatmap(direction_np[i], *box, orig_w, orig_h)
+        heatmap_frames.append(_array_to_data_uri(mag_full, direction=dir_full))
 
-    anomaly_regions = _extract_anomaly_regions(heatmap_np)
+    # Regions still use the legacy signed map (Phase-3/4 attention-shift unchanged).
+    anomaly_regions = _extract_anomaly_regions(signed_np)
 
     # Per-chunk timelines (A1): confidence (per-window fake prob) + relevance
-    # hybrid (magnitude + sign), one value per 16-frame window.
-    rel_magnitude, rel_sign = _per_chunk_relevance(heatmap_np)
+    # hybrid (magnitude height + contrastive sign), one value per 16-frame window.
+    rel_magnitude, rel_sign = _per_chunk_bivariate(magnitude_np, direction_np)
 
     return {
         "verdict": verdict,
@@ -960,7 +1031,7 @@ def _video_result_with_heatmaps(
         # (underscore) keys: ignored by the API schemas, used only internally by
         # the robustness paths to encode the crop video + crop-space heatmaps.
         "_cropFrames": all_frames,
-        "_heatmapNp": heatmap_np,
+        "_heatmapNp": signed_np,
     }
 
 
@@ -990,7 +1061,9 @@ def _run_video_inference_fullframe(clip_path: Path) -> dict:
 
     # Heatmap: one AttnLRP pass per 16-frame chunk — covers the full video. The
     # per-window confidence comes from the same windows so the A1 timelines align.
-    heatmap_np, per_chunk_confidence = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
+    # The face-less fallback keeps the legacy single-target FAKE map (signed_np);
+    # the bivariate overlay is reserved for the in-distribution face-crop path.
+    _, _, heatmap_np, per_chunk_confidence = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
 
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
     heatmap_frames = [_array_to_data_uri(heatmap_np[i], magnitude_alpha=True) for i in range(n_frames)]
@@ -1370,6 +1443,29 @@ def _percentile_normalize(arr: np.ndarray, pct: float = 99.0) -> np.ndarray:
         return arr
     scale = float(np.percentile(np.abs(arr), pct)) + 1e-8
     return np.clip(arr / scale, -1.0, 1.0)
+
+
+def to_bivariate(
+    rel_fake: np.ndarray,
+    rel_real: np.ndarray,
+    pct: float = 99.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Magnitude + direction channels from the two single-target relevance maps.
+
+    Decision doc §6/§8: ``magnitude = |R_fake| + |R_real|`` is the total engagement
+    of BOTH logit heads (no cancellation) and drives alpha / height; ``direction =
+    R_fake − R_real`` is the contrastive margin and drives hue (sign) plus
+    saturation gating (|·|). Both are percentile-normalised (sign-preserving) so
+    weak maps stay weak — pass the RAW (un-normalised) per-class maps for a whole
+    clip at once to keep the normalisation cross-window-comparable.
+
+    Returns:
+        ``(magnitude, direction)`` where *magnitude* is in ``[0, 1]`` and
+        *direction* in ``[-1, 1]``, both the same shape as the inputs.
+    """
+    magnitude = _percentile_normalize(np.abs(rel_fake) + np.abs(rel_real), pct)
+    direction = _percentile_normalize(rel_fake - rel_real, pct)
+    return magnitude, direction
 
 
 def _compute_word_segments(
