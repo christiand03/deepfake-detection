@@ -1389,18 +1389,19 @@ def _audio_peak_fake_margin(model: Wav2Vec2DeepfakeModule, waveform_np: np.ndarr
     return float(_windowed_audio_margins(model, waveform_np).max())
 
 
-def _multimodal_mean_fake_margin(
+def _multimodal_windowed_margins(
     model: MultimodalDeepfakeModule,
     pv_windows: list[torch.Tensor],
     waveform_np: np.ndarray,
-) -> float:
-    """Mean fused fake logit-margin over (video window, audio window) pairs.
+) -> np.ndarray:
+    """Per-window fused fake logit-margin ``logit_fake - logit_real``.
 
     Each video window in *pv_windows* is re-paired with the time-aligned audio
-    window sliced from *waveform_np*, so band-ablation attribution reflects the
-    multimodal fusion model that actually produces the verdict.  Returns the
-    logit margin (not softmax probability) so it stays sensitive when the fused
-    verdict is saturated near certainty.
+    window sliced from *waveform_np* and scored through the fusion model, so the
+    margins reflect the multimodal model that actually produces the verdict.  The
+    logit margin (not softmax probability) stays sensitive when the fused verdict
+    is saturated near certainty.  The shared per-window scoring behind the mean
+    margin (3-bar Confidence) and the band×time ablation grid.
     """
     margins: list[float] = []
     with torch.no_grad():
@@ -1408,7 +1409,58 @@ def _multimodal_mean_fake_margin(
             iv = _audio_window_tensor(waveform_np, window_idx)  # (1, 10240)
             logits = model(pixel_values=pv, input_values=iv)  # (1, 2)
             margins.append((logits[0, 1] - logits[0, 0]).item())
-    return float(np.mean(margins)) if margins else 0.0
+    return np.asarray(margins, dtype=np.float32)
+
+
+def _multimodal_mean_fake_margin(
+    model: MultimodalDeepfakeModule,
+    pv_windows: list[torch.Tensor],
+    waveform_np: np.ndarray,
+) -> float:
+    """Mean fused fake logit-margin over (video window, audio window) pairs.
+
+    Mean of :func:`_multimodal_windowed_margins` — the baseline measure for the
+    multimodal 3-bar band-ablation Confidence view.
+    """
+    margins = _multimodal_windowed_margins(model, pv_windows, waveform_np)
+    return float(margins.mean()) if margins.size else 0.0
+
+
+def _multimodal_band_time_grid(
+    model: MultimodalDeepfakeModule,
+    pv_windows: list[torch.Tensor],
+    waveform_np: np.ndarray,
+    sample_rate: int,
+) -> dict[str, list[float]]:
+    """Per-band x per-window causal fake attribution for the fused model (L3 grid).
+
+    The multimodal counterpart to :func:`_audio_band_time_grid`: for each band,
+    remove it clip-wide from the audio, re-score every (video window, ablated audio
+    window) pair through the fusion model, and report ``(base[w] - ablated[w]) /
+    base[w]`` — the fraction of that window's fused fake margin that collapses when
+    the band is gone. Gated to fake windows (``base[w] > 0``); real windows are 0,
+    so a real clip renders as an empty grid. The video stays fixed, so the grid
+    isolates which AUDIO band carried the fake in each window of the fused decision.
+    """
+    from scipy.signal import butter, sosfiltfilt  # lazy import — scipy optional
+
+    nyq = sample_rate / 2.0
+    # Each filter REMOVES the named band (same as _band_confidence).
+    removers = [
+        ("low", butter(5, 500.0 / nyq, btype="high", output="sos")),
+        ("mid", butter(5, [500.0 / nyq, 4000.0 / nyq], btype="bandstop", output="sos")),
+        ("high", butter(5, 4000.0 / nyq, btype="low", output="sos")),
+    ]
+    base = _multimodal_windowed_margins(model, pv_windows, waveform_np)  # (n_windows,)
+    fake = base > 0.0
+    safe_base = np.where(fake, base, 1.0)  # avoid div-by-0/neg on real windows
+    grid: dict[str, list[float]] = {}
+    for key, sos in removers:
+        ablated = _multimodal_windowed_margins(model, pv_windows, sosfiltfilt(sos, waveform_np).astype(np.float32))
+        drop = base - ablated
+        cell = np.where(fake, np.clip(drop / safe_base, -1.0, 1.0), 0.0)
+        grid[key] = [float(x) for x in cell]
+    return grid
 
 
 def _band_confidence(
@@ -1936,8 +1988,12 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
     )
     n_frames = all_frames.shape[0]
 
-    heatmap_np = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
-    audio_relevance_full = np.zeros(len(waveform_np), dtype=np.float32)
+    # Bivariate (dual-seed) accumulators: RAW per-class video + audio relevance,
+    # collected per window and normalized clip-global once below (to_bivariate).
+    video_fake_np = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    video_real_np = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    audio_fake_full = np.zeros(len(waveform_np), dtype=np.float32)
+    audio_real_full = np.zeros(len(waveform_np), dtype=np.float32)
     # Per-window fused fake probs (A1 confidence timeline); verdict max-pools these.
     per_chunk_conf: list[float] = []
     # Per-window video tensors, reused by the band-ablation pass so it pairs each
@@ -1960,49 +2016,58 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
             logits = model(pixel_values=pv, input_values=iv)  # (1, 2)
         per_chunk_conf.append(torch.softmax(logits, dim=-1)[0, 1].item())
 
-        # Joint AttnLRP — single shared backward pass over both modalities.
-        # Explain the FAKE class (1) for a sign convention consistent with the
-        # unimodal paths (positive = fake-supporting), regardless of verdict.
+        # Joint bivariate AttnLRP — one shared forward, two backwards (FAKE=1,
+        # REAL=0) over both modalities. RAW per-class maps (un-normalized) so the
+        # whole clip is normalized together below via to_bivariate; cross-modal
+        # attention gradients are preserved by the single shared graph.
+        af = np.zeros(AUDIO_SAMPLES_PER_CHUNK, dtype=np.float32)
+        ar = np.zeros(AUDIO_SAMPLES_PER_CHUNK, dtype=np.float32)
         try:
-            # Raw video relevance (normalize_video=False) so the whole clip is
-            # normalized together below, not each window to its own peak. Audio
-            # relevance stays per-window-normalized (handled as before).
-            video_hm, audio_rel, _ = model.explain(
-                pixel_values=pv, input_values=iv, target_class=1, normalize_video=False
+            video_fake_t, video_real_t, audio_fake_t, audio_real_t, _ = model.explain(
+                pixel_values=pv, input_values=iv, per_class=True
             )
-            hm = video_hm.detach().cpu().numpy()[0]  # (16, H, W)
-            heatmap_np[frame_start:frame_end] = hm[: frame_end - frame_start]
-            rel = audio_rel.detach().cpu().numpy()[0]  # (10240,)
+            vf = video_fake_t.detach().cpu().numpy()[0]  # (16, H, W)
+            vr = video_real_t.detach().cpu().numpy()[0]
+            video_fake_np[frame_start:frame_end] = vf[: frame_end - frame_start]
+            video_real_np[frame_start:frame_end] = vr[: frame_end - frame_start]
+            af = audio_fake_t.detach().cpu().numpy()[0]  # (10240,)
+            ar = audio_real_t.detach().cpu().numpy()[0]
         except Exception:  # noqa: BLE001
             log.exception("Multimodal AttnLRP failed for window %d of %s", window_idx, clip_path.name)
-            rel = np.zeros(AUDIO_SAMPLES_PER_CHUNK, dtype=np.float32)
 
-        # Stitch the window's audio relevance into the full-clip timeline.
+        # Stitch the window's per-class audio relevance into the full-clip timelines.
         a_start = window_idx * AUDIO_SAMPLES_PER_CHUNK
-        a_end = min(a_start + AUDIO_SAMPLES_PER_CHUNK, len(audio_relevance_full))
+        a_end = min(a_start + AUDIO_SAMPLES_PER_CHUNK, len(audio_fake_full))
         if a_end > a_start:
-            audio_relevance_full[a_start:a_end] = rel[: a_end - a_start]
+            audio_fake_full[a_start:a_end] = af[: a_end - a_start]
+            audio_real_full[a_start:a_end] = ar[: a_end - a_start]
 
     fused_fake_prob = max(per_chunk_conf, default=0.0)
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fused_fake_prob > 0.5 else "REAL"
     confidence = fused_fake_prob if verdict == "FAKE" else 1.0 - fused_fake_prob
 
-    # Clip-global, sign-preserving normalization (99th-percentile) of the raw video
-    # relevance over all windows at once — keeps weak windows weak so the per-frame
-    # scores, heatmap overlay and per-chunk relevance are cross-window comparable.
-    heatmap_np = _percentile_normalize(heatmap_np)
+    # Clip-global bivariate channels (decision doc): magnitude = |R_fake| + |R_real|
+    # (alpha/height), direction = R_fake − R_real (hue + saturation gate), each
+    # 99th-percentile sign-preserving over all windows at once so weak windows stay
+    # weak (cross-window comparable). signed_v keeps the legacy single-target FAKE
+    # map for the unchanged Phase-3/4 crop player + anomaly regions.
+    magnitude_v, direction_v = to_bivariate(video_fake_np, video_real_np)
+    signed_v = _percentile_normalize(video_fake_np)
 
-    # ── Video panel: per-frame scores + upprojected heatmaps + anomaly regions ──
-    per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
+    # ── Video panel: per-frame scores + upprojected bivariate heatmaps + regions ──
+    per_frame_scores = [float(np.clip(np.mean(magnitude_v[i]), 0.0, 1.0)) for i in range(n_frames)]
     heatmap_frames: list[str] = []
     for i in range(n_frames):
         box = per_window_boxes[i // NUM_FRAMES]
-        full_frame = _upproject_heatmap(heatmap_np[i], *box, prepared.orig_w, prepared.orig_h)
-        heatmap_frames.append(_array_to_data_uri(full_frame, magnitude_alpha=True))
-    anomaly_regions = _extract_anomaly_regions(heatmap_np)
-    rel_magnitude, rel_sign = _per_chunk_relevance(heatmap_np)
+        mag_full = _upproject_heatmap(magnitude_v[i], *box, prepared.orig_w, prepared.orig_h)
+        dir_full = _upproject_heatmap(direction_v[i], *box, prepared.orig_w, prepared.orig_h)
+        heatmap_frames.append(_array_to_data_uri(mag_full, direction=dir_full))
+    anomaly_regions = _extract_anomaly_regions(signed_v)
+    rel_magnitude, rel_sign = _per_chunk_bivariate(magnitude_v, direction_v)
 
-    # ── Audio panel: relevance timeline + frequency bands + word segments ───────
+    # ── Audio panel: bivariate L1 timeline + frequency bands/grids + word segments ─
+    # Clip-global magnitude/direction of the stitched per-class audio relevance.
+    magnitude_a, direction_a = to_bivariate(audio_fake_full, audio_real_full)
     # Band evidence via ablation on THE FUSION MODEL itself (signed, decision-
     # grounded): each band-stopped audio window is re-paired with the same video
     # the verdict saw, so L3 reflects the multimodal model that gives the verdict
@@ -2012,30 +2077,39 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         sample_rate,
         lambda w: _multimodal_mean_fake_margin(model, pv_windows, w),
     )
-    # L3 relevance view (B4): energy-weighted LRP relevance of the fused audio.
-    # INTERIM: multimodal explain() is still single-target, so wrap its signed band
-    # values into the bivariate {magnitude, direction} schema (magnitude = |value|).
-    # Replace with a true dual-seed pass when the multimodal bivariate slice lands.
-    _mm_fbr = _compute_frequency_bands(waveform_np, audio_relevance_full, sample_rate)
+    # L3 relevance view (B4, bivariate): per-band magnitude (bar width) + direction
+    # (side/colour), each energy-weighted over the band by _compute_frequency_bands.
+    mag_bands = _compute_frequency_bands(waveform_np, magnitude_a, sample_rate, normalize=False)
+    dir_bands = _compute_frequency_bands(waveform_np, direction_a, sample_rate, normalize=False)
     frequency_bands_relevance = {
-        k: {"magnitude": abs(_mm_fbr[k]), "direction": _mm_fbr[k]} for k in ("low", "mid", "high")
+        k: {"magnitude": abs(mag_bands[k]), "direction": dir_bands[k]} for k in ("low", "mid", "high")
     }
+    # L3 band×time grids (heatmap): confidence = fused fakeness-gated ablation
+    # fraction (which band carries the fake, WHEN); relevance = honest faint
+    # per-window gradient relevance. Both are band -> per-window arrays.
+    frequency_grid_confidence = _multimodal_band_time_grid(model, pv_windows, waveform_np, sample_rate)
+    frequency_grid_relevance = _audio_relevance_grid(magnitude_a, direction_a, waveform_np, sample_rate)
     # Per-window fused fake-probs double as the audio Confidence source (the video
     # and audio windows are time-aligned 1:1; a ±1 tail mismatch is clamped inside
     # the helpers).
     window_probs = np.asarray(per_chunk_conf, dtype=np.float32)
     waveform_confidence = _confidence_per_sample(window_probs, len(waveform_np))
     cache_dir = Path(__file__).parents[2] / ".whisperx_cache"
-    word_segments = _compute_word_segments(
-        waveform_np, sample_rate, audio_relevance_full, cache_dir, window_probs=window_probs
-    )
+    # L2: feed DIRECTION so each word's `relevance` is its signed contrastive lean.
+    word_segments = _compute_word_segments(waveform_np, sample_rate, direction_a, cache_dir, window_probs=window_probs)
 
     audio_block = {
         "verdict": verdict,
         "confidence": confidence,
-        "waveformRelevance": _percentile_normalize(audio_relevance_full).tolist(),
+        # waveformRelevance keeps the signed contrastive relevance (= direction) for
+        # back-compat / the L1 fallback when magnitude+direction are absent.
+        "waveformRelevance": direction_a.tolist(),
+        "waveformMagnitude": magnitude_a.tolist(),
+        "waveformDirection": direction_a.tolist(),
         "waveformConfidence": waveform_confidence,
         "waveformAmplitude": waveform_np.tolist(),
+        "frequencyGridConfidence": frequency_grid_confidence,
+        "frequencyGridRelevance": frequency_grid_relevance,
         "sampleRate": sample_rate,
         "wordSegments": word_segments,
         "frequencyBands": frequency_bands,
@@ -2063,7 +2137,7 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         # Raw crop-space artifacts for the Phase-3 crop player (I2); private keys,
         # ignored by the API schema (see _video_result_with_heatmaps).
         "_cropFrames": all_frames,
-        "_heatmapNp": heatmap_np,
+        "_heatmapNp": signed_v,
     }
 
 

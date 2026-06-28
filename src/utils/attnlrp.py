@@ -347,3 +347,70 @@ def compute_attnlrp_multimodal(
             relevances.append(x * x.grad)
 
     return tuple(relevances), resolved
+
+
+def compute_attnlrp_multimodal_per_class(
+    net: nn.Module,
+    input_tensors: tuple[torch.Tensor, ...],
+    forward_fn: Callable[..., torch.Tensor],
+    targets: tuple[int, ...] = (1, 0),
+) -> tuple[list[tuple[torch.Tensor, ...]], torch.Tensor]:
+    """Dual-seed joint AttnLRP: one shared forward, one backward per target class.
+
+    The multimodal counterpart to :func:`compute_attnlrp_per_class`.  Computes
+    Input×Gradient relevance for every input tensor and every class in *targets*
+    from a SINGLE shared forward pass, reusing the graph (``retain_graph=True``)
+    instead of re-running the model.  All seeds run on the one fused graph so
+    cross-modal attention gradients are preserved (separate forwards would see the
+    other modality as a constant and zero its cross-attention contribution).
+
+    For the bivariate encoding ``targets=(1, 0)`` returns ``[(R_fake_v, R_fake_a),
+    (R_real_v, R_real_a)]`` — the per-modality single-target maps whose magnitude
+    (``|R_fake| + |R_real|``) and direction (``R_fake − R_real``) drive the heatmaps.
+
+    Must be called after the relevant lxt monkey_patch has been applied to *all*
+    sub-models.  Wrapped in ``torch.enable_grad()`` so it is safe to call from a
+    ``no_grad`` context.
+
+    Args:
+        net: The model. ``zero_grad()``'d before each backward.
+        input_tensors: Tuple of raw input tensors; each cloned and detached.
+        forward_fn: Callable(*xs) -> logits of shape ``(batch, num_classes)``.
+        targets: Class indices to seed, in order. Default ``(1, 0)``.
+
+    Returns:
+        relevances: List with one entry per target (same order as *targets*); each
+            entry is a tuple of Input×Gradient tensors, one per input tensor, in
+            input order.
+        resolved_target: ``argmax(logits)`` per sample (the predicted class),
+            dtype long — for reference only, independent of *targets*.
+    """
+    with torch.enable_grad():
+        xs = tuple(t.clone().detach().requires_grad_(True) for t in input_tensors)
+        logits = forward_fn(*xs)
+        resolved = torch.argmax(logits, dim=1)
+        batch_idx = torch.arange(logits.shape[0], device=logits.device)
+
+        relevances: list[tuple[torch.Tensor, ...]] = []
+        for i, t in enumerate(targets):
+            net.zero_grad()
+            for x in xs:
+                x.grad = None  # drop the previous seed's gradient before re-seeding
+            target_logits = logits[batch_idx, t]
+            # Keep the graph for all but the final backward so each seed reuses it.
+            target_logits.backward(
+                torch.ones_like(target_logits),
+                retain_graph=i < len(targets) - 1,
+            )
+            seed_rel: list[torch.Tensor] = []
+            for j, x in enumerate(xs):
+                if x.grad is None:
+                    raise RuntimeError(
+                        f"xs[{j}].grad is None after backward for target {t} — no "
+                        f"differentiable path from input_tensors[{j}] to logits. Ensure "
+                        "lxt monkey_patch has been applied to all backbone sub-models."
+                    )
+                seed_rel.append(x * x.grad)
+            relevances.append(tuple(seed_rel))
+
+    return relevances, resolved
