@@ -35,6 +35,21 @@ interface BarEntry {
   fill: string
 }
 
+// Relevance-view display emphasis (L2). The per-word value is the MEAN bivariate
+// direction, honestly faint on real content (realness is diffuse, see docs). A
+// GAMMA suppresses the near-zero noise floor MULTIPLICATIVELY: |v|^gamma crushes
+// the 0.2-0.25 noise band to ~0.03 (invisible) while a strong, concentrated
+// manipulated word (~0.78) stays tall; GAIN then lifts the survivors. Preferred
+// over a subtractive dead-zone, which left that 0.18-0.26 band as visible faint
+// bars. Same gamma tool as the video heatmap (dir_gamma). Tune: higher REL_GAMMA
+// = cleaner real clips (also drops weak fake words); higher REL_GAIN = strong
+// words saturate sooner. (Confidence view is untouched.)
+const REL_GAMMA = 2.5
+const REL_GAIN = 1.8
+function emphasizeRelevance(v: number): number {
+  return Math.sign(v) * Math.min(1, Math.abs(v) ** REL_GAMMA * REL_GAIN)
+}
+
 function seismicFill(relevance: number): string {
   const [r, g, b] = relevanceToRgb(relevance)
   const alpha = 0.7 + 0.3 * Math.abs(relevance)
@@ -109,7 +124,10 @@ export function WordTokenChart({ wordSegments, videoRef, view }: WordTokenChartP
   const data: BarEntry[] = useMemo(
     () =>
       wordSegments.map(w => {
-        const value = view === 'confidence' ? 2 * w.confidence - 1 : w.relevance
+        const value =
+          view === 'confidence'
+            ? 2 * w.confidence - 1
+            : emphasizeRelevance(w.relevance)
         return { word: w.word, value, fill: seismicFill(value) }
       }),
     [wordSegments, view],
@@ -238,7 +256,7 @@ export function WordTokenChart({ wordSegments, videoRef, view }: WordTokenChartP
             ▶ "{wordSegments[activeIdx].word}"
             {view === 'confidence'
               ? ` — P(fake) ${(wordSegments[activeIdx].confidence * 100).toFixed(1)}%`
-              : ` — relevance ${wordSegments[activeIdx].relevance.toFixed(3)}`}
+              : ` — relevance ${emphasizeRelevance(wordSegments[activeIdx].relevance).toFixed(3)}`}
           </>
         )}
       </div>

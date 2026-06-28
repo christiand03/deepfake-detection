@@ -30,12 +30,57 @@ export interface FrequencyBands {
   high: number
 }
 
+/** Bivariate per-band relevance: magnitude (bar width) + direction (side/colour). */
+export interface BandValue {
+  magnitude: number
+  direction: number
+}
+
+export interface FrequencyBandsRelevance {
+  low: BandValue
+  mid: BandValue
+  high: BandValue
+}
+
+/**
+ * L3 band×time heatmap — Confidence: per band, a fakeness-gated band-ablation
+ * fraction per 0.64 s decision window (which band carries the fake, and when).
+ * Signed: + = the band carried fake evidence in that window, − = pulled real,
+ * 0 = real window (no fake to attribute). All three arrays have one value/window.
+ */
+export interface FrequencyGridConfidence {
+  low: number[]
+  mid: number[]
+  high: number[]
+}
+
+/** Per-window magnitude + direction sequence for one band (relevance grid). */
+export interface BandSeq {
+  magnitude: number[]
+  direction: number[]
+}
+
+/** L3 band×time heatmap — Relevance: honest faint per-window gradient relevance. */
+export interface FrequencyGridRelevance {
+  low: BandSeq
+  mid: BandSeq
+  high: BandSeq
+}
+
 export interface AudioAnalysis {
   verdict: 'FAKE' | 'REAL'
   /** Confidence in the audio verdict, 0–1 */
   confidence: number
   /** Per-sample AttnLRP relevance, normalised to [-1, 1]. Length = T_samples. */
   waveformRelevance: number[]
+  /**
+   * Bivariate Layer-1 Relevance channels (same length as waveformRelevance):
+   * magnitude (|R_fake|+|R_real|, drives alpha) + direction (R_fake-R_real, drives
+   * hue with |direction| gating). Empty for older cached results (L1 falls back to
+   * waveformRelevance).
+   */
+  waveformMagnitude: number[]
+  waveformDirection: number[]
   /**
    * Per-sample fake-probability (0–1) for the Confidence view (B4), same length
    * as waveformRelevance. Map to the seismic scale with `2*p - 1`. May be empty
@@ -49,10 +94,19 @@ export interface AudioAnalysis {
   /** Ablation-based band evidence — the Layer-3 Confidence view. */
   frequencyBands: FrequencyBands
   /**
-   * Energy-weighted LRP relevance per band — the Layer-3 Relevance view (B4).
-   * Falls back to frequencyBands when null (older cached results).
+   * Bivariate per-band relevance — the Layer-3 Relevance view (B4): magnitude
+   * (bar width) + direction (side/colour). Null for older cached results (L3 then
+   * falls back to the frequencyBands Confidence shape).
    */
-  frequencyBandsRelevance: FrequencyBands | null
+  frequencyBandsRelevance: FrequencyBandsRelevance | null
+  /**
+   * L3 band×time heatmaps (replace the 3-bar chart). Confidence = gated ablation
+   * grid (sharp; lights up where a band carries the fake). Relevance = faint
+   * per-window gradient grid. Null for older cached results / paths that don't
+   * compute them (e.g. multimodal) — L3 then falls back to the 3-bar bands.
+   */
+  frequencyGridConfidence: FrequencyGridConfidence | null
+  frequencyGridRelevance: FrequencyGridRelevance | null
 }
 
 export interface AttentionShift {

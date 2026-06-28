@@ -183,6 +183,10 @@ export function makeMockResult(clip: ClipMeta): AnalysisResult {
           verdict: isFake ? ('FAKE' as const) : ('REAL' as const),
           confidence: isFake ? 0.924 : 0.871,
           waveformRelevance: relevance,
+          // Bivariate L1 mock: magnitude = |direction| (this model's heads mirror),
+          // direction = the signed relevance.
+          waveformMagnitude: relevance.map(r => Math.abs(r)),
+          waveformDirection: relevance,
           waveformConfidence,
           waveformAmplitude: amplitude,
           sampleRate,
@@ -194,8 +198,34 @@ export function makeMockResult(clip: ClipMeta): AnalysisResult {
             ? { low: 0.21, mid: 0.54, high: 0.25 }
             : { low: -0.15, mid: -0.52, high: -0.33 },
           frequencyBandsRelevance: isFake
-            ? { low: 0.18, mid: 0.6, high: 0.22 }
-            : { low: -0.12, mid: -0.58, high: -0.3 },
+            ? {
+                low: { magnitude: 0.18, direction: 0.18 },
+                mid: { magnitude: 0.6, direction: 0.6 },
+                high: { magnitude: 0.22, direction: 0.22 },
+              }
+            : {
+                low: { magnitude: 0.12, direction: -0.12 },
+                mid: { magnitude: 0.58, direction: -0.58 },
+                high: { magnitude: 0.3, direction: -0.3 },
+              },
+          // L3 band×time grids (10 mock windows). FAKE: mid band carries the fake
+          // at window 5; REAL: empty (no fake window). Relevance grid stays faint.
+          frequencyGridConfidence: isFake
+            ? {
+                low: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                mid: [0, 0, 0, 0, 0, 0.9, 0, 0, 0, 0],
+                high: [0, 0, 0, 0, 0, 0.45, 0, 0, 0, 0],
+              }
+            : {
+                low: Array<number>(10).fill(0),
+                mid: Array<number>(10).fill(0),
+                high: Array<number>(10).fill(0),
+              },
+          frequencyGridRelevance: {
+            low: { magnitude: Array<number>(10).fill(0.12), direction: Array<number>(10).fill(isFake ? 0.05 : -0.04) },
+            mid: { magnitude: Array<number>(10).fill(0.14), direction: Array<number>(10).fill(isFake ? 0.07 : 0.05) },
+            high: { magnitude: Array<number>(10).fill(0.13), direction: Array<number>(10).fill(isFake ? 0.08 : 0.06) },
+          },
         }
       })()
     : null
