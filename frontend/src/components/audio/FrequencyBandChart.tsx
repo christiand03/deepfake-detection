@@ -16,10 +16,13 @@
 
 import { motion } from 'framer-motion'
 import { relevanceToRgb } from '../../lib/seismicColormap'
-import type { AudioView, FrequencyBands } from '../../types/analysis'
+import type { AudioView, BandValue } from '../../types/analysis'
 
 interface FrequencyBandChartProps {
-  bands: FrequencyBands
+  /** Per band: magnitude (bar WIDTH) + direction (side/colour). The Confidence
+   *  view maps its signed ablation value to {magnitude: |v|, direction: v} so the
+   *  bar reads identically to before; the Relevance view is genuinely bivariate. */
+  bands: { low: BandValue; mid: BandValue; high: BandValue }
   /** Confidence (band ablation) vs. Relevance (energy-weighted LRP) view (B4). */
   view: AudioView
 }
@@ -30,31 +33,35 @@ const BAND_DEFS = [
   { key: 'high' as const, label: 'High', range: '4–8 kHz', desc: 'Consonants' },
 ]
 
-// Lift small band magnitudes onto a clear-colour floor so even a weakly-contributing
-// band reads as a proper blue/red instead of washing out near white — the bar WIDTH
-// already encodes the magnitude, so colour only needs to convey direction. Sign is
-// preserved; an exactly-zero band stays neutral (white).
-function boostMagnitude(value: number): number {
-  if (value === 0) return 0
+// CONFIDENCE view only: lift small band ablation values onto a clear-colour floor
+// so even a weakly-contributing band reads as a proper blue/red (the bar WIDTH
+// already encodes magnitude, so colour only needs the direction sign). NOT applied
+// in the Relevance view: there the per-band direction is the honest, faint
+// whole-clip value (local fakes average out), and boosting it would re-stretch that
+// noise to vivid colour — the same lie the backend sum=1 normalisation made.
+function boostMagnitude(value: number, boost: boolean): number {
+  if (!boost || value === 0) return value
   return Math.sign(value) * (0.55 + 0.45 * Math.abs(value))
 }
 
-function bandColor(value: number): string {
-  const [r, g, b] = relevanceToRgb(boostMagnitude(value))
+function bandColor(value: number, boost: boolean): string {
+  const [r, g, b] = relevanceToRgb(boostMagnitude(value, boost))
   const alpha = 0.85 + 0.15 * Math.abs(value)
   return `rgba(${r},${g},${b},${alpha.toFixed(2)})`
 }
 
-// Text colour for the band label + value: same (boosted) hue as the bar but lightened
+// Text colour for the band label + value: same hue as the bar but lightened
 // toward white so small monospace text stays legible on the dark panel.
-function bandTextColor(value: number): string {
-  const [r, g, b] = relevanceToRgb(boostMagnitude(value))
+function bandTextColor(value: number, boost: boolean): string {
+  const [r, g, b] = relevanceToRgb(boostMagnitude(value, boost))
   const mix = 0.22
   const l = (c: number) => Math.round(c + (255 - c) * mix)
   return `rgb(${l(r)},${l(g)},${l(b)})`
 }
 
 function bandGlow(value: number): string {
+  // No glow on faint (honest, near-neutral) bands — only meaningful leans glow.
+  if (Math.abs(value) < 0.1) return 'transparent'
   if (value > 0) return `rgba(239,68,68,0.35)`
   if (value < 0) return `rgba(59,130,246,0.35)`
   return 'transparent'
@@ -77,12 +84,14 @@ export function FrequencyBandChart({ bands, view }: FrequencyBandChartProps) {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {BAND_DEFS.map((band, i) => {
-          const value = bands[band.key]
-          const pct = Math.abs(value) * 100
-          const color = bandColor(value)
-          const textColor = bandTextColor(value)
-          const glow = bandGlow(value)
-          const isPositive = value > 0
+          const { magnitude, direction } = bands[band.key]
+          // Bar WIDTH = magnitude (engagement); side + colour = direction (lean).
+          const pct = Math.abs(magnitude) * 100
+          const boost = view === 'confidence'
+          const color = bandColor(direction, boost)
+          const textColor = bandTextColor(direction, boost)
+          const glow = bandGlow(direction)
+          const isPositive = direction > 0
 
           return (
             <div key={band.key}>
@@ -124,7 +133,7 @@ export function FrequencyBandChart({ bands, view }: FrequencyBandChartProps) {
                     fontWeight: 600,
                   }}
                 >
-                  {isPositive ? '+' : ''}{value.toFixed(2)}
+                  {isPositive ? '+' : ''}{direction.toFixed(2)}
                 </span>
               </div>
 

@@ -244,7 +244,15 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         self,
         input_values: Float[torch.Tensor, "batch time"],
         target_class: int | torch.Tensor | None = None,
-    ) -> tuple[Float[torch.Tensor, "batch time"], torch.Tensor]:
+        per_class: bool = False,
+    ) -> (
+        tuple[Float[torch.Tensor, "batch time"], torch.Tensor]
+        | tuple[
+            Float[torch.Tensor, "batch time"],
+            Float[torch.Tensor, "batch time"],
+            torch.Tensor,
+        ]
+    ):
         """Compute AttnLRP relevance for a batch of raw audio waveforms.
 
         Relevance is computed at the **CNN → Transformer boundary** (feature extractor
@@ -266,6 +274,13 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
         Returns per-sample signed relevance normalized to [-1, 1]:
         positive = evidence FOR the explained class, negative = AGAINST.
 
+        When ``per_class=True`` runs the dual-seed pass and returns the TWO raw
+        single-target per-sample maps ``(rel_fake, rel_real, target)`` (channel-mean
+        + nearest-upsample, but UN-normalized; ``target_class`` is ignored). The
+        caller derives the bivariate magnitude (``|rel_fake| + |rel_real|``) and
+        contrastive direction (``rel_fake - rel_real``). The default single-target
+        signature is unchanged.
+
         Must be called in eval mode.
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
@@ -278,7 +293,11 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
             patch_wav2vec2_for_attnlrp(self.net)
             _WAV2VEC2_LRP_PATCHED = True
 
-        from src.utils.attnlrp import compute_attnlrp, normalize_relevance
+        from src.utils.attnlrp import (
+            compute_attnlrp,
+            compute_attnlrp_per_class,
+            normalize_relevance,
+        )
 
         # Stage 1: frozen CNN feature extractor — no gradient tracking.
         with torch.no_grad():
@@ -296,22 +315,32 @@ class Wav2Vec2DeepfakeModule(BaseDeepfakeModule):
             pooled = proj_out.mean(dim=1)  # (B, proj_size)
             return self.net.classifier(pooled)  # (B, num_labels)
 
+        T = input_values.shape[1]
+
+        def _channel_mean_upsample(rel: torch.Tensor) -> torch.Tensor:
+            # (B, T', 512) -> signed channel-mean (B, T') -> nearest-upsample (B, T).
+            temporal = rel.mean(dim=-1)
+            return F.interpolate(temporal.unsqueeze(1), size=T, mode="nearest").squeeze(1)
+
+        if per_class:
+            # Dual-seed at the CNN boundary -> raw [R_fake, R_real] per-sample maps.
+            (rel_fake, rel_real), resolved = compute_attnlrp_per_class(
+                net=self.net,
+                input_tensor=hidden_input,
+                forward_fn=_forward_from_cnn_out,
+                targets=(1, 0),
+            )
+            return (
+                _channel_mean_upsample(rel_fake),
+                _channel_mean_upsample(rel_real),
+                resolved,
+            )
+
         relevance, target_class_resolved = compute_attnlrp(
             net=self.net,
             input_tensor=hidden_input,
             forward_fn=_forward_from_cnn_out,
             target_class=target_class,
         )
-        # relevance: (B, T', 512) — mean over channels gives signed scalar per frame.
-        relevance_temporal = relevance.mean(dim=-1)  # (B, T')
-
-        # Upsample to raw waveform length via nearest-neighbor.
-        T = input_values.shape[1]
-        relevance_upsampled = F.interpolate(
-            relevance_temporal.unsqueeze(1),  # (B, 1, T')
-            size=T,
-            mode="nearest",
-        ).squeeze(1)  # (B, T)
-
-        relevance_norm = normalize_relevance(relevance_upsampled)
+        relevance_norm = normalize_relevance(_channel_mean_upsample(relevance))
         return relevance_norm, target_class_resolved

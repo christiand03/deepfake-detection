@@ -38,10 +38,55 @@ class FrequencyBandsSchema(BaseModel):
     high: float
 
 
+class BandValueSchema(BaseModel):
+    """Bivariate per-band relevance: magnitude (bar width) + direction (side/colour)."""
+
+    magnitude: float
+    direction: float
+
+
+class FrequencyBandsRelevanceSchema(BaseModel):
+    """Layer-3 Relevance view: a magnitude/direction pair per frequency band."""
+
+    low: BandValueSchema
+    mid: BandValueSchema
+    high: BandValueSchema
+
+
+class FrequencyGridConfidenceSchema(BaseModel):
+    """L3 band x time heatmap (Confidence): per band, a fakeness-gated band-ablation
+    fraction per 0.64-s decision window (which band carries the fake, and when)."""
+
+    low: list[float] = []
+    mid: list[float] = []
+    high: list[float] = []
+
+
+class BandSeqSchema(BaseModel):
+    """Per-window magnitude + direction sequence for one frequency band."""
+
+    magnitude: list[float] = []
+    direction: list[float] = []
+
+
+class FrequencyGridRelevanceSchema(BaseModel):
+    """L3 band x time heatmap (Relevance): bivariate gradient relevance per window."""
+
+    low: BandSeqSchema
+    mid: BandSeqSchema
+    high: BandSeqSchema
+
+
 class AudioAnalysisSchema(BaseModel):
     verdict: Literal["FAKE", "REAL"]
     confidence: float
     waveformRelevance: list[float]
+    # Bivariate Layer-1 Relevance channels (same length as waveformRelevance):
+    # magnitude (|R_fake|+|R_real|, drives alpha) + direction (R_fake-R_real, drives
+    # hue, |direction|-gated). Empty for older cached results (L1 falls back to
+    # waveformRelevance).
+    waveformMagnitude: list[float] = []
+    waveformDirection: list[float] = []
     # Per-sample fake-probability (0–1) for the Layer-1 Confidence view (B4),
     # same length as waveformRelevance. Empty for older cached results.
     waveformConfidence: list[float] = []
@@ -49,9 +94,15 @@ class AudioAnalysisSchema(BaseModel):
     sampleRate: int
     wordSegments: list[WordSegmentSchema]
     frequencyBands: FrequencyBandsSchema
-    # Energy-weighted LRP relevance per band for the Layer-3 Relevance view (B4);
-    # frequencyBands stays the ablation-based Confidence view. None when absent.
-    frequencyBandsRelevance: FrequencyBandsSchema | None = None
+    # Bivariate per-band relevance for the Layer-3 Relevance view (B4): magnitude
+    # (bar width) + direction (side/colour). frequencyBands stays the ablation-based
+    # Confidence view. None when absent (older cached results fall back to it).
+    frequencyBandsRelevance: FrequencyBandsRelevanceSchema | None = None
+    # L3 band x time heatmaps (replace the 3-bar chart): confidence = fakeness-gated
+    # band-ablation fraction per window; relevance = honest faint per-window gradient.
+    # None for older cached results / paths that don't compute them (e.g. multimodal).
+    frequencyGridConfidence: FrequencyGridConfidenceSchema | None = None
+    frequencyGridRelevance: FrequencyGridRelevanceSchema | None = None
 
 
 class AnomalyRegionSchema(BaseModel):

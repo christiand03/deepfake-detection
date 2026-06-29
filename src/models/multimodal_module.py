@@ -588,7 +588,11 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         input_values: torch.Tensor,
         target_class: int | torch.Tensor | None = None,
         normalize_video: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        per_class: bool = False,
+    ) -> (
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    ):
         """Compute joint AttnLRP heatmaps for both modalities.
 
         Uses compute_attnlrp_multimodal for a single shared backward pass so that
@@ -604,12 +608,24 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
                 video relevance so the caller can normalize across a whole clip
                 instead of per 16-frame window (cross-window-comparable per-chunk
                 relevance). Audio relevance is always normalized as before.
+                Ignored when ``per_class=True`` (both seeds are returned RAW so the
+                caller derives the bivariate magnitude/direction clip-global).
+            per_class: when ``True`` run the dual-seed (bivariate) pass — one shared
+                forward, one backward per class in ``(1, 0)`` — and return the RAW
+                (un-normalized) per-class video and audio maps so the caller can
+                build magnitude (``|R_fake| + |R_real|``) and direction
+                (``R_fake − R_real``). The single-target default path is unchanged.
 
         Returns:
-            video_heatmap:   ``(B, T, H, W)`` signed relevance ([-1, 1], or raw when
-                             ``normalize_video=False``).
-            audio_relevance: ``(B, T_samples)`` signed relevance in [-1, 1].
-            resolved_target: ``(B,)`` long tensor of explained class indices.
+            When ``per_class=False`` (default), a 3-tuple:
+                video_heatmap:   ``(B, T, H, W)`` signed relevance ([-1, 1], or raw
+                                 when ``normalize_video=False``).
+                audio_relevance: ``(B, T_samples)`` signed relevance in [-1, 1].
+                resolved_target: ``(B,)`` long tensor of explained class indices.
+            When ``per_class=True``, a 5-tuple of RAW maps:
+                video_fake, video_real:  ``(B, T, H, W)`` un-normalized.
+                audio_fake, audio_real:  ``(B, T_samples)`` un-normalized.
+                resolved_target:         ``(B,)`` long tensor (argmax, reference only).
         """
         assert not self.training, "explain() must be called in eval mode: model.eval()"
         self._require_eager_attention(self.video_backbone, self.audio_backbone)
@@ -635,8 +651,43 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         import torch.nn.functional as F_nn
         from einops import rearrange, reduce
 
-        from src.utils.attnlrp import compute_attnlrp_multimodal, normalize_relevance
+        from src.utils.attnlrp import (
+            compute_attnlrp_multimodal,
+            compute_attnlrp_multimodal_per_class,
+            normalize_relevance,
+        )
 
+        def _postprocess_video_raw(video_rel: torch.Tensor) -> torch.Tensor:
+            """(B, T, C, H, W) input×grad -> (B, T, H, W) raw signed heatmap.
+
+            Channel-sum -> 16x16 patch avg-pool -> bilinear upsample (matches
+            VideoMAEModule.explain). No normalization — the caller scales.
+            """
+            heatmap = reduce(video_rel, "b t c h w -> b t h w", "sum")
+            b, t, h, w = heatmap.shape
+            heatmap_4d = rearrange(heatmap, "b t h w -> (b t) 1 h w")
+            heatmap_patches = F_nn.avg_pool2d(heatmap_4d, kernel_size=16, stride=16)
+            heatmap_4d = F_nn.interpolate(heatmap_patches, size=(h, w), mode="bilinear", align_corners=False)
+            return rearrange(heatmap_4d, "(b t) 1 h w -> b t h w", b=b, t=t)
+
+        # ── Bivariate (dual-seed) path: RAW per-class video + audio maps ──────────
+        # One shared forward, one backward per class (1, 0); the caller derives
+        # magnitude (|R_fake| + |R_real|) and direction (R_fake − R_real) and
+        # normalizes clip-global. normalize_video is ignored here by design.
+        if per_class:
+            rels, resolved = compute_attnlrp_multimodal_per_class(
+                net=self,
+                input_tensors=(pixel_values, input_values),
+                forward_fn=lambda pv, iv: self.forward(pv, iv),
+                targets=(1, 0),
+            )
+            (video_fake_rel, audio_fake), (video_real_rel, audio_real) = rels
+            video_fake = _postprocess_video_raw(video_fake_rel)
+            video_real = _postprocess_video_raw(video_real_rel)
+            # Audio stays raw per-sample (1D temporal); caller runs to_bivariate.
+            return video_fake, video_real, audio_fake, audio_real, resolved
+
+        # ── Single-target path (unchanged) ───────────────────────────────────────
         # Single backward pass through the full fusion graph.
         # forward_fn receives (pv, iv) in the same order as input_tensors.
         (video_rel, audio_rel), resolved = compute_attnlrp_multimodal(
@@ -652,18 +703,12 @@ class MultimodalDeepfakeModule(BaseDeepfakeModule):
         # (matches VideoMAEModule.explain's default normalize_mode="global"), so
         # the temporal dynamics are preserved and Phase 1 / Phase 2 video heatmaps
         # and per-frame scores stay directly comparable.
-        heatmap = reduce(video_rel, "b t c h w -> b t h w", "sum")
-        B, T, H, W = heatmap.shape
-        heatmap_4d = rearrange(heatmap, "b t h w -> (b t) 1 h w")
-        heatmap_patches = F_nn.avg_pool2d(heatmap_4d, kernel_size=16, stride=16)
-        heatmap_4d = F_nn.interpolate(heatmap_patches, size=(H, W), mode="bilinear", align_corners=False)
+        video_heatmap = _postprocess_video_raw(video_rel)
         if normalize_video:
-            heatmap_2d = rearrange(heatmap_4d, "(b t) 1 h w -> b (t h w)", b=B, t=T)
+            B, T, H, W = video_heatmap.shape
+            heatmap_2d = rearrange(video_heatmap, "b t h w -> b (t h w)")
             heatmap_2d = normalize_relevance(heatmap_2d)
             video_heatmap = rearrange(heatmap_2d, "b (t h w) -> b t h w", b=B, t=T, h=H, w=W)
-        else:
-            # Raw signed relevance — caller normalizes across the whole clip.
-            video_heatmap = rearrange(heatmap_4d, "(b t) 1 h w -> b t h w", b=B, t=T)
 
         # Post-process audio (identical to Wav2Vec2DeepfakeModule.explain)
         audio_relevance = normalize_relevance(audio_rel)

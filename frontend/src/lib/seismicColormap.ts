@@ -81,3 +81,26 @@ export function seismicToRgb(value: number): RGB {
 export function relevanceToRgb(value: number): RGB {
   return interpolate(VIVID_STOPS, value)
 }
+
+/**
+ * Bivariate pixel: combine a magnitude channel (≥0, → alpha/visibility) and a
+ * direction channel (signed, → hue) into an `rgba(...)` string. Mirrors the
+ * backend renderer (`_array_to_data_uri`'s bivariate branch) so audio and video
+ * use the same encoding:
+ *   - hue   = sign(direction) via the dark-tuned seismic ramp
+ *   - colour saturation gated by `|direction|^dirGamma` (weak/uncertain lean →
+ *     fades to neutral white instead of strobing — only decisive patches colour)
+ *   - alpha = `magnitude^alphaGamma` (clip-global magnitude, no per-frame re-peak)
+ */
+export function bivariateRgba(
+  magnitude: number,
+  direction: number,
+  opts: { maxAlpha?: number; alphaGamma?: number; dirGamma?: number; dirGain?: number; dirCap?: number } = {},
+): string {
+  const { maxAlpha = 0.95, alphaGamma = 0.5, dirGamma = 1.6, dirGain = 1.0, dirCap = 0.9 } = opts
+  const colorMag = Math.min(dirCap, Math.pow(Math.abs(direction), dirGamma) * dirGain)
+  const [r, g, b] = relevanceToRgb(Math.sign(direction) * colorMag)
+  const mag = Math.max(0, Math.min(1, magnitude))
+  const alpha = Math.min(maxAlpha, Math.pow(mag, alphaGamma) * maxAlpha)
+  return `rgba(${r},${g},${b},${alpha.toFixed(3)})`
+}

@@ -340,14 +340,16 @@ def test_frequency_bands_high_band_not_collapsed_to_zero():
 # ── run_audio_inference: sign convention ──────────────────────────────────────
 
 
-def test_run_audio_inference_always_explains_fake_class(monkeypatch):
-    """Relevance must be explained w.r.t. the FAKE class even for a REAL verdict.
+def test_run_audio_inference_uses_dual_seed_per_class(monkeypatch):
+    """Relevance uses the bivariate dual-seed pass (per_class=True) — fixed seeds.
 
-    The frontend's sign convention is fixed (positive = fake-supporting), so
+    The frontend's sign convention is fixed (positive direction = fake-supporting).
+    The bivariate channels are seeded with the FIXED (fake, real) targets inside
+    explain(per_class=True), so the convention holds regardless of the verdict —
     explaining the *predicted* class would invert L1–L3 on every REAL clip.
     """
     waveform = np.zeros(AUDIO_SAMPLES_PER_CHUNK, dtype=np.float32)
-    captured: dict[str, int | None] = {}
+    captured: dict[str, bool] = {}
 
     class _Stub:
         def eval(self):
@@ -358,9 +360,12 @@ def test_run_audio_inference_always_explains_fake_class(monkeypatch):
             out.logits = torch.zeros(x.shape[0], 2)
             return out
 
-        def explain(self, input_values, target_class=None):
-            captured["target_class"] = target_class
-            return torch.zeros(1, input_values.shape[1]), torch.tensor([1])
+        def explain(self, input_values, target_class=None, per_class=False):
+            captured["per_class"] = per_class
+            z = torch.zeros(1, input_values.shape[1])
+            if per_class:
+                return z, z, torch.tensor([1])  # (rel_fake, rel_real, target)
+            return z, torch.tensor([1])
 
     monkeypatch.setattr(inf, "_load_audio", lambda _p: (waveform, 16_000))
     monkeypatch.setattr(inf, "get_audio_model", lambda: _Stub())
@@ -371,7 +376,10 @@ def test_run_audio_inference_always_explains_fake_class(monkeypatch):
 
     assert result is not None
     assert result["verdict"] == "REAL"
-    assert captured["target_class"] == 1
+    assert captured["per_class"] is True
+    # Bivariate channels emitted alongside the legacy signed array.
+    assert "waveformMagnitude" in result
+    assert "waveformDirection" in result
 
 
 # ── _band_confidence (ablation) ───────────────────────────────────────────────

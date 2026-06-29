@@ -17,12 +17,30 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { WaveformRelevanceLayer } from './WaveformRelevanceLayer'
 import { WordTokenChart } from './WordTokenChart'
 import { FrequencyBandChart } from './FrequencyBandChart'
-import type { AnalysisResult, AudioView, ClipMeta } from '../../types/analysis'
+import { FrequencyHeatmap } from './FrequencyHeatmap'
+import type {
+  AnalysisResult,
+  AudioView,
+  ClipMeta,
+  FrequencyBands,
+} from '../../types/analysis'
 
 interface AudioLayersProps {
   result: AnalysisResult | null
   clip: ClipMeta | null
   videoRef: React.RefObject<HTMLVideoElement | null>
+}
+
+/**
+ * Lift the signed Confidence-view bands ({low,mid,high} floats) into the
+ * bivariate shape FrequencyBandChart now expects: magnitude = |value| (bar
+ * width), direction = value (side/colour). The bar then reads identically to
+ * before in the Confidence view, while the Relevance view passes through the
+ * genuinely-bivariate frequencyBandsRelevance unchanged.
+ */
+function toBivariateBands(b: FrequencyBands) {
+  const v = (x: number) => ({ magnitude: Math.abs(x), direction: x })
+  return { low: v(b.low), mid: v(b.mid), high: v(b.high) }
 }
 
 // Panel-wide Relevance/Confidence toggle (B4). Switches all three layers at once.
@@ -239,18 +257,29 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
               )}
             </div>
 
-            {/* L3 — Frequency Bands */}
+            {/* L3 — Frequency × Time (heatmap; falls back to the 3-bar chart for
+                older caches / multimodal that don't provide the grids). */}
             <div>
-              <LayerLabel>L3 — FREQUENCY BANDS</LayerLabel>
+              <LayerLabel>L3 — FREQUENCY × TIME</LayerLabel>
               <LayerCard>
-                <FrequencyBandChart
-                  bands={
-                    view === 'confidence'
-                      ? audio.frequencyBands
-                      : audio.frequencyBandsRelevance ?? audio.frequencyBands
-                  }
-                  view={view}
-                />
+                {audio.frequencyGridConfidence ? (
+                  <FrequencyHeatmap
+                    audio={audio}
+                    view={view}
+                    videoRef={videoRef}
+                    duration={duration}
+                  />
+                ) : (
+                  <FrequencyBandChart
+                    bands={
+                      view === 'confidence'
+                        ? toBivariateBands(audio.frequencyBands)
+                        : audio.frequencyBandsRelevance ??
+                          toBivariateBands(audio.frequencyBands)
+                    }
+                    view={view}
+                  />
+                )}
               </LayerCard>
             </div>
           </motion.div>
