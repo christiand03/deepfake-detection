@@ -1,0 +1,24 @@
+# @package _global_
+
+# Ablation — Diversity-Subset "keep_pairs" (Phase 1).
+# Trainiert VideoMAE auf data/processed_ablation_keep_pairs: pro Szene EINE Variante
+# mit allen 4 Typen (Real + 3 Frame-Twin-Fakes), über alle 165 Identitäten
+# (Baseline-12k nutzt nur die alphabetisch ersten ~30). Gleiches Budget (~12,5k
+# Videos), 1:1:1:1 Typ-Balance, Frame-Twin-Minimal-Pairs erhalten → testet, ob
+# Identitätsdiversität die Cross-Dataset-Generalisierung verbessert.
+# Erst preprocessen (s. plan/ablation_dataset_plan.md), dann:
+# Run/Launch: experiment=train_video_ablation_keep_pairs
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: videomae_ablation_keep_pairs
+
+data:
+  # Eigener HDF5-Ausgabeordner des keep_pairs-Arms (kein head()-Cap beim Preprocess).
+  data_dir: ${paths.data_dir}/processed_ablation_keep_pairs
+
+tags: ["videomae", "video", "ablation", "diversity", "keep-pairs"]

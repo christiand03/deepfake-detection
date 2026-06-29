@@ -1,0 +1,25 @@
+# @package _global_
+#
+# Config for the ablation-dataset builder (src/data_processing/build_ablation.py).
+# Selects a diversity-balanced subset of the raw AV-Deepfake1M tree and hardlinks
+# it under data/ablation/<arm>, preserving identity/scenario/variant paths so the
+# existing train_metadata JSON keys stay valid.
+
+ablation:
+  # Raw AV-Deepfake1M video tree: <source_root>/<identity>/<scenario>/<variant>/<type>.mp4
+  source_root: data/train
+  # Arm subdirectories are created underneath this root.
+  output_root: data/ablation
+  # keep_pairs       = one variant containing all 4 types per scenario (frame-twin
+  #                    minimal pairs preserved, max identity diversity).
+  # decouple_variant = each of the 4 types drawn from a different variant where
+  #                    possible (isolates the pairing variable vs keep_pairs).
+  arm: keep_pairs
+  # Seed for the deterministic random variant selection.
+  seed: 42
+  # dry_run=true writes only the manifest CSV (no hardlinks) so the selection can
+  # be inspected before committing files.
+  dry_run: true
+  # Where the manifest CSV + summary land (one CSV per arm).
+  manifest_dir: data/ablation/_manifests
+  log_level: INFO

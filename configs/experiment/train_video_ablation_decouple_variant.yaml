@@ -1,0 +1,22 @@
+# @package _global_
+
+# Ablation — "decouple_variant" Kontrollarm (Phase 1).
+# Identisch zu train_video_ablation_keep_pairs (165 Identitäten, ~12,5k Videos,
+# 1:1:1:1 Balance) — UNTERSCHEIDET SICH NUR im Pairing: jeder der 4 Typen stammt
+# aus einer anderen Variante (Frame-Twins aufgebrochen). Isoliert die
+# Pairing-Variable. Erwartung: ≈ keep_pairs oder leicht schlechter (Pairing-
+# Decoupling ist für einen Per-Video-CE-Klassifikator neutral bis schädlich).
+# Run/Launch: experiment=train_video_ablation_decouple_variant
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: videomae_ablation_decouple_variant
+
+data:
+  data_dir: ${paths.data_dir}/processed_ablation_decouple_variant
+
+tags: ["videomae", "video", "ablation", "pairing-control", "decouple-variant"]
