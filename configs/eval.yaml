@@ -10,6 +10,10 @@ defaults:
   - extras: default
   - hydra: default
 
+  # experiment configs allow for version control of specific hyperparameters
+  # e.g. python src/eval.py experiment=eval_video_frame_shuffle ckpt_path=...
+  - experiment: null
+
 task_name: "eval"
 
 tags: ["dev"]

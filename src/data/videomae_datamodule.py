@@ -18,6 +18,8 @@ class VideoMAEDataModule(BaseDeepfakeDataModule):
         augment_strength: str = "standard",
         balanced_sampling: bool = False,
         prefetch_factor: int = 2,
+        frame_perturbation: str | None = None,
+        frame_perturbation_seed: int = 42,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -33,4 +35,9 @@ class VideoMAEDataModule(BaseDeepfakeDataModule):
             # Augmentation is train-only; val/test stay deterministic.
             augment=self.hparams.augment and split == "train",
             augment_strength=self.hparams.augment_strength,
+            # Frame perturbation is an eval-time diagnostic: applied to whatever
+            # split loads (ungated), so it reaches the test split. Leave null
+            # for training runs.
+            frame_perturbation=self.hparams.frame_perturbation,
+            frame_perturbation_seed=self.hparams.frame_perturbation_seed,
         )

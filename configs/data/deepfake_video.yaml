@@ -20,3 +20,9 @@ balanced_sampling: false
 # Durchsatz; Messung s. docs/performance_roadmap.md §1.9). 6 lohnt nicht
 # (Data-Wait ≈ Compute, RAM nähert sich der Commit-Pressure-Zone).
 prefetch_factor: 4
+# Eval-only Frame-Order-Perturbation (Spatial-Dominance-Diagnose): null | tubelet_shuffle
+# | frame_shuffle. tubelet_shuffle permutiert die 8 Tubelet-Paare (VideoMAE tubelet_size=2),
+# erhält also die Intra-Tubelet-Bewegung; frame_shuffle zerstört jede Reihenfolge.
+# Unverändertes AUROC ⇒ Modell ignoriert zeitliche Ordnung. NIE fürs Training aktivieren.
+frame_perturbation: null
+frame_perturbation_seed: 42

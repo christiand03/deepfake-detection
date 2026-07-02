@@ -1,0 +1,25 @@
+# @package _global_
+
+# Spatial-dominance diagnostic: evaluate the VideoMAE detector on the AV-Deepfake1M
+# test split with the frame order shuffled WITHIN each 16-frame chunk (chunk order
+# untouched). Compare `test/auc_video` against the unperturbed baseline
+# (experiment=train_video):
+#   AUROC unchanged  ⇒ spatial dominance (model ignores intra-chunk temporal order)
+#   AUROC drops      ⇒ model uses temporal cues (proceed to a localized-fake dataset)
+#
+# Default is the tubelet-preserving shuffle. For the stronger full-frame variant:
+#   python src/eval.py experiment=eval_video_frame_shuffle \
+#       data.frame_perturbation=frame_shuffle ckpt_path=<video.ckpt>
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+task_name: eval_frame_shuffle
+
+tags: ["videomae", "video", "diagnostic", "frame_shuffle"]
+
+data:
+  frame_perturbation: tubelet_shuffle

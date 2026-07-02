@@ -259,6 +259,77 @@ def resolve_audio_augment_fn(augment: bool, strength: str = "standard"):
     return _AUDIO_AUGMENT_FNS[strength] if augment else None
 
 
+# ── Frame-order perturbations (eval-time spatial-dominance diagnostic) ───────────
+# These deliberately break intra-chunk temporal order. If AUROC is unchanged when
+# a chunk's frames are shuffled, the model reads each chunk as a bag of frames and
+# ignores temporal structure (e.g. a real→fake transition). See docs/xai.md.
+
+
+def tubelet_shuffle(frames: torch.Tensor, generator: torch.Generator, tubelet_size: int = 2) -> torch.Tensor:
+    """Permute VideoMAE tubelets within a chunk, keeping each tubelet intact.
+
+    Shuffles the ``T // tubelet_size`` adjacent-frame groups while keeping the
+    ``tubelet_size`` frames inside each group together and in their original
+    order. This scrambles the *global* temporal order across the chunk (e.g. the
+    position of a real→fake transition) without destroying the intra-tubelet
+    micro-motion the VideoMAE patch embedding consumes.
+
+    Args:
+        frames:       ``(T, C, H, W)`` tensor; ``T`` must be divisible by
+                      ``tubelet_size``.
+        generator:    Seeded RNG for a reproducible permutation.
+        tubelet_size: Frames per tubelet (VideoMAE-base uses 2).
+
+    Returns:
+        Tensor of the same shape with tubelet groups reordered.
+    """
+    t = frames.shape[0]
+    if t % tubelet_size != 0:
+        msg = f"T={t} is not divisible by tubelet_size={tubelet_size}."
+        raise ValueError(msg)
+    grouped = rearrange(frames, "(g p) c h w -> g p c h w", p=tubelet_size)
+    perm = torch.randperm(grouped.shape[0], generator=generator)
+    return rearrange(grouped[perm], "g p c h w -> (g p) c h w")
+
+
+def frame_shuffle(frames: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    """Permute every frame in a chunk (destroys all intra-chunk temporal order).
+
+    Stronger probe than :func:`tubelet_shuffle`: breaks both the global frame
+    order and the intra-tubelet frame pairing.
+
+    Args:
+        frames:    ``(T, C, H, W)`` tensor.
+        generator: Seeded RNG for a reproducible permutation.
+
+    Returns:
+        Tensor of the same shape with all frames reordered.
+    """
+    perm = torch.randperm(frames.shape[0], generator=generator)
+    return frames[perm]
+
+
+_FRAME_PERTURBATION_FNS = {
+    "tubelet_shuffle": tubelet_shuffle,
+    "frame_shuffle": frame_shuffle,
+}
+
+
+def resolve_frame_perturbation_fn(perturbation: str | None):
+    """Return the frame-perturbation callable for the given name (or ``None``).
+
+    ``None`` (the default) leaves chunks untouched. Named perturbations are an
+    eval-time diagnostic only — never enable them for training.
+    """
+    if perturbation is None:
+        return None
+    if perturbation not in _FRAME_PERTURBATION_FNS:
+        valid = sorted(_FRAME_PERTURBATION_FNS)
+        msg = f"Unknown frame_perturbation {perturbation!r}; expected {valid} or null."
+        raise ValueError(msg)
+    return _FRAME_PERTURBATION_FNS[perturbation]
+
+
 class BaseHDF5Dataset(Dataset):
     """Base class for HDF5-backed deepfake datasets.
 
