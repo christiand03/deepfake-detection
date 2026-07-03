@@ -1,12 +1,21 @@
+import functools
 from typing import TYPE_CHECKING, Any
 
 import hydra
 import rootutils
+import torch
 from omegaconf import DictConfig
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 if TYPE_CHECKING:
     from lightning import LightningDataModule, LightningModule, Trainer
     from lightning.pytorch.loggers import Logger
+
+# Allowlist objects pickled into checkpoints so Lightning's internal
+# torch.load(weights_only=True) (PyTorch 2.6 default) can restore them.
+# Mirrors train.py / explain*.py — trainer.test(ckpt_path=...) loads via this path.
+torch.serialization.add_safe_globals([functools.partial, AdamW, ReduceLROnPlateau])
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # ------------------------------------------------------------------------------------ #
