@@ -1,6 +1,6 @@
 ---
 title: "Explainability-Driven Adversarial Robustness Assessment for Generalized Deepfake Detectors"
-authors: [Cirillo L., Gervasio A., Amerini I.]
+authors: [Cirillo Lorenzo, Gervasio Andrea, Amerini Irene]
 year: 2025
 venue: "EURASIP Journal on Information Security 2025(1):23"
 type: source/paper
@@ -17,7 +17,7 @@ updated: 2026-07-05
 # Explainability-Driven Adversarial Robustness Assessment (Cirillo et al., 2025)
 
 > [!info] Metadata
-> **Authors:** Cirillo, Gervasio, Amerini (Sapienza / ALCOR Lab)
+> **Authors:** Lorenzo Cirillo, Andrea Gervasio, Irene Amerini (Sapienza / ALCOR Lab)
 > **Year / Venue:** 2025 · EURASIP Journal on Information Security, article no. 23
 > **Evidence level:** abstract + venue page (2026-07-05)
 
