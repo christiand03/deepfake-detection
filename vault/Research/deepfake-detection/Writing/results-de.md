@@ -59,7 +59,7 @@ Cross-Attention gewinnt auf allen acht Testmetriken (visual-only 0,932 vs. 0,868
 
 ## 4. Diagnostik
 
-**Frame-Perturbation (temporale vs. räumliche Dominanz).** Auf dem eingefrorenen Video-Probe (clean `auc_video` 0,745) senkt das Mischen der Frame-Reihenfolge *innerhalb* jedes 16-Frame-Chunks die video-level AUROC auf 0,597 (`tubelet_shuffle`) bzw. 0,691 (`frame_shuffle`, voll). Beide Perturbationen degradieren die AUROC ⇒ der Probe nutzt **intra-chunk-temporale Ordnung**, ist also nicht rein räumlich. Details und Vorbehalte (Nicht-Monotonie, frozener Probe): [[videomae-frame-perturbation-temporal]].
+**Frame-Perturbation (temporale vs. räumliche Dominanz).** Auf dem eingefrorenen Video-Probe (clean `auc_video` 0,745 — der clean-Referenzlauf der Perturbations-Evaluation; der Phase-1-Baseline-Lauf in §2 misst 0,730, dasselbe eingefrorene Modell in zwei Läufen) senkt das Mischen der Frame-Reihenfolge *innerhalb* jedes 16-Frame-Chunks die video-level AUROC auf 0,597 (`tubelet_shuffle`) bzw. 0,691 (`frame_shuffle`, voll). Beide Perturbationen degradieren die AUROC ⇒ der Probe nutzt **intra-chunk-temporale Ordnung**, ist also nicht rein räumlich. Details und Vorbehalte (Nicht-Monotonie, frozener Probe): [[videomae-frame-perturbation-temporal]].
 
 **Datensatz-Ablation (Diversität vs. Paarung) — in Arbeit.** Nur der `keep_pairs`-Arm ist trainiert (`val/auc_video` 0,769); der `decouple`-Kontrollarm ist vorprozessiert, aber nicht trainiert, und es liegt keine Cross-Dataset-Auswertung vor. **Kein Paarungs-/Diversitätseffekt ist bislang belegt** ([[dataset-ablation-pairing-diversity]]).
 
