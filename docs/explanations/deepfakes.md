@@ -4,7 +4,7 @@
 
 ### Talking-Head Deepfake
 
-Ein Talking-Head Deepfake bezeichnet eine KI-generierte Videomanipulation, bei der ausschließlich Kopf und Gesicht einer Person – typischerweise eine Politikerin oder ein Politiker – gefälscht werden, während der Körper und der Hintergrund unverändert bleiben. Im Mittelpunkt stehen dabei Lippenbewegungen, Gesichtsausdruck und Augenbewegungen, die so generiert werden, dass sie zu einem manipulierten Audiotrack passen. Dieses Szenario bildet das primäre Bedrohungsmodell dieses Projekts, da politische Reden besonders anfällig für gezielte Falschinformationskampagnen sind.
+Ein Talking-Head Deepfake bezeichnet eine KI-generierte Videomanipulation, bei der ausschließlich Kopf und Gesicht einer sprechenden Person gefälscht werden, während der Körper und der Hintergrund unverändert bleiben. Im Mittelpunkt stehen dabei Lippenbewegungen, Gesichtsausdruck und Augenbewegungen, die so generiert werden, dass sie zu einem manipulierten Audiotrack passen. Dieses Szenario bildet das primäre Bedrohungsmodell dieses Projekts, da Talking-Head-Videos besonders anfällig für gezielte Falschinformationskampagnen sind.
 
 ### Lip-Sync Deepfake (Audio-Driven)
 

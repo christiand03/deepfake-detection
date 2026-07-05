@@ -13,7 +13,7 @@ As an autonomous coding agent, you must adhere to the following workflow:
 ---
 
 ##  Project Philosophy & Scope
-**"Unmasking Deception"** is a progressive, multimodal xAI approach to detecting deepfakes in political speeches (Talking-Head). (Belegarbeit, 30 Credits).
+**"Unmasking Deception"** is a progressive, multimodal xAI approach to detecting deepfakes in talking-head (speaking-face) videos. (Belegarbeit, 30 Credits).
 *   **Depth-over-Breadth:** Focus on deep analysis using Explainable AI (xAI). We care not just *if* a deepfake is detected, but *why* (proven via the combination of Attention Maps and LRP-Heatmaps called AttnLRP).
 *   **The 4 Phases:**
     1. **Unimodal Video & Audio:** Spatio-Temporal Video Transformer (ISTVT / VideoMAE) baseline. Currently VideoMAE, ISTVT might be added at a later date. For Audio Wav2Vec is used.

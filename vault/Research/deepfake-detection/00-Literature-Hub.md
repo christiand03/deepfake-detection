@@ -8,7 +8,7 @@ tags: [DeepfakeDetection, xAI, LiteratureReview]
 
 # Literatur-Hub — *Unmasking Deception*
 
-Project-scoped literature base for the Belegarbeit **"Unmasking Deception: A Progressive Multimodal xAI Approach to Deepfake Detection in Political Speeches"**.
+Project-scoped literature base for the Belegarbeit **"Unmasking Deception: A Progressive Multimodal xAI Approach to Deepfake Detection in Talking-Head Videos"**.
 
 > [!warning] Evidence level
 > Source notes here are **abstract-grounded** (abstracts fetched 2026-06-14 from arXiv / PLOS / Semantic Scholar). Quoted metrics are taken verbatim from the abstracts only. Claims that need numbers beyond the abstract are marked `needs-full-text`. See [[Knowledge/Claim Map]] for the evidence audit before reusing any claim in writing.

@@ -11,13 +11,13 @@ tags: [ResearchGaps, DeepfakeDetection, xAI, Adversarial]
 
 ## G1 — Multimodality under content-driven, audio-visual fakes
 - **Gap:** Most cited detection work is visual-only ([[faceforensics-plusplus|FF++]], [[lipforensics-haliassos-2021|LipForensics]]), yet the realistic frontier is audio-visual.
-- **Why it matters:** SOTA methods drop sharply on audio-visual content-driven data (`ER-avdf-2`, [[av-deepfake1m|AV-Deepfake1M]]); visual-only cues miss audio/lip-sync manipulations central to political speeches.
+- **Why it matters:** SOTA methods drop sharply on audio-visual content-driven data (`ER-avdf-2`, [[av-deepfake1m|AV-Deepfake1M]]); visual-only cues miss audio/lip-sync manipulations central to talking-head videos.
 - **Evidence:** `ER-avdf-1`, `ER-avdf-2` (supported/observed); manipulation taxonomy `ER-tol-1`.
 - **Project response:** Phase 2 cross-attention fusion of [[videomae-tong-2022|VideoMAE]] + [[wav2vec2-baevski-2020|wav2vec 2.0]].
 
 ## G2 — Faithful (not just visual) explanations for video deepfake detectors
 - **Gap:** Interpretable deepfake detectors typically rely on attention visualization, but attention is an unreliable explanation.
-- **Why it matters:** A heatmap that doesn't reflect the true decision is misleading for a forensic/political use case where the "why" carries weight.
+- **Why it matters:** A heatmap that doesn't reflect the true decision is misleading for a forensic use case where the "why" carries weight.
 - **Evidence:** `ER-roll-1` (raw attention unreliable, supported); `ER-chef-1`, `ER-alrp-1` (relevance propagation more faithful, supported).
 - **Project response:** Adopt [[attnlrp-achtibat-2024|AttnLRP]] as primary attribution; keep Attention Rollout as a contrast baseline.
 
@@ -34,7 +34,7 @@ tags: [ResearchGaps, DeepfakeDetection, xAI, Adversarial]
 - **Project response:** Phase 4 — attack the detector (4.1 UAP/PGD), harden via PGD adversarial training (4.2), and explicitly measure attack impact on AttnLRP explanations.
 
 ## G5 — Robustness to social-media degradation
-- **Gap:** Benchmarks use a fixed compression protocol ([[faceforensics-plusplus|FF++]]); real political clips suffer recompression, noise, framerate drops.
+- **Gap:** Benchmarks use a fixed compression protocol ([[faceforensics-plusplus|FF++]]); real-world clips suffer recompression, noise, framerate drops.
 - **Why it matters:** Detectors that work on clean data may fail on real distribution shift.
 - **Evidence (now full-text):** compression/corruption robustness is measured by [[realforensics-haliassos-2022|RealForensics]] (AUC across H.264 rates 23–40, `ER-realf-2`) and [[lipforensics-haliassos-2021|LipForensics]] (Raw/HQ/LQ), and black-box attacks survive social-media compression ([[fake-it-mavali-2024|Fake-It]] `ER-fakeit-1`); Celeb-DF shows 2nd-gen detectors drop <70% AUC (`ER-celeb-2`). But our exact backbone (VideoMAE+wav2vec2 fusion) under combined social-media degradation is untested.
 - **Project response:** Phase 3 social-media simulation (compression, noise, framerate drops).

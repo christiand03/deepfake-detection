@@ -58,7 +58,7 @@ Der Audio-Zweig verwendet **Wav2Vec 2.0** \cite{baevski2020wav2vec2} (`facebook/
 
 ## 3. Multimodale Fusion — Cross-Attention-Head
 
-Da politische Talking-Head-Fälschungen häufig eine Inkonsistenz zwischen Lippenbewegung und Sprache erzeugen, sind audiovisuelle Hinweise zentral. Zwei separat trainierte, **eingefrorene** Backbones werden durch einen kleinen Fusion-Head verbunden (`src/models/multimodal_module.py`):
+Da Talking-Head-Fälschungen häufig eine Inkonsistenz zwischen Lippenbewegung und Sprache erzeugen, sind audiovisuelle Hinweise zentral. Zwei separat trainierte, **eingefrorene** Backbones werden durch einen kleinen Fusion-Head verbunden (`src/models/multimodal_module.py`):
 
 ```
 pixel_values (B,16,3,224,224) ─► VideoMAEModel (frozen) ─► video_hidden (B, 1568, 768)

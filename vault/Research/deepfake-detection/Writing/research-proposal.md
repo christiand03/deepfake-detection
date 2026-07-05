@@ -16,10 +16,10 @@ tags: [ResearchProposal, xAI, Adversarial, DeepfakeDetection]
 > **Maps to canonical RQs:** RQ4a (invisible-ε deterministic fooling) · **RQ4b (LRP heatmap shift mouth/eyes→background — the headline xAI result, Gap G4)** · RQ4c (audio-branch vs video-branch attack fragility) · RQ4d (adversarial fine-tuning: fooling-rate↓ vs clean-accuracy).
 
 ## 1. Title
-Adversarial Robustness of Faithful Explanations in Multimodal Deepfake Detection of Political Talking-Heads.
+Adversarial Robustness of Faithful Explanations in Multimodal Deepfake Detection of Talking-Heads.
 
 ## 2. Motivation
-Deepfake detectors are easily fooled: adversarial perturbations cut detector accuracy from >95% to <27% (Gandhi & Jain 2020). Independently, model explanations are fragile — small perturbations distort saliency maps (Ghorbani et al. 2019) and some attribution methods fail sanity checks (Adebayo et al. 2018). For a **forensic/political** use case, the explanation ("*why* fake") is part of the deliverable. Yet no work measures whether an attack that flips a **multimodal deepfake detector**'s decision also moves its **faithful** (relevance-propagation) explanation off the manipulated region — or whether adversarial training stabilizes the explanation, not just the label. This gap (Gap G4) is the proposal's target.
+Deepfake detectors are easily fooled: adversarial perturbations cut detector accuracy from >95% to <27% (Gandhi & Jain 2020). Independently, model explanations are fragile — small perturbations distort saliency maps (Ghorbani et al. 2019) and some attribution methods fail sanity checks (Adebayo et al. 2018). For a **forensic** use case, the explanation ("*why* fake") is part of the deliverable. Yet no work measures whether an attack that flips a **multimodal deepfake detector**'s decision also moves its **faithful** (relevance-propagation) explanation off the manipulated region — or whether adversarial training stabilizes the explanation, not just the label. This gap (Gap G4) is the proposal's target.
 
 ## 3. Research questions and hypotheses (Phase 4)
 - **RQ4a — H1:** there is an ε at which the classifier is **deterministically fooled** while the perturbation stays visually imperceptible (fooling-rate vs. ε curve + visibility threshold).

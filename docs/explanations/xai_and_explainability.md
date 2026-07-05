@@ -4,7 +4,7 @@
 
 ### Explainable AI (xAI)
 
-Explainable AI bezeichnet Methoden, die die Entscheidungsprozesse von Machine-Learning-Modellen für Menschen nachvollziehbar machen. Im Kontext der Deepfake-Erkennung für politische Desinformation reicht ein reines "FAKE/REAL"-Urteil nicht aus – der wissenschaftliche Beitrag dieses Projekts liegt darin zu beweisen, *welche* visuellen und akustischen Merkmale das Modell als Fälschungsindikator identifiziert. xAI ist deshalb kein nachträgliches Werkzeug, sondern der zentrale Forschungsbeitrag aller Projektphasen.
+Explainable AI bezeichnet Methoden, die die Entscheidungsprozesse von Machine-Learning-Modellen für Menschen nachvollziehbar machen. Im Kontext der Deepfake-Erkennung gegen Desinformation reicht ein reines "FAKE/REAL"-Urteil nicht aus – der wissenschaftliche Beitrag dieses Projekts liegt darin zu beweisen, *welche* visuellen und akustischen Merkmale das Modell als Fälschungsindikator identifiziert. xAI ist deshalb kein nachträgliches Werkzeug, sondern der zentrale Forschungsbeitrag aller Projektphasen.
 
 ### Black-Box vs. interpretierbares Modell
 

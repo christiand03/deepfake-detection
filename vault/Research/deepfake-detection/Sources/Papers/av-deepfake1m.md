@@ -20,7 +20,7 @@ created: 2026-06-14
 > **Evidence level:** Abstract-grounded (fetched 2026-06-14)
 
 ## Project Relevance
-**The dataset our project uses.** Provides content-driven video, audio, and audio-visual manipulations — exactly the multimodal setting our Phase 2 CrossAttentionFusion targets. Its temporal-localization framing ("small segments embedded in real videos") matches the political-speech threat model.
+**The dataset our project uses.** Provides content-driven video, audio, and audio-visual manipulations — exactly the multimodal setting our Phase 2 CrossAttentionFusion targets. Its temporal-localization framing ("small segments embedded in real videos") matches the talking-head threat model.
 
 ## Summary
 A large-scale audio-visual deepfake dataset (>1M videos, >2K subjects) with content-driven video, audio, and combined manipulations, designed for both detection and temporal localization. State-of-the-art methods drop sharply on it, exposing a benchmark gap.

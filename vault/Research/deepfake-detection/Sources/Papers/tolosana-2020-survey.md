@@ -21,7 +21,7 @@ updated: 2026-06-14
 > **Evidence level:** full-text (2026-06-14) — secondary source; numbers it tabulates are curated from primary papers
 
 ## Project Relevance
-Provides the **manipulation taxonomy** and field framing for the Related Work introduction: situates "identity swap (DeepFakes)" and "expression swap" — the families most relevant to political talking-head fakes — and motivates the move toward harder, audio-visual settings.
+Provides the **manipulation taxonomy** and field framing for the Related Work introduction: situates "identity swap (DeepFakes)" and "expression swap" — the families most relevant to talking-head fakes — and motivates the move toward harder, audio-visual settings.
 
 ## Summary
 A thorough survey of face-manipulation generation and detection. Defines four manipulation groups by manipulation level (with worked examples and per-group detection results), and tabulates **1st-generation** databases (UADFV, DeepfakeTIMIT, FF++) vs **2nd-generation** (DeepFakeDetection, DFDC, Celeb-DF), curating cross-dataset AUC/EER/accuracy across many detectors.

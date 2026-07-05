@@ -11,7 +11,7 @@ Im Gegensatz zu traditionellen Benchmark-Studien ("Breadth-over-Depth"), die vie
 
 ## 2. Motivation und Problemstellung
 
-- **Gesellschaftliche Relevanz:** Deepfakes politischer Reden
+- **Gesellschaftliche Relevanz:** Deepfakes sprechender Personen
   (Talking-Head-Szenarien) können Desinformation in großem Stil verbreiten. Eine
   verlässliche, transparente Erkennung ist unerlässlich.
 - **Wissenschaftlicher Beitrag:** Klassische CNNs stoßen bei zeitlichen

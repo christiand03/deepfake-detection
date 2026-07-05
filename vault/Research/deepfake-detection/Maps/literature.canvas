@@ -1,6 +1,6 @@
 {
 	"nodes":[
-		{"id":"thesis","type":"text","text":"# Unmasking Deception\nMultimodal (video+audio) **explainable** deepfake detector,\n**robustness-tested** on political talking-heads.\n→ [[00-Literature-Hub]]","x":-260,"y":-80,"width":520,"height":160,"color":"6"},
+		{"id":"thesis","type":"text","text":"# Unmasking Deception\nMultimodal (video+audio) **explainable** deepfake detector,\n**robustness-tested** on talking-heads.\n→ [[00-Literature-Hub]]","x":-260,"y":-80,"width":520,"height":160,"color":"6"},
 		{"id":"gapG4","type":"text","text":"**Gap G4 (contribution)**\nDoes an adversarial attack move a *faithful* explanation?\nUnaddressed across sources.\n→ [[Knowledge/Research Gaps]]","x":-260,"y":200,"width":520,"height":120,"color":"1"},
 		{"id":"h_det","type":"text","text":"## Detection & Datasets","x":-1120,"y":-560,"width":300,"height":50,"color":"4"},
 		{"id":"ff","type":"file","file":"Sources/Papers/faceforensics-plusplus.md","x":-1200,"y":-470,"width":300,"height":60},

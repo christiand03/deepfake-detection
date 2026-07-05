@@ -44,7 +44,7 @@ Learns speech representations from raw audio via masked-latent contrastive pre-t
 CNN feature encoder → masked latent → Transformer context network; contrastive loss over product-quantized latents.
 
 ## Limitations / Open Questions
-Trained for ASR on clean English speech; transfer to multilingual political speech and to spoof/synthesis artifacts is our assumption to test; robustness to compression (Phase 3) untested here.
+Trained for ASR on clean English speech; transfer to multilingual speech and to spoof/synthesis artifacts is our assumption to test; robustness to compression (Phase 3) untested here.
 
 ## Connections
 - [[attention-is-all-you-need]] — Transformer context network

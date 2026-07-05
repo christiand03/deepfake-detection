@@ -1,7 +1,7 @@
 # Deepfake Detection – Copilot Global Instructions
 
 ## Projekt
-**"Unmasking Deception"** – Progressiver, multimodaler xAI-Ansatz zur Erkennung von Deepfakes in politischen Reden (Talking-Head). Belegarbeit, 30 Credits, 2 Personen, ~900 Projektstunden.
+**"Unmasking Deception"** – Progressiver, multimodaler xAI-Ansatz zur Erkennung von Talking-Head-Deepfakes (Videos sprechender Personen). Belegarbeit, 30 Credits, 2 Personen, ~900 Projektstunden.
 
 ## Philosophie
 **Depth-over-Breadth:** Wenige Modelle, dafür tiefgreifende Analyse mit Explainable AI (xAI). Nicht nur *ob* ein Deepfake erkannt wird, sondern *warum* – belegt durch Attention Maps und LRP-Heatmaps.

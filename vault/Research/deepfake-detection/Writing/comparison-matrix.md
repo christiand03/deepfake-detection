@@ -21,7 +21,7 @@ tags: [Writing, ComparisonMatrix, Draft]
 | [[wav2vec2-baevski-2020\|wav2vec2]] (2020) | ✗ | ✓ | ✗ | ✗ | ✗ | speech SSL backbone |
 | [[attnlrp-achtibat-2024\|AttnLRP]] (2024) | (ViT) | ✗ | ✗ | ✓ | ✗ | xAI method |
 | [[pgd-madry-2018\|PGD]] (2018) | ✗ | ✗ | ✗ | ✗ | ✓ | attack + defense |
-| **This project** | ✓ | ✓ | ✓ | ✓ (AttnLRP) | ✓ (FGSM/PGD/UAP + adv. training) | political talking-head |
+| **This project** | ✓ | ✓ | ✓ | ✓ (AttnLRP) | ✓ (FGSM/PGD/UAP + adv. training) | talking-head |
 
 ## Explanation-method ladder (faithfulness, abstract-grounded)
 

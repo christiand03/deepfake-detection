@@ -20,7 +20,7 @@ created: 2026-06-14
 > **Authors:** Liu, She, Liu, Li, Yao, Liang, Wang · **Year/Venue:** 2024 · NeurIPS (arXiv:2401.15668) · **Evidence level:** abstract-grounded (full-text not indexed in local Zotero 2026-06-14; abstract carries the headline numbers 95.3% / 90.2%)
 
 ## Project Relevance
-**Directly on the political talking-head threat**: lip-syncing fakes (the dominant way to put false words in a leader's mouth). Shows prior detectors fail on lip-sync and that **audio-visual temporal inconsistency** is the discriminative cue — strong support for our multimodal fusion and a near-ideal evaluation scenario.
+**Directly on the talking-head threat**: lip-syncing fakes (the dominant way to put false words in a leader's mouth). Shows prior detectors fail on lip-sync and that **audio-visual temporal inconsistency** is the discriminative cue — strong support for our multimodal fusion and a near-ideal evaluation scenario.
 
 ## Summary
 Observes that existing detectors drop sharply on lip-syncing videos; proposes a lip-forgery detector exploiting the inconsistency between lip movements and audio (plus lip–head biological relations), and releases the AVLips dataset.

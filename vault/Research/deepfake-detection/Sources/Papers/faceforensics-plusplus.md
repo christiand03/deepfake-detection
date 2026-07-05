@@ -20,7 +20,7 @@ created: 2026-06-14
 > **Evidence level:** Abstract-grounded (fetched 2026-06-14)
 
 ## Project Relevance
-Canonical face-manipulation benchmark. Defines the four classic forgery families (DeepFakes, Face2Face, FaceSwap, NeuralTextures) and the compression-level evaluation protocol that motivates our **Phase 3 social-media robustness** simulation. Used as the historical reference point against which our AV-Deepfake1M setup and political talking-head focus are positioned.
+Canonical face-manipulation benchmark. Defines the four classic forgery families (DeepFakes, Face2Face, FaceSwap, NeuralTextures) and the compression-level evaluation protocol that motivates our **Phase 3 social-media robustness** simulation. Used as the historical reference point against which our AV-Deepfake1M setup and talking-head focus are positioned.
 
 ## Summary
 Introduces a large standardized benchmark for facial-manipulation detection with a hidden test set, and shows that data-driven detectors with domain-specific knowledge detect forgeries far better than humans, especially under compression.
@@ -31,7 +31,7 @@ Introduces a large standardized benchmark for facial-manipulation detection with
   - Claim strength: supported
   - Evidence: abstract states "over 1.8 million manipulated images" and a public automated benchmark (provenance: abstract)
   - Method: four manipulation methods (DeepFakes, Face2Face, FaceSwap, NeuralTextures) at varying compression and size
-  - Limitation: image-level, face-swap era; no audio; not talking-head-political
+  - Limitation: image-level, face-swap era; no audio; not talking-head
   - Contradicts / weakens: superseded in scale/realism by [[av-deepfake1m]] (>1M videos, audio-visual)
   - Project relevance: defines the compression-robustness protocol echoed in Phase 3
 - **[ER-ff-2]** Learned detectors with domain knowledge outperform human observers at spotting manipulations.

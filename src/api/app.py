@@ -80,7 +80,7 @@ def create_app() -> FastAPI:
 
     application = FastAPI(
         title="Deepfake Detection API",
-        description="Multimodal xAI-powered deepfake detection for political talking-head videos.",
+        description="Multimodal xAI-powered deepfake detection for talking-head videos.",
         version="0.1.0",
         lifespan=lifespan,
     )

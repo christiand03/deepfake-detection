@@ -21,7 +21,7 @@ updated: 2026-06-14
 > **Authors:** Haliassos, Vougioukas, Petridis, Pantic · **Year/Venue:** 2021 · CVPR (arXiv:2012.07657) · **Evidence level:** full-text (2026-06-14) — eval protocol grounded; specific AUC cells tagged `needs-full-text`
 
 ## Project Relevance
-Highly relevant to **political talking-heads**: detects forgeries from high-level *mouth-movement* irregularities, generalizing to unseen manipulations and resisting compression — directly informs Phase 1 (video) and Phase 3 (robustness), and a strong baseline/contrast for our multimodal approach.
+Highly relevant to **talking-heads**: detects forgeries from high-level *mouth-movement* irregularities, generalizing to unseen manipulations and resisting compression — directly informs Phase 1 (video) and Phase 3 (robustness), and a strong baseline/contrast for our multimodal approach.
 
 ## Summary
 A spatio-temporal network is **pretrained on lipreading (LRW)** to learn natural mouth-motion representations, then finetuned on real/forged **mouth crops (grayscale, 25-frame clips)** to detect semantic mouth irregularities rather than low-level artifacts. Evaluated with the standard cross-manipulation protocol on FF++ HQ (DF/FS/F2F/NT, leave-one-out) and cross-dataset on Celeb-DF-v2 (518 test videos), DFDC (3,215 test videos), FaceShifter HQ and DeeperForensics, plus robustness to unseen corruptions and to Raw/HQ/LQ compression. Ablations confirm lipreading pretraining and mouth-vs-full-face crops drive the gains.
