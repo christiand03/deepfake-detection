@@ -1,14 +1,21 @@
 ---
-title: Related Work — Draft
+title: Related Work — Draft (superseded)
 type: writing/related-work
-status: draft-abstract-grounded
+status: superseded
+superseded-by: "[[related-work-de]]"
 created: 2026-06-14
-tags: [Writing, RelatedWork, Draft]
+updated: 2026-07-05
+tags: [Writing, RelatedWork, Superseded]
 ---
 
-# Related Work (Draft)
+# Related Work (Draft) — SUPERSEDED
 
-> [!warning] Draft status — read before reuse
+> [!warning] Superseded — use [[related-work-de]] instead
+> This short English draft (5 sections, 16-source coverage) is a **strict subset** of the current, canonical German Related Work → **[[related-work-de]]** (7 sections, 48-source coverage, novelty search 2026-07-05). Retained only as the English-phrasing seed for a possible English version; do **not** cite or extend this file. Full history is in git.
+
+---
+
+> [!note] Original draft notes (2026-06-14)
 > Abstract-grounded draft. Wording follows the **allowed wording** in [[Claim Map]]; hedged claims are marked. `needs-full-text` numbers are deliberately omitted. Language: English (translate to German if the Belegarbeit is written in German). Replace inline `(Author Year)` with the final citation style before submission.
 
 ## 1. Deepfake detection and benchmarks
