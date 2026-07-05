@@ -3,7 +3,7 @@ type: project-index
 project: deepfake-detection
 title: Index - Deepfake Detection
 status: active
-updated: 2026-06-26T11:16:43Z
+updated: 2026-07-05T16:42:03Z
 ---
 # Index
 
@@ -66,6 +66,8 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 - [[Sources/Papers/payne-2024-integrated-attributions-viz]]
 - [[Sources/Papers/schloss-2019-colormap-meaning]]
 - [[Sources/Papers/schoenlein-2026-opaque-saturated-bias]]
+- [[Sources/Papers/cirillo-2025-explainability-adversarial]]
+- [[Sources/Papers/etmann-2019-robustness-saliency]]
 
 ### Knowledge
 - [[Knowledge/Claim Map]]
@@ -84,6 +86,8 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 - [[Results/multimodal-concat-phase1-ablation]]
 - [[Results/videomae-unimodal-video-baseline]]
 - [[Results/wav2vec2-phase2-audio-end-to-end]]
+- [[Results/dataset-ablation-pairing-diversity]]
+- [[Results/videomae-frame-perturbation-temporal]]
 
 ### Writing
 - [[Writing/comparison-matrix]]
