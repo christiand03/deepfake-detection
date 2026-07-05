@@ -3,7 +3,7 @@ type: project-index
 project: deepfake-detection
 title: Index - Deepfake Detection
 status: active
-updated: 2026-07-05T17:04:25Z
+updated: 2026-07-05T17:11:12Z
 ---
 # Index
 
@@ -99,6 +99,9 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 - [[Writing/methodology-de]]
 - [[Writing/introduction-de]]
 - [[Writing/tech-stack-de]]
+- [[Writing/conclusion-de]]
+- [[Writing/discussion-limitations-de]]
+- [[Writing/results-de]]
 
 ### Maps
 - [[Maps/literature.canvas]]
