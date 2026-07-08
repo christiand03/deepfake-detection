@@ -39,10 +39,9 @@ import ffmpeg
 import numpy as np
 import rootutils
 import torch
+import wandb
 from torchmetrics.functional.classification import binary_auroc
 from tqdm import tqdm
-
-import wandb
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -74,20 +73,31 @@ def _load_test_videos(
     Each record contains:
         ``video_id``, ``video_path``, ``label`` (int), ``label_audio`` (int).
 
+    The per-video ``label`` / ``label_audio`` are the VIDEO-level ground truth —
+    max-pooled over all chunks ("a video is fake if any chunk is fake"), matching
+    ``BaseDeepfakeModule._video_eval_epoch_end``. Reading a single chunk's label
+    (e.g. chunk00000) would be wrong: AV-Deepfake1M manipulations are word-level,
+    so the first chunk is usually genuine even in a fake video, and the sweep
+    scores the WHOLE degraded clip (``run_video_inference_fast`` max-pools all
+    chunks) — score and label must be at the same (video) granularity.
+
     Videos whose .mp4 is missing from *normalized_dir* are skipped and counted;
     a non-zero miss count is logged as a warning (usually it means the normalized
     files have not been generated — see scripts/backfill_normalized.py).
     """
     seen: dict[str, dict] = {}
+    label_by_vid: dict[str, int] = {}
+    label_audio_by_vid: dict[str, int] = {}
     with metadata_path.open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             vid = row["video_id"]
-            if vid not in seen:
-                seen[vid] = row
+            seen.setdefault(vid, row)
+            label_by_vid[vid] = max(label_by_vid.get(vid, 0), int(row["label"]))
+            label_audio_by_vid[vid] = max(label_audio_by_vid.get(vid, 0), int(row["label_audio"]))
 
     records: list[dict] = []
     n_missing = 0
-    for vid, row in seen.items():
+    for vid in seen:
         video_path = normalized_dir / f"{vid}.mp4"
         if not video_path.exists():
             log.debug("Missing video file: %s — skipped.", video_path)
@@ -97,8 +107,8 @@ def _load_test_videos(
             {
                 "video_id": vid,
                 "video_path": video_path,
-                "label": int(row["label"]),
-                "label_audio": int(row["label_audio"]),
+                "label": label_by_vid[vid],
+                "label_audio": label_audio_by_vid[vid],
             }
         )
         if max_videos is not None and len(records) >= max_videos:

@@ -128,7 +128,18 @@ def build_clips(
         if split_filter and row.get("split") != split_filter:
             continue
 
-        label = "FAKE" if int(row.get("label", 1)) == 1 else "REAL"
+        # Clip badge = VIDEO-level ground truth, not chunk00000's per-chunk label.
+        # AV-Deepfake1M manipulations are word-level, so chunk 0 (0–0.64 s) is
+        # usually genuine even for a fake clip — reading its per-chunk `label`
+        # would mark almost every fake clip REAL. `modify_type` ("real" vs.
+        # visual_/audio_/both_modified) is the authoritative per-video category
+        # and is identical on every chunk row.
+        modify_type = (row.get("modify_type") or "").strip().lower()
+        if modify_type:
+            label = "REAL" if modify_type == "real" else "FAKE"
+        else:
+            # Legacy CSV without a modify_type column: fall back to per-chunk label.
+            label = "FAKE" if int(row.get("label", 1)) == 1 else "REAL"
 
         fps, duration = _video_props(mp4)
         i = len(clips) + 1

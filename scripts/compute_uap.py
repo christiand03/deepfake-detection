@@ -47,10 +47,9 @@ from typing import NamedTuple
 import numpy as np
 import rootutils
 import torch
+import wandb
 from torchmetrics.functional.classification import binary_auroc
 from tqdm import tqdm
-
-import wandb
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -81,24 +80,36 @@ def _load_videos(metadata_path: Path, normalized_dir: Path, max_videos: int | No
     """Return deduplicated video records from a split-metadata CSV.
 
     Each record contains ``video_id``, ``video_path`` (Path), and ``label`` (int).
+    The per-video ``label`` is the VIDEO-level ground truth — max-pooled over all
+    chunks ("a video is fake if any chunk is fake"), matching
+    ``BaseDeepfakeModule._video_eval_epoch_end``. A single chunk's label (e.g.
+    chunk00000) would be wrong: AV-Deepfake1M manipulations are word-level, so the
+    first chunk is usually genuine even in a fake video, and the per-video AUC
+    pairs one score with one label per video. (The UAP eval scores the first face
+    chunk — see D5 — a separate score-granularity limitation, not a reason to
+    mislabel the video.)
+
     Videos whose .mp4 is missing from *normalized_dir* are skipped and counted;
     a non-zero miss count is logged as a warning (usually it means the normalized
     files have not been generated — see scripts/backfill_normalized.py).
     """
     seen: dict[str, dict] = {}
+    label_by_vid: dict[str, int] = {}
     with metadata_path.open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
-            seen.setdefault(row["video_id"], row)
+            vid = row["video_id"]
+            seen.setdefault(vid, row)
+            label_by_vid[vid] = max(label_by_vid.get(vid, 0), int(row["label"]))
 
     records: list[dict] = []
     n_missing = 0
-    for vid, row in seen.items():
+    for vid in seen:
         video_path = normalized_dir / f"{vid}.mp4"
         if not video_path.exists():
             log.debug("Missing video file: %s — skipped.", video_path)
             n_missing += 1
             continue
-        records.append({"video_id": vid, "video_path": video_path, "label": int(row["label"])})
+        records.append({"video_id": vid, "video_path": video_path, "label": label_by_vid[vid]})
         if max_videos is not None and len(records) >= max_videos:
             break
 
