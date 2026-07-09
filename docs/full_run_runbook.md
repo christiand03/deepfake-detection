@@ -130,7 +130,16 @@ $env:VIDEOMAE_CKPT_PATH   = "checkpoints/videomae_phase2.ckpt"
 $env:WAV2VEC2_CKPT_PATH   = "checkpoints/wav2vec2_phase2.ckpt"
 $env:MULTIMODAL_CKPT_PATH = "checkpoints/multimodal_phase2.ckpt"
 
-# Dry-Run zuerst (Verdrahtung prüfen, ~2 Videos)
+# UTF-8-Ausgabe erzwingen — die Sweeps/UAP loggen Nicht-ASCII-Zeichen (δ, Δ, ×);
+# ohne dies bricht der Lauf auf einer cp1252-Konsole mit UnicodeEncodeError ab.
+$env:PYTHONIOENCODING = "utf-8"
+
+# Pre-Flight: die gesamte Pipeline (alle Sweeps + UAP) in Miniatur auf wenigen
+# Videos. Prüft Checkpoints/Daten und meldet PASS/FAIL pro Schritt, BEVOR die
+# volle Queue läuft. Setzt PYTHONIOENCODING/WANDB_MODE selbst, schreibt nach .smoke/.
+./scripts/smoke_phase34.ps1
+
+# Dry-Run einzeln (Verdrahtung prüfen, ~2 Videos)
 python scripts/eval_adversarial_sweep.py --multimodal --attack-modalities both --max-videos 2 --epsilon-grid 0.03 --methods FGSM
 
 # Voller Adversarial-Sweep

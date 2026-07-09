@@ -26,11 +26,11 @@ summary Table ("UAP Transfer"):
 
 Usage::
 
-    # Video dry-run: target REAL, 1 epoch, 3 fit / 3 eval clips
+    # Video dry-run: target REAL (evasion), 1 epoch, tiny fit + eval
     python scripts/compute_uap.py --modality video --target-class REAL \\
-        --epochs 1 --max-fit-videos 3 --max-eval-videos 3 --epsilon 0.05
+        --epochs 1 --max-fit-chunks 3 --eval-balanced 2 --epsilon 0.05
 
-    # Multimodal, attack both modalities, target FAKE
+    # Multimodal, attack both modalities, target FAKE (false alarm)
     python scripts/compute_uap.py --modality multimodal --target-class FAKE \\
         --attack-modalities both
 """
@@ -41,15 +41,17 @@ import argparse
 import csv
 import logging
 import os
+import random
 from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
 import rootutils
 import torch
-import wandb
 from torchmetrics.functional.classification import binary_auroc
 from tqdm import tqdm
+
+import wandb
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -76,54 +78,46 @@ _CLASS_INDEX = {"REAL": 0, "FAKE": 1}
 # ── Data loading ───────────────────────────────────────────────────────────────
 
 
-def _load_videos(metadata_path: Path, normalized_dir: Path, max_videos: int | None) -> list[dict]:
-    """Return deduplicated video records from a split-metadata CSV.
+class ChunkRecord(NamedTuple):
+    """A single H5 chunk: its file, row index, and CHUNK-level ground-truth label."""
 
-    Each record contains ``video_id``, ``video_path`` (Path), and ``label`` (int).
-    The per-video ``label`` is the VIDEO-level ground truth — max-pooled over all
-    chunks ("a video is fake if any chunk is fake"), matching
-    ``BaseDeepfakeModule._video_eval_epoch_end``. A single chunk's label (e.g.
-    chunk00000) would be wrong: AV-Deepfake1M manipulations are word-level, so the
-    first chunk is usually genuine even in a fake video, and the per-video AUC
-    pairs one score with one label per video. (The UAP eval scores the first face
-    chunk — see D5 — a separate score-granularity limitation, not a reason to
-    mislabel the video.)
+    h5_path: Path
+    h5_index: int
+    label: int  # combined chunk-level label (0 = REAL, 1 = FAKE)
 
-    Videos whose .mp4 is missing from *normalized_dir* are skipped and counted;
-    a non-zero miss count is logged as a warning (usually it means the normalized
-    files have not been generated — see scripts/backfill_normalized.py).
+
+def _load_chunks(metadata_path: Path) -> list[ChunkRecord]:
+    """Load every chunk row from a split-metadata CSV as :class:`ChunkRecord`s.
+
+    Uses the CHUNK-level ``label`` column (not the max-pooled ``label_video``): the UAP
+    fits and evaluates on individual chunks, and only genuinely-fake chunks
+    (``label == 1``) carry the gradient a δ*→REAL evasion perturbation needs — the
+    always-genuine first mp4 chunk would not (plan P1). ``h5_path`` is resolved
+    relative to the project root when not absolute.
     """
-    seen: dict[str, dict] = {}
-    label_by_vid: dict[str, int] = {}
+    records: list[ChunkRecord] = []
     with metadata_path.open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
-            vid = row["video_id"]
-            seen.setdefault(vid, row)
-            label_by_vid[vid] = max(label_by_vid.get(vid, 0), int(row["label"]))
-
-    records: list[dict] = []
-    n_missing = 0
-    for vid in seen:
-        video_path = normalized_dir / f"{vid}.mp4"
-        if not video_path.exists():
-            log.debug("Missing video file: %s — skipped.", video_path)
-            n_missing += 1
-            continue
-        records.append({"video_id": vid, "video_path": video_path, "label": label_by_vid[vid]})
-        if max_videos is not None and len(records) >= max_videos:
-            break
-
-    log.info(
-        "Loaded %d videos from %s (%d missing from %s).", len(records), metadata_path.name, n_missing, normalized_dir
-    )
-    if n_missing:
-        log.warning(
-            "%d video(s) missing from %s — run scripts/backfill_normalized.py "
-            "if the normalized files have not been generated yet.",
-            n_missing,
-            normalized_dir,
-        )
+            h5 = Path(row["h5_path"])
+            if not h5.is_absolute():
+                h5 = _PROJECT_ROOT / h5
+            records.append(ChunkRecord(h5, int(row["h5_index"]), int(row["label"])))
+    log.info("Loaded %d chunk rows from %s.", len(records), metadata_path.name)
     return records
+
+
+def _by_label(chunks: list[ChunkRecord], label: int) -> list[ChunkRecord]:
+    """Chunks whose ground-truth label equals *label* (0 = REAL, 1 = FAKE)."""
+    return [c for c in chunks if c.label == label]
+
+
+def _sample(chunks: list[ChunkRecord], n: int | None, seed: int) -> list[ChunkRecord]:
+    """Seeded random subsample of up to *n* chunks (all of them when ``n`` is None/≥len)."""
+    if n is None or n >= len(chunks):
+        return list(chunks)
+    out = list(chunks)
+    random.Random(seed).shuffle(out)
+    return out[:n]
 
 
 # ── Metric helpers ─────────────────────────────────────────────────────────────
@@ -182,34 +176,34 @@ class TransferEval(NamedTuple):
 
 
 def _evaluate_transfer(
-    videos: list[dict],
+    chunks: list[ChunkRecord],
     modality: str,
     model,  # noqa: ANN001 — VideoMAEModule | MultimodalDeepfakeModule
     delta_video: torch.Tensor,
     delta_audio: torch.Tensor | None,
 ) -> TransferEval:
-    """Evaluate clean and perturbed predictions for every clip in a single pass.
+    """Evaluate clean and perturbed predictions for every chunk in a single pass.
 
-    Both predictions use the *same* model and preprocessing (clean = no δ*,
-    perturbed = with δ*), so the comparison isolates the perturbation's effect.
-    Each clip is evaluated under one try/except: if either prediction raises, the
-    clip is dropped from *all* output lists, keeping labels/verdicts/scores
-    aligned by index.
+    Both predictions use the *same* model and the *same* H5-loaded chunk (clean = no
+    δ*, perturbed = with δ*), so the comparison isolates the perturbation's effect.
+    Each chunk is evaluated under one try/except: if either prediction raises, the
+    chunk is dropped from *all* output lists, keeping labels/verdicts/scores aligned
+    by index.
     """
     out = TransferEval([], [], [], [], [])
-    for rec in tqdm(videos, desc="Transfer eval", unit="video"):
-        path = rec["video_path"]
+    for c in tqdm(chunks, desc="Transfer eval", unit="chunk"):
+        ref = (c.h5_path, c.h5_index)
         try:
             if modality == "video":
-                base_v, base_c = evaluate_video_uap(model, path)
-                adv_v, adv_c = evaluate_video_uap(model, path, delta_video)
+                base_v, base_c = evaluate_video_uap(model, ref)
+                adv_v, adv_c = evaluate_video_uap(model, ref, delta_video)
             else:
-                base_v, base_c = evaluate_multimodal_uap(model, path)
-                adv_v, adv_c = evaluate_multimodal_uap(model, path, delta_video, delta_audio)
+                base_v, base_c = evaluate_multimodal_uap(model, ref)
+                adv_v, adv_c = evaluate_multimodal_uap(model, ref, delta_video, delta_audio)
         except Exception:  # noqa: BLE001
-            log.warning("Evaluation failed for %s — skipping clip.", rec["video_id"])
+            log.warning("Evaluation failed for %s[%d] — skipping chunk.", c.h5_path, c.h5_index)
             continue
-        out.labels.append(rec["label"])
+        out.labels.append(c.label)
         out.baseline_verdicts.append(base_v)
         out.baseline_scores.append(_to_fake_score(base_v, base_c))
         out.adv_verdicts.append(adv_v)
@@ -298,13 +292,19 @@ def _parse_args() -> argparse.Namespace:
         help="CSV listing the held-out transfer-eval clips (default: data/processed/test_metadata.csv).",
     )
     parser.add_argument(
-        "--normalized-dir",
-        type=Path,
-        default=_PROJECT_ROOT / "data/normalized",
-        help="Directory containing normalized .mp4 files (default: data/normalized).",
+        "--max-fit-chunks",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Cap the fit-set chunk count (seeded subsample); default: all label-matched chunks.",
     )
-    parser.add_argument("--max-fit-videos", type=int, default=None, metavar="N", help="Cap fit-set size (dry-run).")
-    parser.add_argument("--max-eval-videos", type=int, default=None, metavar="N", help="Cap eval-set size (dry-run).")
+    parser.add_argument(
+        "--eval-balanced",
+        type=int,
+        default=200,
+        metavar="N",
+        help="Chunks PER CLASS in the fake-enriched transfer-eval set (default: 200).",
+    )
     parser.add_argument(
         "--attack-modalities",
         choices=["video", "audio", "both"],
@@ -345,8 +345,6 @@ def main() -> None:
         raise FileNotFoundError(f"Fit metadata CSV not found: {args.fit_metadata}")
     if not args.eval_metadata.exists():
         raise FileNotFoundError(f"Eval metadata CSV not found: {args.eval_metadata}")
-    if not args.normalized_dir.exists():
-        raise FileNotFoundError(f"Normalized video directory not found: {args.normalized_dir}")
 
     # ── Checkpoint guards ──────────────────────────────────────────────────────
     if not os.environ.get("VIDEOMAE_CKPT_PATH"):
@@ -358,18 +356,34 @@ def main() -> None:
     if args.modality == "multimodal" and not os.environ.get("MULTIMODAL_CKPT_PATH"):
         raise RuntimeError("MULTIMODAL_CKPT_PATH must be set for --modality multimodal.")
 
-    # ── Load data ──────────────────────────────────────────────────────────────
-    fit_videos = _load_videos(args.fit_metadata, args.normalized_dir, args.max_fit_videos)
-    eval_videos = _load_videos(args.eval_metadata, args.normalized_dir, args.max_eval_videos)
-    if not fit_videos:
-        raise RuntimeError("No fit videos found. Check --fit-metadata and --normalized-dir.")
-    if not eval_videos:
-        raise RuntimeError("No eval videos found. Check --eval-metadata and --normalized-dir.")
+    # ── Select fit / eval chunks by ground-truth label (plan P1) ────────────────
+    # δ*→REAL (evasion) must be fitted on genuinely-FAKE chunks (label==1) to carry a
+    # gradient; δ*→FAKE (false alarm) on REAL chunks (label==0). Transfer eval uses a
+    # fake-enriched, class-balanced subset so the evasion fooling rate sees enough
+    # fake chunks despite the ~6% natural prevalence.
+    fit_label = 1 if target_class == 0 else 0
+    fit_chunks = _sample(_by_label(_load_chunks(args.fit_metadata), fit_label), args.max_fit_chunks, args.seed)
+    if not fit_chunks:
+        raise RuntimeError(f"No fit chunks with label={fit_label} in {args.fit_metadata}.")
+
+    eval_all = _load_chunks(args.eval_metadata)
+    eval_fake = _sample(_by_label(eval_all, 1), args.eval_balanced, args.seed)
+    eval_real = _sample(_by_label(eval_all, 0), args.eval_balanced, args.seed + 1)
+    eval_chunks = eval_fake + eval_real
+    if not eval_chunks:
+        raise RuntimeError(f"No eval chunks found in {args.eval_metadata}.")
+    log.info(
+        "Fit: %d chunks (label=%d). Eval: %d fake + %d real = %d chunks.",
+        len(fit_chunks),
+        fit_label,
+        len(eval_fake),
+        len(eval_real),
+        len(eval_chunks),
+    )
 
     # ── Load model ─────────────────────────────────────────────────────────────
-    # The same model is used to fit δ*, to compute the clean baseline, and to
-    # evaluate the perturbed clips — so the baseline-vs-perturbed comparison is
-    # apples-to-apples (critical for the multimodal modality).
+    # The same model fits δ*, computes the clean baseline, and evaluates the perturbed
+    # chunks — so the baseline-vs-perturbed comparison is apples-to-apples.
     log.info("Loading model …")
     fit_model = get_multimodal_model() if args.modality == "multimodal" else get_video_model()
 
@@ -387,19 +401,21 @@ def main() -> None:
             "attack_modalities": args.attack_modalities,
             "audio_epsilon": args.audio_epsilon,
             "audio_uap_samples": args.audio_uap_samples,
-            "n_fit_videos": len(fit_videos),
-            "n_eval_videos": len(eval_videos),
+            "fit_label": fit_label,
+            "n_fit_chunks": len(fit_chunks),
+            "n_eval_fake": len(eval_fake),
+            "n_eval_real": len(eval_real),
         },
     )
 
     # ── Fit δ* ─────────────────────────────────────────────────────────────────
-    fit_paths = [rec["video_path"] for rec in fit_videos]
-    log.info("Fitting %s UAP over %d clips (%d epochs) …", args.modality, len(fit_paths), args.epochs)
+    fit_refs = [(c.h5_path, c.h5_index) for c in fit_chunks]
+    log.info("Fitting %s UAP over %d chunks (%d epochs) …", args.modality, len(fit_refs), args.epochs)
     delta_audio: torch.Tensor | None = None
     if args.modality == "video":
         delta_video = compute_video_uap(
             fit_model,
-            fit_paths,
+            fit_refs,
             target_class=target_class,
             epsilon=args.epsilon,
             step_size=step_size,
@@ -409,7 +425,7 @@ def main() -> None:
     else:
         delta_video, delta_audio = compute_multimodal_uap(
             fit_model,
-            fit_paths,
+            fit_refs,
             target_class=target_class,
             epsilon=args.epsilon,
             audio_epsilon=args.audio_epsilon,
@@ -425,31 +441,53 @@ def main() -> None:
     log.info("δ* fitted — video L∞=%.4f (budget %.4f).", linf, args.epsilon)
 
     # ── Clean baseline + δ* transfer eval (single aligned pass) ─────────────────
-    log.info("Evaluating clean baseline and δ* transfer on %d eval clips …", len(eval_videos))
-    ev = _evaluate_transfer(eval_videos, args.modality, fit_model, delta_video, delta_audio)
+    log.info("Evaluating clean baseline and δ* transfer on %d eval chunks …", len(eval_chunks))
+    ev = _evaluate_transfer(eval_chunks, args.modality, fit_model, delta_video, delta_audio)
     if not ev.labels:
-        raise RuntimeError("All eval clips failed evaluation — cannot compute transfer metrics.")
+        raise RuntimeError("All eval chunks failed evaluation — cannot compute transfer metrics.")
 
+    # ── Metrics (AUC + per-class fooling / accuracy) ────────────────────────────
     n_eval = len(ev.labels)
+    fake_idx = [i for i, lbl in enumerate(ev.labels) if lbl == 1]
+    real_idx = [i for i, lbl in enumerate(ev.labels) if lbl == 0]
+
+    def _fool(idx: list[int]) -> float:
+        return _fooling_rate(
+            [ev.baseline_verdicts[i] for i in idx],
+            [ev.adv_verdicts[i] for i in idx],
+            target_class,
+        )
+
+    def _acc(idx: list[int], verdicts: list[str]) -> float:
+        return _accuracy([verdicts[i] for i in idx], [ev.labels[i] for i in idx]) if idx else float("nan")
+
+    fooling_fake = _fool(fake_idx)
+    fooling_real = _fool(real_idx)
+    baseline_acc_fake, adv_acc_fake = _acc(fake_idx, ev.baseline_verdicts), _acc(fake_idx, ev.adv_verdicts)
+    baseline_acc_real, adv_acc_real = _acc(real_idx, ev.baseline_verdicts), _acc(real_idx, ev.adv_verdicts)
     baseline_auc = _safe_auc(ev.labels, ev.baseline_scores)
-    baseline_acc = _accuracy(ev.baseline_verdicts, ev.labels)
     adv_auc = _safe_auc(ev.labels, ev.adv_scores)
-    adv_acc = _accuracy(ev.adv_verdicts, ev.labels)
-    fooling_rate = _fooling_rate(ev.baseline_verdicts, ev.adv_verdicts, target_class)
     baseline_target_prob = float(np.mean([s if target_class == 1 else 1.0 - s for s in ev.baseline_scores]))
     adv_target_prob = float(np.mean([s if target_class == 1 else 1.0 - s for s in ev.adv_scores]))
     mean_target_prob_delta = adv_target_prob - baseline_target_prob
+    # Headline: fooling rate on the OPPOSITE class — δ*→REAL flips FAKE chunks, δ*→FAKE
+    # flips REAL chunks.
+    fooling_primary = fooling_fake if target_class == 0 else fooling_real
 
-    wandb.log({"baseline/auc": baseline_auc, "baseline/accuracy": baseline_acc})
-    log.info("Baseline — AUC=%.3f  Acc=%.3f", baseline_auc if not np.isnan(baseline_auc) else -1.0, baseline_acc)
     log.info(
-        "Transfer — AUC=%.3f  Acc=%.3f  FoolingRate=%.3f  Δtarget-prob=%.4f  (%d/%d clips)",
+        "Baseline — AUC=%.3f  Acc(fake)=%.3f  Acc(real)=%.3f",
+        baseline_auc if not np.isnan(baseline_auc) else -1.0,
+        baseline_acc_fake,
+        baseline_acc_real,
+    )
+    log.info(
+        "Transfer — AUC=%.3f  Fool(fake)=%.3f  Fool(real)=%.3f  primary=%.3f  Δtgt=%.4f  (%d chunks)",
         adv_auc if not np.isnan(adv_auc) else -1.0,
-        adv_acc,
-        fooling_rate if not np.isnan(fooling_rate) else -1.0,
+        fooling_fake if not np.isnan(fooling_fake) else -1.0,
+        fooling_real if not np.isnan(fooling_real) else -1.0,
+        fooling_primary if not np.isnan(fooling_primary) else -1.0,
         mean_target_prob_delta,
         n_eval,
-        len(eval_videos),
     )
 
     # ── Save δ* artefacts ──────────────────────────────────────────────────────
@@ -461,7 +499,8 @@ def main() -> None:
         "audio_epsilon": args.audio_epsilon,
         "attack_modalities": args.attack_modalities,
         "epochs": args.epochs,
-        "n_fit_videos": len(fit_videos),
+        "fit_label": fit_label,
+        "n_fit_chunks": len(fit_chunks),
         "video_linf": linf,
     }
     _, png_path = _save_delta(
@@ -473,14 +512,18 @@ def main() -> None:
         columns=[
             "modality",
             "target_class",
-            "epsilon",
             "attack_modalities",
-            "n_eval",
-            "baseline_acc",
-            "adv_acc",
+            "epsilon",
+            "n_fake",
+            "n_real",
             "baseline_auc",
             "adv_auc",
-            "fooling_rate",
+            "baseline_acc_fake",
+            "adv_acc_fake",
+            "baseline_acc_real",
+            "adv_acc_real",
+            "fooling_rate_fake",
+            "fooling_rate_real",
             "mean_target_prob_delta",
             "video_linf",
         ]
@@ -488,14 +531,18 @@ def main() -> None:
     table.add_data(
         args.modality,
         args.target_class,
-        args.epsilon,
         args.attack_modalities if args.modality == "multimodal" else "n/a",
-        n_eval,
-        baseline_acc,
-        adv_acc,
+        args.epsilon,
+        len(fake_idx),
+        len(real_idx),
         baseline_auc,
         adv_auc,
-        fooling_rate,
+        baseline_acc_fake,
+        adv_acc_fake,
+        baseline_acc_real,
+        adv_acc_real,
+        fooling_fake,
+        fooling_real,
         mean_target_prob_delta,
         linf,
     )
@@ -503,9 +550,11 @@ def main() -> None:
         {
             "uap_transfer_results": table,
             "uap/delta_visualization": wandb.Image(str(png_path)),
-            "transfer/accuracy": adv_acc,
+            "baseline/auc": baseline_auc,
             "transfer/auc": adv_auc,
-            "transfer/fooling_rate": fooling_rate,
+            "transfer/fooling_rate_fake": fooling_fake,
+            "transfer/fooling_rate_real": fooling_real,
+            "transfer/fooling_rate_primary": fooling_primary,
             "transfer/mean_target_prob_delta": mean_target_prob_delta,
         }
     )

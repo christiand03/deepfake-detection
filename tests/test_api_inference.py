@@ -17,17 +17,21 @@ import src.api.inference as inf
 from src.api.inference import (
     AUDIO_SAMPLES_PER_CHUNK,
     NUM_FRAMES,
+    _aligned_audio_window,
     _bivariate_attention_shift,
     _chunked_fake_probs,
     _compute_frequency_bands,
     _ensure_target_fps,
     _extract_anomaly_regions,
     _extract_region_bivariate,
+    _multimodal_chunked_fake_probs,
     _normalize_uint8_frames,
     _per_chunk_relevance,
     _prepare_uploaded_video,
+    _remax_pool,
     _resolve_per_frame_landmarks,
     _resolve_per_window_boxes,
+    _select_argmax_chunk,
     _windowed_audio_fake_prob,
 )
 from src.utils.vision_constants import IMAGENET_MEAN, IMAGENET_STD
@@ -329,6 +333,106 @@ def test_chunked_fake_probs_returns_per_chunk_and_max_pools():
     assert abs(max(probs) - expected_each[1]) < 1e-6
     # One forward per chunk, each with batch size 1 (VRAM-safe).
     assert model.calls == [(1, NUM_FRAMES, 3, 4, 4)] * 3
+
+
+# ── _select_argmax_chunk / _remax_pool (plan P0) ──────────────────────────────
+
+
+def test_select_argmax_chunk_picks_most_fake_chunk(tmp_path: Path):
+    clip = tmp_path / "clip.mp4"
+    box = (0, 0, 100, 100, 640, 360)
+    prepared = _patched_prepare(clip, [(_make_chunk(), box)] * 3)
+    assert prepared is not None
+
+    # Per-chunk logits: fake dominates only in chunk 1 → it is the max-pool chunk.
+    model = _SequenceModel(
+        [
+            torch.tensor([[2.0, 0.0]]),  # real
+            torch.tensor([[0.0, 3.0]]),  # fake  ← argmax
+            torch.tensor([[1.0, 1.0]]),  # undecided
+        ]
+    )
+
+    chunk, argmax_pos, clean_fake_probs = _select_argmax_chunk(model, prepared)
+
+    assert argmax_pos == 1
+    assert chunk.shape == (1, NUM_FRAMES, 3, 224, 224)
+    assert len(clean_fake_probs) == 3
+    assert clean_fake_probs[1] == max(clean_fake_probs)
+
+
+def test_remax_pool_keeps_video_fake_when_other_chunk_stays_high():
+    # Argmax chunk (pos 0) suppressed to 0.1, but an unattacked chunk holds 0.3 →
+    # the video-level score does NOT drop to the attacked chunk's prob.
+    assert _remax_pool([0.9, 0.3, 0.2], attacked_pos=0, attacked_adv_prob=0.1) == 0.3
+
+
+def test_remax_pool_attacked_chunk_can_still_dominate():
+    assert _remax_pool([0.9, 0.3], attacked_pos=0, attacked_adv_prob=0.6) == 0.6
+
+
+def test_remax_pool_single_chunk_degrades_to_adv_prob():
+    # Face-less fallback: one chunk, so the re-max-pool is just the adversarial prob.
+    assert _remax_pool([0.8], attacked_pos=0, attacked_adv_prob=0.2) == 0.2
+
+
+# ── _aligned_audio_window / _multimodal_chunked_fake_probs (plan P2 / P0) ──────
+
+
+class _SequenceMMModel:
+    """Stub fused model whose ``__call__`` yields preset logits batches in order."""
+
+    def __init__(self, logits_batches: list[torch.Tensor]) -> None:
+        self._batches = list(logits_batches)
+        self.calls: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+
+    def __call__(self, pixel_values, input_values):  # noqa: ANN001
+        self.calls.append((tuple(pixel_values.shape), tuple(input_values.shape)))
+        return self._batches.pop(0)
+
+
+def test_aligned_audio_window_slices_by_chunk_index():
+    wav = np.arange(3 * AUDIO_SAMPLES_PER_CHUNK, dtype=np.float32)
+    w1 = _aligned_audio_window(wav, 1)
+    assert len(w1) == AUDIO_SAMPLES_PER_CHUNK
+    assert w1[0] == AUDIO_SAMPLES_PER_CHUNK  # window 1 starts at 1 * CHUNK
+
+
+def test_aligned_audio_window_falls_back_to_whole_waveform():
+    wav = np.zeros(5000, dtype=np.float32)  # shorter than one window
+    assert _aligned_audio_window(wav, 0) is wav  # short tail slice → whole waveform
+    assert _aligned_audio_window(wav, -1) is wav  # no-face path → whole waveform
+
+
+def test_multimodal_chunked_fake_probs_per_chunk_and_max_pools(tmp_path: Path):
+    clip = tmp_path / "clip.mp4"
+    box = (0, 0, 100, 100, 640, 360)
+    prepared = _patched_prepare(clip, [(_make_chunk(), box)] * 3)
+    assert prepared is not None
+    waveform = np.random.default_rng(0).standard_normal(3 * AUDIO_SAMPLES_PER_CHUNK).astype(np.float32)
+
+    # Fused logits per chunk: fake dominates only in chunk 1.
+    model = _SequenceMMModel(
+        [
+            torch.tensor([[2.0, 0.0]]),  # real
+            torch.tensor([[0.0, 3.0]]),  # fake  ← max-pool
+            torch.tensor([[1.0, 1.0]]),  # undecided
+        ]
+    )
+
+    probs = _multimodal_chunked_fake_probs(model, prepared, waveform)
+
+    expected = [
+        torch.softmax(torch.tensor([2.0, 0.0]), dim=-1)[1].item(),
+        torch.softmax(torch.tensor([0.0, 3.0]), dim=-1)[1].item(),
+        torch.softmax(torch.tensor([1.0, 1.0]), dim=-1)[1].item(),
+    ]
+    for got, exp in zip(probs, expected, strict=True):
+        assert abs(got - exp) < 1e-6
+    assert abs(max(probs) - expected[1]) < 1e-6
+    # One fused forward per chunk, each with a single chunk-aligned audio window.
+    assert len(model.calls) == 3
+    assert all(pv == (1, NUM_FRAMES, 3, 224, 224) and iv == (1, AUDIO_SAMPLES_PER_CHUNK) for pv, iv in model.calls)
 
 
 # ── _per_chunk_relevance ──────────────────────────────────────────────────────

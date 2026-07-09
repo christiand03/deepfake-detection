@@ -84,14 +84,14 @@ class _DummyModel:
 
 
 def test_compute_video_uap_shape_and_budget(monkeypatch):
-    # Avoid real video decoding: every clip yields the same random tensor.
+    # Avoid real H5 I/O: every (h5_path, h5_index) chunk yields the same tensor.
     fixed = torch.randn(1, uap.NUM_FRAMES, 3, uap.IMG_SIZE, uap.IMG_SIZE)
-    monkeypatch.setattr(uap, "_preprocess_video", lambda _path: fixed.clone())
+    monkeypatch.setattr(uap, "_load_from_hdf5", lambda _p, _i: fixed.clone())
 
     epsilon = 0.03
     delta = compute_video_uap(
         _DummyModel(),
-        clips=[Path("a.mp4"), Path("b.mp4"), Path("c.mp4")],
+        chunks=[(Path("a.h5"), 0), (Path("b.h5"), 1), (Path("c.h5"), 2)],
         target_class=0,
         epsilon=epsilon,
         step_size=epsilon / 4,
@@ -122,22 +122,19 @@ class _DummyMultimodalModel:
 def test_compute_multimodal_uap_uses_aligned_window(monkeypatch):
     """δ_audio is the snippet length and tiles across the 10,240-sample window.
 
-    The aligned pair comes from _preprocess_multimodal (monkeypatched), so the
-    audio fed to the model is the training-length window — not the whole waveform.
+    The aligned pair is loaded from HDF5 (_load_from_hdf5 / _load_audio_from_hdf5,
+    monkeypatched), so the audio fed to the model is one training-length window.
     """
-    # _preprocess_multimodal returns device tensors; mirror that contract.
+    # The H5 loaders return device tensors; mirror that contract.
     fixed_v = torch.randn(1, uap.NUM_FRAMES, 3, uap.IMG_SIZE, uap.IMG_SIZE, device=uap._device)
     window = torch.randn(1, uap.AUDIO_SAMPLES_PER_CHUNK, device=uap._device)  # one training window
-    monkeypatch.setattr(
-        uap,
-        "_preprocess_multimodal",
-        lambda _path: (fixed_v.clone(), window.clone(), window.cpu().numpy()[0], 16000),
-    )
+    monkeypatch.setattr(uap, "_load_from_hdf5", lambda _p, _i: fixed_v.clone())
+    monkeypatch.setattr(uap, "_load_audio_from_hdf5", lambda _p, _i: window.clone())
 
     eps, a_eps, snippet = 0.03, 0.05, 2048
     delta_v, delta_a = uap.compute_multimodal_uap(
         _DummyMultimodalModel(),
-        clips=[Path("a.mp4"), Path("b.mp4")],
+        chunks=[(Path("a.h5"), 0), (Path("b.h5"), 1)],
         target_class=0,
         epsilon=eps,
         audio_epsilon=a_eps,
@@ -162,7 +159,7 @@ def test_compute_multimodal_uap_rejects_oversized_snippet():
     with pytest.raises(ValueError, match="must be <="):
         uap.compute_multimodal_uap(
             _DummyMultimodalModel(),
-            clips=[Path("a.mp4")],
+            chunks=[(Path("a.h5"), 0)],
             target_class=0,
             epsilon=0.03,
             audio_epsilon=0.03,

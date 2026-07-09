@@ -37,9 +37,10 @@ from pathlib import Path
 import numpy as np
 import rootutils
 import torch
-import wandb
 from torchmetrics.functional.classification import binary_auroc
 from tqdm import tqdm
+
+import wandb
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -75,10 +76,10 @@ def _load_test_videos(
     ``BaseDeepfakeModule._video_eval_epoch_end``. A single chunk's label (e.g.
     chunk00000) would be wrong: AV-Deepfake1M manipulations are word-level, so the
     first chunk is usually genuine even in a fake video, and the per-video AUC
-    pairs one score with one label per video. (Note: ``run_adversarial_batch``
-    still attacks only the first face chunk — see D5 — so the *adversarial* score
-    is chunk0-limited; that is a separate score-granularity limitation, not a
-    reason to mislabel the video.)
+    pairs one score with one label per video. (``run_adversarial_batch`` attacks the
+    argmax-fake chunk and re-max-pools its adversarial prob with the other chunks'
+    clean probs, so the *adversarial* score is now whole-clip — the same granularity
+    as the baseline; plan P0.)
 
     Videos whose .mp4 is missing from *normalized_dir* are skipped and counted;
     a non-zero miss count is logged as a warning (usually it means the normalized

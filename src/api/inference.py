@@ -245,6 +245,26 @@ def _load_from_hdf5(h5_path: Path, h5_index: int) -> torch.Tensor:
     return _normalize_uint8_frames(frames_np).unsqueeze(0)  # (1, T, C, H, W)
 
 
+def _load_audio_from_hdf5(h5_path: Path, h5_index: int) -> torch.Tensor:
+    """Load and standardise a preprocessed audio chunk from an HDF5 file.
+
+    Reads the ``(T_samples,)`` float32 window at ``h5_index`` and applies the same
+    per-sample zero-mean / unit-variance normalisation as training
+    (``normalize_audio``), so the (video, audio) pair fed to the fused model matches
+    the training distribution exactly. Used by the H5-backed UAP fit / eval.
+
+    Returns:
+        Float tensor of shape ``(1, T_samples)``, ready for Wav2Vec2 inference.
+    """
+    import h5py
+
+    from src.data.base_hdf5_dataset import normalize_audio
+
+    with h5py.File(h5_path, "r") as f:
+        audio_np: np.ndarray = f["audio"][h5_index]  # (T_samples,) float32
+    return normalize_audio(audio_np).unsqueeze(0)  # (1, T_samples)
+
+
 def _load_landmarks_from_hdf5(h5_path: Path, h5_index: int) -> np.ndarray | None:
     """Load per-frame FaceMesh landmark points for a chunk from HDF5 (roadmap I4).
 
@@ -514,6 +534,42 @@ def _chunked_fake_probs(model: VideoMAEModule, chunks: torch.Tensor) -> list[flo
             logits = model.net(pixel_values=pv).logits  # (1, 2)
             probs.append(torch.softmax(logits, dim=-1)[0, 1].item())
     return probs
+
+
+def _select_argmax_chunk(
+    model: VideoMAEModule,
+    prepared: _PreparedClip,
+) -> tuple[torch.Tensor, int, list[float]]:
+    """Pick the most-fake 16-frame chunk of a prepared clip for a single-chunk attack.
+
+    Returns ``(chunk_tensor, argmax_pos, clean_fake_probs)`` where *chunk_tensor* is
+    the ``(1, 16, 3, 224, 224)`` chunk with the highest clean fake-probability (on
+    ``_device``), *argmax_pos* indexes it within ``prepared.chunks`` /
+    *clean_fake_probs*, and *clean_fake_probs* is the per-chunk fake-probability list
+    (reused for the video-level re-max-pool).
+
+    The argmax chunk is exactly the chunk whose fake-prob equals the whole-clip
+    max-pool baseline (``run_video_inference_fast``), so attacking it and re-max-pooling
+    (:func:`_remax_pool`) compares baseline and adversarial at the SAME video-level
+    granularity — the fix for the chunk-0-vs-whole-clip mismatch (docs D5 / plan P0).
+    """
+    clean_fake_probs = _chunked_fake_probs(model, prepared.chunks)
+    argmax_pos = int(np.argmax(clean_fake_probs))
+    chunk = prepared.chunks[argmax_pos].unsqueeze(0).to(_device)  # (1, 16, C, H, W)
+    return chunk, argmax_pos, clean_fake_probs
+
+
+def _remax_pool(clean_fake_probs: list[float], attacked_pos: int, attacked_adv_prob: float) -> float:
+    """Video-level fake-prob after attacking one chunk: max-pool with that chunk swapped.
+
+    Re-applies the per-video ``reduce="amax"`` aggregation with the attacked chunk's
+    ADVERSARIAL prob replacing its clean prob, so an evasion attack must suppress the
+    argmax chunk below every OTHER (unattacked) chunk to flip the video verdict — the
+    honest video-level success criterion. Degrades to ``attacked_adv_prob`` when there
+    is only one chunk (e.g. the face-less fallback).
+    """
+    others = [p for i, p in enumerate(clean_fake_probs) if i != attacked_pos]
+    return max([attacked_adv_prob, *others])
 
 
 def _preprocess_video_chunked(clip_path: Path) -> tuple[torch.Tensor, int]:
@@ -2998,9 +3054,13 @@ def run_adversarial_batch(
     confidence, and attention-shift intensity.
 
     Intended for batch evaluation sweeps (``scripts/eval_adversarial_sweep.py``).
-    Runs two LRP backward passes — one on the clean clip and one on the
-    adversarial clip — so that the mean absolute change in per-region LRP
-    scores can be reported alongside the classification result.
+    Attacks the most-fake chunk (the one that determines the whole-clip max-pool
+    baseline, :func:`_select_argmax_chunk`) and reports a VIDEO-level adversarial
+    score by re-max-pooling that chunk's adversarial prob with the other chunks'
+    clean probs (:func:`_remax_pool`) — so baseline and adversarial share the same
+    granularity (plan P0). Runs two LRP backward passes on the attacked chunk — one
+    clean, one adversarial — so the mean absolute change in per-region LRP scores can
+    be reported alongside the classification result.
 
     The step-size schedule mirrors :func:`run_adversarial_inference`:
     FGSM uses a single step of size ``epsilon``; PGD uses ``steps`` steps
@@ -3018,17 +3078,28 @@ def run_adversarial_batch(
         LRP region scores between the clean and adversarial forward passes.
     """
     model = get_video_model()
-    pixel_values = _preprocess_video(clip_path).to(_device)
 
-    # ── Clean forward pass ────────────────────────────────────────────────────
-    with torch.no_grad():
-        clean_logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
-    clean_probs = torch.softmax(clean_logits, dim=-1)[0]
-    clean_fake_prob = clean_probs[1].item()
+    # ── Select the chunk to attack (argmax-fake = the max-pool baseline chunk) ──
+    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is not None:
+        pixel_values, attacked_pos, clean_fake_probs = _select_argmax_chunk(model, prepared)
+        clean_fake_prob = clean_fake_probs[attacked_pos]
+    else:
+        log.warning(
+            "No face detected in %s — attacking the full-frame fallback chunk; the input is out-of-distribution.",
+            clip_path.name,
+        )
+        pixel_values = _preprocess_video(clip_path).to(_device)
+        with torch.no_grad():
+            clean_logits = model.net(pixel_values=pixel_values).logits  # (1, 2)
+        clean_fake_prob = torch.softmax(clean_logits, dim=-1)[0, 1].item()
+        clean_fake_probs = [clean_fake_prob]
+        attacked_pos = 0
+
     clean_verdict: Literal["FAKE", "REAL"] = "FAKE" if clean_fake_prob > 0.5 else "REAL"
     target_class = 1 if clean_verdict == "FAKE" else 0
 
-    # ── Clean LRP ─────────────────────────────────────────────────────────────
+    # ── Clean LRP (on the attacked chunk) ─────────────────────────────────────
     try:
         hm_clean, _ = model.explain(pixel_values=pixel_values, target_class=1)
         hm_clean_np = hm_clean.detach().cpu().numpy()[0]  # (T, H, W) — already [-1, 1]
@@ -3041,13 +3112,13 @@ def run_adversarial_batch(
     step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
     adv_pv = _pgd_attack(model, pixel_values, target_class, epsilon, n_steps, step_size)
 
-    # ── Adversarial forward pass ──────────────────────────────────────────────
+    # ── Adversarial forward pass + video-level re-max-pool ────────────────────
     with torch.no_grad():
         adv_logits = model.net(pixel_values=adv_pv).logits  # (1, 2)
-    adv_probs = torch.softmax(adv_logits, dim=-1)[0]
-    adv_fake_prob = adv_probs[1].item()
+    attacked_adv_prob = torch.softmax(adv_logits, dim=-1)[0, 1].item()
+    adv_fake_prob = _remax_pool(clean_fake_probs, attacked_pos, attacked_adv_prob)
     adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
-    adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else adv_probs[0].item()
+    adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
 
     # ── Adversarial LRP ───────────────────────────────────────────────────────
     try:
@@ -3338,14 +3409,60 @@ def run_multimodal_adversarial_inference(
 # ── Multimodal batch helpers (offline sweeps) ─────────────────────────────────
 
 
+def _aligned_audio_window(waveform_np: np.ndarray, chunk_idx: int) -> np.ndarray:
+    """Slice the ``AUDIO_SAMPLES_PER_CHUNK`` audio window aligned to a video chunk.
+
+    Returns the window starting at ``chunk_idx * AUDIO_SAMPLES_PER_CHUNK`` so the
+    (video, audio) pair is training-identical; falls back to the whole waveform on
+    the no-face path (``chunk_idx < 0``) or when the tail slice is short.
+    """
+    if chunk_idx >= 0:
+        start = chunk_idx * AUDIO_SAMPLES_PER_CHUNK
+        window = waveform_np[start : start + AUDIO_SAMPLES_PER_CHUNK]
+        if len(window) == AUDIO_SAMPLES_PER_CHUNK:
+            return window
+    return waveform_np
+
+
+def _zscore_audio_tensor(waveform_np: np.ndarray) -> torch.Tensor:
+    """z-score an audio window into the ``(1, T)`` tensor Wav2Vec2 expects."""
+    waveform_tensor = torch.from_numpy(waveform_np.copy()).unsqueeze(0).to(_device)
+    return (waveform_tensor - waveform_tensor.mean()) / (waveform_tensor.std() + 1e-7)
+
+
+def _multimodal_chunked_fake_probs(
+    model: MultimodalDeepfakeModule,
+    prepared: _PreparedClip,
+    waveform_np: np.ndarray,
+) -> list[float]:
+    """Per-chunk fused fake-probabilities over a whole clip (one forward per chunk).
+
+    For each kept video chunk, pairs it with its aligned audio window
+    (:func:`_aligned_audio_window`, z-scored) and runs the fused model. Returns one
+    fake-prob per chunk; callers max-pool for the video verdict — the whole-clip
+    aggregation that makes the multimodal sweep consistent with the unimodal video/
+    audio sweeps (plan P2) and gives the argmax chunk for the multimodal attack (P0).
+    VRAM-safe: one chunk at a time (mirrors :func:`_chunked_fake_probs`).
+    """
+    probs: list[float] = []
+    with torch.no_grad():
+        for chunk, chunk_idx in zip(prepared.chunks, prepared.chunk_indices, strict=True):
+            pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
+            iv = _zscore_audio_tensor(_aligned_audio_window(waveform_np, chunk_idx))
+            logits = model(pixel_values=pv, input_values=iv)  # (1, 2)
+            probs.append(torch.softmax(logits, dim=-1)[0, 1].item())
+    return probs
+
+
 def _preprocess_multimodal(
     clip_path: Path,
 ) -> tuple[torch.Tensor, torch.Tensor, np.ndarray, int]:
     """Load a training-identical (video, audio) pair for the fused model.
 
-    Shared by the multimodal batch helpers below.  Mirrors the preprocessing in
-    :func:`run_multimodal_adversarial_inference`: the first face chunk, the audio
-    window aligned to that chunk, z-score-normalised for Wav2Vec2.
+    Mirrors the preprocessing in :func:`run_multimodal_adversarial_inference`: the
+    first face chunk, the audio window aligned to that chunk, z-score-normalised for
+    Wav2Vec2.  Used by the display / face-less-fallback paths; the whole-clip sweep
+    paths use :func:`_multimodal_chunked_fake_probs` instead.
 
     Returns:
         ``(pixel_values, waveform_tensor, waveform_np, sample_rate)`` where
@@ -3365,17 +3482,9 @@ def _preprocess_multimodal(
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"Audio extraction failed for {clip_path.name}: {exc}") from exc
 
-    # Slice the audio window aligned to the video chunk so the pair is
-    # training-identical; fall back to the whole waveform on the no-face path.
-    if chunk_idx >= 0:
-        start = chunk_idx * AUDIO_SAMPLES_PER_CHUNK
-        window = waveform_np[start : start + AUDIO_SAMPLES_PER_CHUNK]
-        if len(window) == AUDIO_SAMPLES_PER_CHUNK:
-            waveform_np = window
-
-    waveform_tensor = torch.from_numpy(waveform_np.copy()).unsqueeze(0).to(_device)
-    waveform_tensor = (waveform_tensor - waveform_tensor.mean()) / (waveform_tensor.std() + 1e-7)
-    return pixel_values, waveform_tensor, waveform_np, sample_rate
+    window_np = _aligned_audio_window(waveform_np, chunk_idx)
+    waveform_tensor = _zscore_audio_tensor(window_np)
+    return pixel_values, waveform_tensor, window_np, sample_rate
 
 
 def _multimodal_region_band_scores(
@@ -3408,8 +3517,12 @@ def run_multimodal_inference_score(clip_path: Path) -> tuple[str, float] | None:
     """Run fused video+audio detection without heatmaps, for batch sweeps.
 
     Counterpart to :func:`run_video_inference_fast` and
-    :func:`run_audio_inference_score` for the ``MultimodalDeepfakeModule``.  Uses
-    the training-identical chunk-aligned (video, audio) pair.
+    :func:`run_audio_inference_score` for the ``MultimodalDeepfakeModule``.  Scores
+    every training-identical chunk-aligned (video, audio) pair and MAX-POOLS the
+    per-chunk fake-probabilities (plan P2) — the same whole-clip aggregation the
+    unimodal video/audio sweeps use, so the multimodal robustness baseline and its
+    degraded scores share that granularity. Face-less clips fall back to the legacy
+    single (full-frame chunk + whole-waveform) pair.
 
     Returns:
         ``(verdict, confidence)`` where *confidence* is the predicted-class
@@ -3419,15 +3532,23 @@ def run_multimodal_inference_score(clip_path: Path) -> tuple[str, float] | None:
         ModelNotReadyError: If the multimodal checkpoint is not configured.
     """
     model = get_multimodal_model()
-    try:
-        pixel_values, waveform_tensor, _, _ = _preprocess_multimodal(clip_path)
-    except RuntimeError:
-        return None
+    prepared = _prepare_uploaded_video(clip_path)
 
-    with torch.no_grad():
-        logits = model(pixel_values=pixel_values, input_values=waveform_tensor)
-    probs = torch.softmax(logits, dim=-1)[0]
-    fake_prob = probs[1].item()
+    if prepared is not None:
+        try:
+            waveform_np, _ = _load_audio(clip_path)
+        except Exception:  # noqa: BLE001
+            return None
+        fake_prob = max(_multimodal_chunked_fake_probs(model, prepared, waveform_np), default=0.0)
+    else:
+        try:
+            pixel_values, waveform_tensor, _, _ = _preprocess_multimodal(clip_path)
+        except RuntimeError:
+            return None
+        with torch.no_grad():
+            logits = model(pixel_values=pixel_values, input_values=waveform_tensor)
+        fake_prob = torch.softmax(logits, dim=-1)[0, 1].item()
+
     verdict: Literal["FAKE", "REAL"] = "FAKE" if fake_prob > 0.5 else "REAL"
     confidence = fake_prob if verdict == "FAKE" else 1.0 - fake_prob
     return verdict, confidence
@@ -3444,11 +3565,13 @@ def run_multimodal_adversarial_batch(
     """Run a multimodal white-box attack and return verdict, confidence, shift.
 
     Multimodal counterpart to :func:`run_adversarial_batch`, intended for
-    ``scripts/eval_adversarial_sweep.py --multimodal``.  Jointly perturbs video
-    and/or audio via :func:`_pgd_attack_multimodal` and reports a *combined*
-    attention-shift intensity: the mean absolute change in video region scores
-    AND the three audio frequency-band scores between the clean and adversarial
-    forward passes.
+    ``scripts/eval_adversarial_sweep.py --multimodal``.  Attacks the most-fake fused
+    chunk (the one determining the whole-clip max-pool baseline) and re-max-pools its
+    adversarial prob with the other chunks' clean probs, so baseline and adversarial
+    share the video-level granularity (plan P0).  Jointly perturbs video and/or audio
+    via :func:`_pgd_attack_multimodal` and reports a *combined* attention-shift
+    intensity: the mean absolute change in video region scores AND the three audio
+    frequency-band scores between the clean and adversarial forward passes.
 
     Args:
         clip_path:         Path to the MP4 clip.
@@ -3467,13 +3590,33 @@ def run_multimodal_adversarial_batch(
         RuntimeError:       If audio extraction fails.
     """
     model = get_multimodal_model()
-    pixel_values, waveform_tensor, waveform_np, sample_rate = _preprocess_multimodal(clip_path)
+    prepared = _prepare_uploaded_video(clip_path)
 
-    # ── Clean forward pass ────────────────────────────────────────────────────
-    with torch.no_grad():
-        clean_logits = model(pixel_values=pixel_values, input_values=waveform_tensor)
-    clean_probs = torch.softmax(clean_logits, dim=-1)[0]
-    clean_fake_prob = clean_probs[1].item()
+    # ── Select the fused chunk to attack (argmax-fake = max-pool baseline chunk) ─
+    if prepared is not None:
+        try:
+            full_waveform_np, sample_rate = _load_audio(clip_path)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Audio extraction failed for {clip_path.name}: {exc}") from exc
+        clean_fake_probs = _multimodal_chunked_fake_probs(model, prepared, full_waveform_np)
+        attacked_pos = int(np.argmax(clean_fake_probs))
+        chunk_idx = prepared.chunk_indices[attacked_pos]
+        pixel_values = prepared.chunks[attacked_pos].unsqueeze(0).to(_device)
+        waveform_np = _aligned_audio_window(full_waveform_np, chunk_idx)
+        waveform_tensor = _zscore_audio_tensor(waveform_np)
+        clean_fake_prob = clean_fake_probs[attacked_pos]
+    else:
+        log.warning(
+            "No face detected in %s — attacking the full-frame fallback chunk; the input is out-of-distribution.",
+            clip_path.name,
+        )
+        pixel_values, waveform_tensor, waveform_np, sample_rate = _preprocess_multimodal(clip_path)
+        with torch.no_grad():
+            clean_logits = model(pixel_values=pixel_values, input_values=waveform_tensor)
+        clean_fake_prob = torch.softmax(clean_logits, dim=-1)[0, 1].item()
+        clean_fake_probs = [clean_fake_prob]
+        attacked_pos = 0
+
     clean_verdict: Literal["FAKE", "REAL"] = "FAKE" if clean_fake_prob > 0.5 else "REAL"
     target_class = 1 if clean_verdict == "FAKE" else 0
 
@@ -3499,13 +3642,13 @@ def run_multimodal_adversarial_batch(
         attack_modalities,
     )
 
-    # ── Adversarial forward pass ──────────────────────────────────────────────
+    # ── Adversarial forward pass + video-level re-max-pool ────────────────────
     with torch.no_grad():
         adv_logits = model(pixel_values=adv_pv, input_values=adv_iv)
-    adv_probs = torch.softmax(adv_logits, dim=-1)[0]
-    adv_fake_prob = adv_probs[1].item()
+    attacked_adv_prob = torch.softmax(adv_logits, dim=-1)[0, 1].item()
+    adv_fake_prob = _remax_pool(clean_fake_probs, attacked_pos, attacked_adv_prob)
     adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
-    adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else adv_probs[0].item()
+    adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
 
     # ── Adversarial LRP ───────────────────────────────────────────────────────
     adv_waveform_np = adv_iv.squeeze(0).detach().cpu().numpy()
