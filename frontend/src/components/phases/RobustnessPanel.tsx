@@ -13,6 +13,7 @@ import { runRobustnessTest } from '../../api/client'
 import { useErrorToast } from '../../context/ErrorToastContext'
 import type { AnalysisResult, Phase3Result } from '../../types/analysis'
 import { AttentionShiftTable } from '../shared/AttentionShiftTable'
+import { RegionToggle } from '../shared/RegionToggle'
 import { AudioFrequencyShift } from '../shared/AudioFrequencyShift'
 import { CropComparisonPlayer } from './CropComparisonPlayer'
 
@@ -282,6 +283,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
   const [audioBitrate, setAudioBitrate] = useState(64)
   const [useMultimodal, setUseMultimodal] = useState(false)
   const [phase3, setPhase3] = useState<Phase3Result | null>(null)
+  const [showRegions, setShowRegions] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
 
   const { showError } = useErrorToast()
@@ -646,6 +648,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                     videoUrl: phase3.cleanVideoUrl,
                     heatmapFrames: phase3.cleanHeatmapFrames,
                     accent: '#2a2f42',
+                    regionFrames: phase3.regionMaskFrames,
                   }}
                   right={{
                     label: 'DEGRADED',
@@ -653,6 +656,14 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                     heatmapFrames: phase3.degradedHeatmapFrames,
                     accent: '#4d5470',
                   }}
+                  showRegions={showRegions}
+                />
+
+                {/* Region overlay toggle (below the opacity slider, above the shift) */}
+                <RegionToggle
+                  checked={showRegions}
+                  onChange={setShowRegions}
+                  visible={!!phase3.regionMaskFrames && phase3.regionMaskFrames.length > 0}
                 />
 
                 {/* Attention shift */}

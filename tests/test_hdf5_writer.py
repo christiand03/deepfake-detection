@@ -12,7 +12,7 @@ import h5py
 import numpy as np
 import pytest
 
-from src.data_processing.hdf5_writer import ChunkMetadata, H5Writer
+from src.data_processing.hdf5_writer import _NUM_LANDMARKS, ChunkMetadata, H5Writer
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -73,6 +73,39 @@ class TestH5Writer:
         with h5py.File(h5_path, "r") as f:
             assert f["video"].shape == (1, *_VIDEO_SHAPE)
             assert f["video"].dtype == np.uint8
+
+    def test_landmarks_round_trip(self, tmp_path: Path) -> None:
+        """landmarks (I4) are stored as a (N, 16, L, 2) int16 dataset."""
+        h5_path = tmp_path / "train.h5"
+        csv_path = tmp_path / "metadata.csv"
+        lm = np.arange(16 * _NUM_LANDMARKS * 2, dtype=np.int16).reshape(16, _NUM_LANDMARKS, 2)
+        with H5Writer(h5_path, csv_path) as writer:
+            writer.write_chunk(_make_video(), _make_audio(), _make_metadata(), landmarks=lm)
+
+        with h5py.File(h5_path, "r") as f:
+            assert f["landmarks"].shape == (1, 16, _NUM_LANDMARKS, 2)
+            assert f["landmarks"].dtype == np.int16
+            np.testing.assert_array_equal(f["landmarks"][0], lm)
+
+    def test_landmarks_absent_when_not_provided(self, tmp_path: Path) -> None:
+        """Legacy path: no landmarks arg → no dataset (readers fall back)."""
+        h5_path = tmp_path / "train.h5"
+        csv_path = tmp_path / "metadata.csv"
+        with H5Writer(h5_path, csv_path) as writer:
+            writer.write_chunk(_make_video(), _make_audio(), _make_metadata())
+
+        with h5py.File(h5_path, "r") as f:
+            assert "landmarks" not in f
+
+    def test_landmark_mode_mismatch_raises(self, tmp_path: Path) -> None:
+        """Mixing landmarks/no-landmarks writes in one file is rejected."""
+        h5_path = tmp_path / "train.h5"
+        csv_path = tmp_path / "metadata.csv"
+        lm = np.zeros((16, _NUM_LANDMARKS, 2), dtype=np.int16)
+        with H5Writer(h5_path, csv_path) as writer:
+            writer.write_chunk(_make_video(), _make_audio(), _make_metadata(chunk_id="c0"), landmarks=lm)
+            with pytest.raises(ValueError, match="Landmark mode mismatch"):
+                writer.write_chunk(_make_video(), _make_audio(), _make_metadata(chunk_id="c1"))
 
     def test_write_single_chunk_audio_shape(self, tmp_path: Path) -> None:
         h5_path = tmp_path / "train.h5"

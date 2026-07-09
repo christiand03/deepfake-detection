@@ -144,12 +144,30 @@ class Phase3ResultSchema(BaseModel):
     params: Phase3ParamsSchema
     attentionShift: list[AttentionShiftSchema]
     audioRobustness: AudioRobustnessSchema | None = None
+    # Per-frame CLEAN-crop region-partition overlay (I4 debug view): one PNG data
+    # URI per frame (tan-tinted facial regions + borders + labels), aligned to the
+    # clean player's frames. Empty on the face-less fallback / pre-regen cache.
+    regionMaskFrames: list[str] = []
 
 
 class AttentionShiftSchema(BaseModel):
+    """Bivariate per-region/-band attention shift for Phase 3/4 (roadmap I4).
+
+    Carries BOTH AttnLRP channels before and after the perturbation so the
+    frontend can encode magnitude change (bar length/side) and verdict/direction
+    change (colour) in one mark:
+
+    * ``magnitudeBefore`` / ``magnitudeAfter`` — relevance magnitude
+      (``|R_fake|+|R_real|`` ≥ 0); the region's attention share.
+    * ``directionBefore`` / ``directionAfter`` — signed contrastive direction
+      (``R_fake − R_real``); the region's fake/real verdict lean.
+    """
+
     region: str
-    before: float
-    after: float
+    magnitudeBefore: float
+    magnitudeAfter: float
+    directionBefore: float
+    directionAfter: float
 
 
 class Phase4ResultSchema(BaseModel):
@@ -179,6 +197,10 @@ class Phase4ResultSchema(BaseModel):
     # panel's model toggle.
     cleanVerdict: Literal["FAKE", "REAL"]
     cleanConfidence: float
+    # Per-frame CLEAN-crop region-partition overlay (I4 debug view): one PNG data
+    # URI per frame (tan-tinted facial regions + borders + labels), aligned to the
+    # clean player's frames. Empty on the face-less fallback / pre-regen cache.
+    regionMaskFrames: list[str] = []
 
 
 class CropBoxSchema(BaseModel):

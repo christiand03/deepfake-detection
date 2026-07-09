@@ -285,7 +285,7 @@ def _extract_video_chunks(
     row: object,
     cfg: DictConfig,
     extractor: FaceExtractor,
-) -> tuple[list[tuple[np.ndarray, np.ndarray, ChunkMetadata]], int, bool]:
+) -> tuple[list[tuple[np.ndarray, np.ndarray, ChunkMetadata, np.ndarray]], int, bool]:
     """Normalise, chunk, and face-crop a single video WITHOUT writing.
 
     Pure computation shared by the sequential path (:func:`_process_video`)
@@ -301,7 +301,9 @@ def _extract_video_chunks(
 
     Returns:
         ``(chunks, n_skipped_noface, failed)`` where ``chunks`` is a list of
-        ``(cropped_frames, audio_chunk, metadata)`` triples in temporal order.
+        ``(cropped_frames, audio_chunk, metadata, landmarks)`` tuples in
+        temporal order (``landmarks`` are per-frame FaceMesh points in crop
+        space, the source for the region partition, roadmap I4).
         ``failed`` is ``True`` only for unrecoverable errors (crash, not
         "no faces") so the caller can distinguish broken inputs from
         face-less ones.
@@ -366,7 +368,7 @@ def _extract_video_chunks(
             log.warning("Video too short for even one audio chunk, skipping: %s", video_id)
             return [], 0, False
 
-        chunks: list[tuple[np.ndarray, np.ndarray, ChunkMetadata]] = []
+        chunks: list[tuple[np.ndarray, np.ndarray, ChunkMetadata, np.ndarray]] = []
         n_skipped_noface = 0
         num_frames: int = cfg.preprocessing.num_frames
         chunk_duration = num_frames / cfg.preprocessing.target_fps
@@ -381,7 +383,7 @@ def _extract_video_chunks(
                 log.debug("No face in chunk %d of %s — skipping", chunk_idx, video_id)
                 continue
 
-            cropped, (cx1, cy1, cx2, cy2, ow, oh) = result
+            cropped, (cx1, cy1, cx2, cy2, ow, oh), landmarks = result
 
             audio_start = chunk_idx * audio_samples_per_chunk
             audio_chunk = audio[audio_start : audio_start + audio_samples_per_chunk].astype(np.float32)
@@ -415,7 +417,7 @@ def _extract_video_chunks(
                 orig_w=ow,
                 orig_h=oh,
             )
-            chunks.append((cropped, audio_chunk, metadata))
+            chunks.append((cropped, audio_chunk, metadata, landmarks))
 
         return chunks, n_skipped_noface, False
 
@@ -452,8 +454,8 @@ def _process_video(
         return 0, 0, False
 
     chunks, n_skipped_noface, failed = _extract_video_chunks(row, cfg, extractor)
-    for cropped, audio_chunk, metadata in chunks:
-        writers[metadata.split].write_chunk(cropped, audio_chunk, metadata)
+    for cropped, audio_chunk, metadata, landmarks in chunks:
+        writers[metadata.split].write_chunk(cropped, audio_chunk, metadata, landmarks)
     return len(chunks), n_skipped_noface, failed
 
 
@@ -488,7 +490,7 @@ def _make_face_extractor(cfg: DictConfig) -> FaceExtractor:
 
 def _extract_video_chunks_worker(
     row_dict: dict,
-) -> tuple[str, list[tuple[np.ndarray, np.ndarray, ChunkMetadata]], int, bool]:
+) -> tuple[str, list[tuple[np.ndarray, np.ndarray, ChunkMetadata, np.ndarray]], int, bool]:
     """Run :func:`_extract_video_chunks` inside a pool worker.
 
     Takes a plain dict (``itertuples`` rows are dynamically created namedtuples
@@ -614,8 +616,8 @@ def preprocess(cfg: DictConfig) -> None:
             with ProcessPoolExecutor(max_workers=num_workers, initializer=_init_worker, initargs=(cfg,)) as pool:
                 results = pool.map(_extract_video_chunks_worker, pending, chunksize=1)
                 for modify_type, chunks, n_skipped, failed in tqdm(results, total=len(pending), desc="Videos"):
-                    for cropped, audio_chunk, metadata in chunks:
-                        writers[metadata.split].write_chunk(cropped, audio_chunk, metadata)
+                    for cropped, audio_chunk, metadata, landmarks in chunks:
+                        writers[metadata.split].write_chunk(cropped, audio_chunk, metadata, landmarks)
                     total_written += len(chunks)
                     total_skipped_noface += n_skipped
                     n_failed_videos += int(failed)

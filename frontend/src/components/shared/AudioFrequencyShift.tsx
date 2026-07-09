@@ -17,25 +17,20 @@ export function AudioFrequencyShift({ audio }: { audio: AudioRobustness }) {
   const confUp = confDelta > 0
   const confColor = confUp ? '#ef4444' : '#3b82f6'
 
-  // Map the three frequency bands to AttentionShift rows.
-  // Math.abs() is used so bar widths are always positive regardless of sign
-  // (band sign encodes fake/real direction; magnitude captures detection strength).
+  // Map the three frequency bands to bivariate AttentionShift rows (I4). The band
+  // values are SIGNED (they encode fake/real direction), so magnitude = |value|
+  // (detection strength / attention share) and direction = value (verdict lean).
+  const band = (base: number, degraded: number, region: string): AttentionShift => ({
+    region,
+    magnitudeBefore: Math.abs(base),
+    magnitudeAfter: Math.abs(degraded),
+    directionBefore: base,
+    directionAfter: degraded,
+  })
   const shifts: AttentionShift[] = [
-    {
-      region: 'Low',
-      before: Math.abs(audio.baseFrequencyBands.low),
-      after: Math.abs(audio.degradedFrequencyBands.low),
-    },
-    {
-      region: 'Mid',
-      before: Math.abs(audio.baseFrequencyBands.mid),
-      after: Math.abs(audio.degradedFrequencyBands.mid),
-    },
-    {
-      region: 'High',
-      before: Math.abs(audio.baseFrequencyBands.high),
-      after: Math.abs(audio.degradedFrequencyBands.high),
-    },
+    band(audio.baseFrequencyBands.low, audio.degradedFrequencyBands.low, 'Low'),
+    band(audio.baseFrequencyBands.mid, audio.degradedFrequencyBands.mid, 'Mid'),
+    band(audio.baseFrequencyBands.high, audio.degradedFrequencyBands.high, 'High'),
   ]
 
   return (

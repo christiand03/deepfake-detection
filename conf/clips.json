@@ -58,29 +58,5 @@
     "duration": 14.96,
     "fps": 25.0,
     "hasAudio": true
-  },
-  {
-    "id": "clip_06",
-    "label": "FAKE",
-    "title": "SWANDF — 4 00001 to 00006",
-    "videoSrc": "/clips/SWANDF__4_00001_to_00006.mp4",
-    "posterSrc": "",
-    "videoPath": "data/normalized/SWANDF__4_00001_to_00006.mp4",
-    "h5ChunkId": "SWANDF__4_00001_to_00006__chunk00000",
-    "duration": 13.36,
-    "fps": 25.0,
-    "hasAudio": true
-  },
-  {
-    "id": "clip_07",
-    "label": "FAKE",
-    "title": "SWANDF — 4 00021 to 00022",
-    "videoSrc": "/clips/SWANDF__4_00021_to_00022.mp4",
-    "posterSrc": "",
-    "videoPath": "data/normalized/SWANDF__4_00021_to_00022.mp4",
-    "h5ChunkId": "SWANDF__4_00021_to_00022__chunk00000",
-    "duration": 8.32,
-    "fps": 25.0,
-    "hasAudio": true
   }
 ]

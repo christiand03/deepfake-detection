@@ -17,12 +17,16 @@ import src.api.inference as inf
 from src.api.inference import (
     AUDIO_SAMPLES_PER_CHUNK,
     NUM_FRAMES,
+    _bivariate_attention_shift,
     _chunked_fake_probs,
     _compute_frequency_bands,
     _ensure_target_fps,
+    _extract_anomaly_regions,
+    _extract_region_bivariate,
     _normalize_uint8_frames,
     _per_chunk_relevance,
     _prepare_uploaded_video,
+    _resolve_per_frame_landmarks,
     _resolve_per_window_boxes,
     _windowed_audio_fake_prob,
 )
@@ -38,6 +42,11 @@ def _patch_probe(fps: float):
 def _make_chunk(value: int = 128) -> np.ndarray:
     """A constant uint8 face chunk in the FaceExtractor output format."""
     return np.full((NUM_FRAMES, 3, 224, 224), value, dtype=np.uint8)
+
+
+def _make_landmarks() -> np.ndarray:
+    """A per-frame landmark array in FaceExtractor's (16, 468, 2) crop-space format."""
+    return np.full((NUM_FRAMES, 468, 2), 112, dtype=np.int16)
 
 
 class _SequenceModel:
@@ -115,8 +124,13 @@ def test_ensure_target_fps_offfps_reencodes_once_and_caches(tmp_path: Path):
 
 
 def _patched_prepare(clip: Path, extractor_results: list):
-    """Run _prepare_uploaded_video with all external boundaries mocked."""
-    extractor = MagicMock(side_effect=extractor_results)
+    """Run _prepare_uploaded_video with all external boundaries mocked.
+
+    Accepts legacy 2-tuple ``(chunk, bbox6)`` results and auto-appends a valid
+    landmark array (roadmap I4) so existing test data stays terse.
+    """
+    norm_results = [r if (r is None or len(r) == 3) else (r[0], r[1], _make_landmarks()) for r in extractor_results]
+    extractor = MagicMock(side_effect=norm_results)
     raw_chunks = [np.zeros((NUM_FRAMES, 64, 64, 3), dtype=np.uint8)] * len(extractor_results)
     with (
         patch("src.api.inference._ensure_target_fps", side_effect=lambda p: p),
@@ -172,6 +186,102 @@ def test_resolve_per_window_boxes_gap_fill():
     # Leading gap (window 0 face-less) falls back to the averaged box.
     boxes_lead = _resolve_per_window_boxes(3, {2: box2}, fallback)
     assert boxes_lead == [fallback, fallback, box2]
+
+
+# ── Region boxes / anomaly regions (I4) ───────────────────────────────────────
+
+
+def test_prepare_uploaded_video_keeps_per_window_landmarks(tmp_path: Path):
+    clip = tmp_path / "clip.mp4"
+    lm0, lm1 = _make_landmarks(), _make_landmarks()
+    results = [
+        (_make_chunk(100), (10, 20, 110, 120, 640, 360), lm0),
+        (_make_chunk(150), (14, 24, 114, 124, 640, 360), lm1),
+    ]
+    prepared = _patched_prepare(clip, results)
+
+    assert prepared is not None
+    assert set(prepared.chunk_landmarks) == {0, 1}
+    assert prepared.chunk_landmarks[0].shape == (NUM_FRAMES, 468, 2)
+    np.testing.assert_array_equal(prepared.chunk_landmarks[1], lm1)
+
+
+def test_resolve_per_frame_landmarks_gap_fill_and_alignment():
+    lm0 = np.full((NUM_FRAMES, 468, 2), 10, dtype=np.int16)
+    lm2 = np.full((NUM_FRAMES, 468, 2), 20, dtype=np.int16)
+    # 3 windows (48 frames): window 0 known, window 1 gap (carry lm0), window 2 known.
+    out = _resolve_per_frame_landmarks(3 * NUM_FRAMES, {0: lm0, 2: lm2})
+    assert out is not None
+    assert out.shape == (3 * NUM_FRAMES, 468, 2)
+    np.testing.assert_array_equal(out[0], lm0[0])  # window 0
+    np.testing.assert_array_equal(out[NUM_FRAMES], lm0[0])  # window 1 gap-filled
+    np.testing.assert_array_equal(out[2 * NUM_FRAMES], lm2[0])  # window 2
+    # No landmarks at all → None (callers use the geometric fallback).
+    assert _resolve_per_frame_landmarks(NUM_FRAMES, {}) is None
+
+
+def _label_map_hot_at(region: str, box: tuple[int, int, int, int]) -> np.ndarray:
+    """(1, 224, 224) partition label map: *box* labelled *region*, rest background."""
+    from src.data_processing.face_extractor import REGION_NAMES
+
+    lab = np.full((1, 224, 224), -1, dtype=np.int8)
+    x1, y1, x2, y2 = box
+    lab[0, y1:y2, x1:x2] = REGION_NAMES.index(region)
+    return lab
+
+
+def test_extract_anomaly_regions_over_partition():
+    heatmap = np.zeros((1, 224, 224), dtype=np.float32)
+    heatmap[0, 100:120, 100:120] = 1.0
+    labels = _label_map_hot_at("Mouth", (100, 100, 120, 120))
+    regions = _extract_anomaly_regions(heatmap, labels)
+    assert regions[0]["region"] == "Mouth"
+    assert regions[0]["score"] > 0.9  # noqa: PLR2004
+
+
+def test_extract_anomaly_regions_geometric_fallback_when_no_partition():
+    heatmap = np.zeros((1, 224, 224), dtype=np.float32)
+    heatmap[0, :56, 56:168] = 1.0  # top-centre → geometric "Forehead"
+    regions = _extract_anomaly_regions(heatmap)  # no label_maps → fallback
+    assert regions[0]["region"] == "Forehead"
+
+
+def test_extract_region_bivariate_over_partition():
+    from src.data_processing.face_extractor import REGION_NAMES
+
+    # Magnitude hot + direction NEGATIVE (real-leaning) inside the Mouth partition.
+    magnitude = np.zeros((1, 224, 224), dtype=np.float32)
+    direction = np.zeros((1, 224, 224), dtype=np.float32)
+    magnitude[0, 100:120, 100:120] = 1.0
+    direction[0, 100:120, 100:120] = -0.8
+    labels = _label_map_hot_at("Mouth", (100, 100, 120, 120))
+    out = _extract_region_bivariate(magnitude, direction, labels)
+    by = {r["region"]: r for r in out}
+    assert set(by) == set(REGION_NAMES)
+    assert by["Mouth"]["magnitude"] > 0.9  # noqa: PLR2004
+    assert by["Mouth"]["direction"] < -0.7  # signed direction preserved  # noqa: PLR2004
+    # A region absent from the partition stays exactly zero (no overlap/leak).
+    cold = next(n for n in REGION_NAMES if n != "Mouth")
+    assert by[cold]["magnitude"] == 0.0
+
+
+def test_bivariate_attention_shift_pairs_by_region():
+    clean = [{"region": "Mouth", "magnitude": 0.20, "direction": 0.10}]
+    perturbed = [{"region": "Mouth", "magnitude": 0.50, "direction": -0.30}]
+    shift = _bivariate_attention_shift(clean, perturbed)
+    assert shift == [
+        {
+            "region": "Mouth",
+            "magnitudeBefore": 0.20,
+            "magnitudeAfter": 0.50,
+            "directionBefore": 0.10,
+            "directionAfter": -0.30,
+        }
+    ]
+    # A region absent from the clean side defaults its "before" to 0.
+    only_adv = _bivariate_attention_shift([], perturbed)
+    assert only_adv[0]["magnitudeBefore"] == 0.0
+    assert only_adv[0]["directionBefore"] == 0.0
 
 
 def test_prepare_uploaded_video_all_faceless_returns_none(tmp_path: Path):

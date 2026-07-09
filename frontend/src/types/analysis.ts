@@ -111,8 +111,13 @@ export interface AudioAnalysis {
 
 export interface AttentionShift {
   region: string
-  before: number
-  after: number
+  // Bivariate LRP before/after (roadmap I4): magnitude = relevance/attention
+  // share (|R_fake|+|R_real|); direction = signed verdict lean (R_fake−R_real,
+  // + fake-supporting, − real-supporting).
+  magnitudeBefore: number
+  magnitudeAfter: number
+  directionBefore: number
+  directionAfter: number
 }
 
 export interface AudioRobustness {
@@ -147,6 +152,12 @@ export interface Phase3Result {
   }
   attentionShift: AttentionShift[]
   audioRobustness?: AudioRobustness
+  /**
+   * Per-frame CLEAN-crop region-partition overlay (I4 debug view): one PNG data
+   * URI per frame (tan-tinted facial regions + borders + labels), aligned to the
+   * clean player's frames. Empty on the face-less fallback / pre-regen cache.
+   */
+  regionMaskFrames?: string[]
 }
 
 export interface Phase4Result {
@@ -173,6 +184,8 @@ export interface Phase4Result {
    */
   cleanVerdict: 'FAKE' | 'REAL'
   cleanConfidence: number
+  /** Per-frame CLEAN-crop region-partition overlay PNGs (data URIs, I4 debug). */
+  regionMaskFrames?: string[]
 }
 
 export interface CropBox {

@@ -13,7 +13,7 @@
  * video's frame count, so currentTime/duration maps to an index).
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 interface CropPlayerSide {
   label: string
@@ -23,52 +23,88 @@ interface CropPlayerSide {
   heatmapFrames: string[]
   /** Border accent colour for the player. */
   accent: string
+  /**
+   * Pre-rendered per-frame region-partition PNGs (data URIs), one per frame (I4
+   * debug overlay). Only the left/clean side supplies these; when "show regions"
+   * is on they replace the heatmap layer (crop-space, swapped in like heatmaps).
+   */
+  regionFrames?: string[] | null
 }
 
 interface CropComparisonPlayerProps {
   title: string
   left: CropPlayerSide
   right: CropPlayerSide
+  /** When true, hide the heatmaps and draw the left side's region overlay (I4). */
+  showRegions?: boolean
 }
 
 function CropPlayer({
   side,
   videoOpacity,
-  videoRef,
+  registerVideo,
+  showRegions,
 }: {
   side: CropPlayerSide
   videoOpacity: number
-  videoRef: React.RefObject<HTMLVideoElement | null>
+  /** Called with the <video> element when it (re)mounts, so the parent can bind
+   *  the two-player sync to the live node (and null on unmount). */
+  registerVideo: (el: HTMLVideoElement | null) => void
+  showRegions: boolean
 }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  // Callback ref: keep the local ref (for the overlay rAF) AND notify the parent
+  // so its sync effect always re-binds to the current node.
+  const setVideoEl = useCallback(
+    (el: HTMLVideoElement | null) => {
+      videoRef.current = el
+      registerVideo(el)
+    },
+    [registerVideo],
+  )
   const imgRef = useRef<HTMLImageElement>(null)
   const lastIdx = useRef(-1)
 
-  // Sync the heatmap frame to the video position via rAF (no React re-render per
+  // Overlay layer content:
+  //   • "show regions" on  → this side's region-partition PNGs, or NOTHING when it
+  //     has none (e.g. the right/degraded player, so no stray heatmap leaks in);
+  //   • "show regions" off → the AttnLRP heatmap (normal mode, both players).
+  // Same per-frame img.src swap either way; the video lockstep sync is unaffected.
+  const overlayFrames = useMemo(
+    () =>
+      showRegions
+        ? side.regionFrames && side.regionFrames.length > 0
+          ? side.regionFrames
+          : []
+        : side.heatmapFrames,
+    [showRegions, side.regionFrames, side.heatmapFrames],
+  )
+
+  // Sync the overlay frame to the video position via rAF (no React re-render per
   // frame). Imperative img.src swap mirrors HeatmapCanvas.
   useEffect(() => {
     lastIdx.current = -1
     const video = videoRef.current
     const img = imgRef.current
-    const frames = side.heatmapFrames
-    if (!video || !img || frames.length === 0) return
+    if (!video || !img || overlayFrames.length === 0) return
     let raf = 0
     const tick = () => {
       const d = video.duration
       if (d && Number.isFinite(d) && d > 0) {
         const idx = Math.min(
-          frames.length - 1,
-          Math.max(0, Math.round((video.currentTime / d) * (frames.length - 1))),
+          overlayFrames.length - 1,
+          Math.max(0, Math.round((video.currentTime / d) * (overlayFrames.length - 1))),
         )
         if (idx !== lastIdx.current) {
           lastIdx.current = idx
-          img.src = frames[idx]
+          img.src = overlayFrames[idx]
         }
       }
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [side.heatmapFrames, videoRef])
+  }, [overlayFrames, videoRef])
 
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
@@ -85,7 +121,7 @@ function CropPlayer({
       >
         {side.videoUrl ? (
           <video
-            ref={videoRef}
+            ref={setVideoEl}
             src={side.videoUrl}
             controls
             loop
@@ -119,19 +155,21 @@ function CropPlayer({
             video unavailable
           </div>
         )}
-        <img
-          ref={imgRef}
-          src={side.heatmapFrames[0] ?? undefined}
-          alt=""
-          style={{
-            position: 'absolute',
-            inset: 0,
-            width: '100%',
-            height: '100%',
-            objectFit: 'contain',
-            pointerEvents: 'none',
-          }}
-        />
+        {overlayFrames.length > 0 && (
+          <img
+            ref={imgRef}
+            src={overlayFrames[0]}
+            alt=""
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              pointerEvents: 'none',
+            }}
+          />
+        )}
       </div>
       <div
         style={{
@@ -150,18 +188,22 @@ function CropPlayer({
   )
 }
 
-export function CropComparisonPlayer({ title, left, right }: CropComparisonPlayerProps) {
+export function CropComparisonPlayer({ title, left, right, showRegions = false }: CropComparisonPlayerProps) {
   const [videoOpacity, setVideoOpacity] = useState(1)
-  const leftVideoRef = useRef<HTMLVideoElement | null>(null)
-  const rightVideoRef = useRef<HTMLVideoElement | null>(null)
+  // The actual <video> elements, set via callback refs. Using STATE (not refs)
+  // means the sync effect below re-runs and re-binds whenever a node (re)mounts —
+  // so play/pause/seek stay locked even if the player's DOM changes (e.g. the
+  // region-overlay toggle). Normal heatmap mode is unchanged.
+  const [leftVid, setLeftVid] = useState<HTMLVideoElement | null>(null)
+  const [rightVid, setRightVid] = useState<HTMLVideoElement | null>(null)
 
   // Keep both players in lockstep so the before/after comparison is always
   // frame-aligned: play / pause / seek / rate on EITHER video is mirrored to the
   // other, and the left video drives a light drift correction during playback.
   // A single re-entrancy guard prevents the mirrored events from looping back.
   useEffect(() => {
-    const a = leftVideoRef.current
-    const b = rightVideoRef.current
+    const a = leftVid
+    const b = rightVid
     if (!a || !b) return
     let syncing = false
 
@@ -219,7 +261,7 @@ export function CropComparisonPlayer({ title, left, right }: CropComparisonPlaye
       unbindAB()
       unbindBA()
     }
-  }, [left.videoUrl, right.videoUrl])
+  }, [leftVid, rightVid])
 
   return (
     <div>
@@ -245,8 +287,8 @@ export function CropComparisonPlayer({ title, left, right }: CropComparisonPlaye
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <CropPlayer side={left} videoOpacity={videoOpacity} videoRef={leftVideoRef} />
-        <CropPlayer side={right} videoOpacity={videoOpacity} videoRef={rightVideoRef} />
+        <CropPlayer side={left} videoOpacity={videoOpacity} registerVideo={setLeftVid} showRegions={showRegions} />
+        <CropPlayer side={right} videoOpacity={videoOpacity} registerVideo={setRightVid} showRegions={showRegions} />
       </div>
 
       {/* Video-opacity slider — fades the footage out to reveal the heatmaps. */}

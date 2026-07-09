@@ -11,8 +11,10 @@ import numpy as np
 import pytest
 
 from src.data_processing.face_extractor import (
+    NUM_LANDMARKS,
     FaceExtractor,
     _landmarks_to_bbox,
+    _landmarks_to_crop,
     _scale_bbox,
     iter_video_chunks,
 )
@@ -38,6 +40,16 @@ def _fake_bbox(x1: int = 10, y1: int = 8, x2: int = 50, y2: int = 55) -> tuple[i
     return x1, y1, x2, y2
 
 
+def _full_landmarks(x: float = 0.5, y: float = 0.5, n: int = 478) -> list:
+    """Fake NormalizedLandmark list large enough for the region index groups."""
+    return [MagicMock(x=x, y=y) for _ in range(n)]
+
+
+def _detected(bbox: tuple[int, int, int, int], **lm_kwargs: float) -> tuple:
+    """`_detect_bbox` return value: (bbox, landmarks) since roadmap I4."""
+    return bbox, _full_landmarks(**lm_kwargs)
+
+
 # ── _landmarks_to_bbox ────────────────────────────────────────────────────────
 
 
@@ -56,6 +68,27 @@ class TestLandmarksToBbox:
         x1, y1, x2, y2 = _landmarks_to_bbox(lm, img_h=100, img_w=100)
         assert x1 == x2 == 50
         assert y1 == y2 == 50
+
+
+# ── _region_boxes_from_landmarks (I4) ─────────────────────────────────────────
+
+
+class TestLandmarksToCrop:
+    def test_maps_into_crop_space(self) -> None:
+        """Landmarks are projected into target_size crop space (roadmap I4)."""
+        landmarks = _full_landmarks(x=0.3, y=0.6)  # normalised on the full frame
+        # Full-frame crop (0,0,100,100) → x = 0.3*100/100*224 = 67.2 → 67, y = 134.
+        pts = _landmarks_to_crop(landmarks, 0, 0, 100, 100, 100, 100, 224)
+        assert pts.shape == (NUM_LANDMARKS, 2)
+        assert pts.dtype == np.int16
+        assert (pts[:, 0] == 67).all()  # noqa: PLR2004
+        assert (pts[:, 1] == 134).all()  # noqa: PLR2004
+
+    def test_offcrop_points_kept_raw(self) -> None:
+        """Off-crop points are kept raw (may exceed the crop; the partition clamps)."""
+        landmarks = _full_landmarks(x=1.5, y=0.5)  # x beyond the crop → 336
+        pts = _landmarks_to_crop(landmarks, 0, 0, 100, 100, 100, 100, 224)
+        assert (pts[:, 0] == 336).all()  # noqa: PLR2004
 
 
 # ── _scale_bbox ───────────────────────────────────────────────────────────────
@@ -116,26 +149,26 @@ class TestFaceExtractor:
     def test_one_failed_detection_returns_none(self) -> None:
         extractor = self._extractor_with_mock_facemesh()
         # 15 succeed, index 7 fails
-        bboxes = [_fake_bbox()] * _NUM_FRAMES
-        bboxes[7] = None
-        extractor._detect_bbox = MagicMock(side_effect=bboxes)
+        detections = [_detected(_fake_bbox())] * _NUM_FRAMES
+        detections[7] = None
+        extractor._detect_bbox = MagicMock(side_effect=detections)
         result = extractor(_DUMMY_FRAMES)
         assert result is None
 
     def test_output_shape(self) -> None:
         extractor = self._extractor_with_mock_facemesh()
-        extractor._detect_bbox = MagicMock(return_value=_fake_bbox(0, 0, _W, _H))
+        extractor._detect_bbox = MagicMock(return_value=_detected(_fake_bbox(0, 0, _W, _H)))
         result = extractor(_DUMMY_FRAMES)
         assert result is not None
-        frames, _bbox = result
+        frames, _bbox, _region_boxes = result
         assert frames.shape == (_NUM_FRAMES, 3, 224, 224)
 
     def test_output_dtype_uint8(self) -> None:
         extractor = self._extractor_with_mock_facemesh()
-        extractor._detect_bbox = MagicMock(return_value=_fake_bbox(0, 0, _W, _H))
+        extractor._detect_bbox = MagicMock(return_value=_detected(_fake_bbox(0, 0, _W, _H)))
         result = extractor(_DUMMY_FRAMES)
         assert result is not None
-        frames, _bbox = result
+        frames, _bbox, _region_boxes = result
         assert frames.dtype == np.uint8
 
     def test_wrong_input_ndim_raises(self) -> None:
@@ -201,26 +234,36 @@ class TestFaceExtractor:
     def test_output_channels_first(self) -> None:
         """Output must be (N, C, H, W), not (N, H, W, C)."""
         extractor = self._extractor_with_mock_facemesh()
-        extractor._detect_bbox = MagicMock(return_value=_fake_bbox(0, 0, _W, _H))
+        extractor._detect_bbox = MagicMock(return_value=_detected(_fake_bbox(0, 0, _W, _H)))
         result = extractor(_DUMMY_FRAMES)
         assert result is not None
-        frames, _bbox = result
+        frames, _bbox, _region_boxes = result
         # axis 1 is channels (3), not H or W
         assert frames.shape[1] == 3
 
     def test_bbox_tuple_shape_and_types(self) -> None:
         """Second return value must be a 6-tuple of ints: (x1, y1, x2, y2, orig_w, orig_h)."""
         extractor = self._extractor_with_mock_facemesh()
-        extractor._detect_bbox = MagicMock(return_value=_fake_bbox(0, 0, _W, _H))
+        extractor._detect_bbox = MagicMock(return_value=_detected(_fake_bbox(0, 0, _W, _H)))
         result = extractor(_DUMMY_FRAMES)
         assert result is not None
-        _frames, bbox = result
+        _frames, bbox, _region_boxes = result
         assert len(bbox) == 6  # noqa: PLR2004
         assert all(isinstance(v, int) for v in bbox)
         x1, y1, x2, y2, orig_w, orig_h = bbox
         assert x1 >= 0 and y1 >= 0
         assert x2 <= orig_w and y2 <= orig_h
         assert orig_w == _W and orig_h == _H
+
+    def test_landmarks_shape_and_dtype(self) -> None:
+        """Third return value: (16, NUM_LANDMARKS, 2) int16 crop-space points (I4)."""
+        extractor = self._extractor_with_mock_facemesh()
+        extractor._detect_bbox = MagicMock(return_value=_detected(_fake_bbox(0, 0, _W, _H)))
+        result = extractor(_DUMMY_FRAMES)
+        assert result is not None
+        _frames, _bbox, landmarks = result
+        assert landmarks.shape == (_NUM_FRAMES, NUM_LANDMARKS, 2)
+        assert landmarks.dtype == np.int16
 
 
 # ── iter_video_chunks ─────────────────────────────────────────────────────────
@@ -315,8 +358,10 @@ def test_full_pipeline_shape() -> None:
         for chunk in iter_video_chunks(SAMPLE_VIDEO, num_frames=16):
             result = extractor(chunk)
             if result is not None:
-                assert result.shape == (16, 3, 224, 224)
-                assert result.dtype == np.uint8
+                frames, _bbox, landmarks = result
+                assert frames.shape == (16, 3, 224, 224)
+                assert frames.dtype == np.uint8
+                assert landmarks.shape == (16, NUM_LANDMARKS, 2)
                 found_any = True
                 break  # one successful chunk is sufficient
 

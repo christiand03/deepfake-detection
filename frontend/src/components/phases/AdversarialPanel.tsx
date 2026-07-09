@@ -12,6 +12,7 @@ import { runAdversarialAttack } from '../../api/client'
 import { useErrorToast } from '../../context/ErrorToastContext'
 import type { AnalysisResult, Phase4Result } from '../../types/analysis'
 import { AttentionShiftTable } from '../shared/AttentionShiftTable'
+import { RegionToggle } from '../shared/RegionToggle'
 import { CropComparisonPlayer } from './CropComparisonPlayer'
 
 interface AdversarialPanelProps {
@@ -133,6 +134,7 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
   const [attackModalities, setAttackModalities] = useState<'video' | 'audio' | 'both'>('both')
   const [audioEpsilon, setAudioEpsilon] = useState(0.03)
   const [phase4, setPhase4] = useState<Phase4Result | null>(null)
+  const [showRegions, setShowRegions] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
 
   const { showError } = useErrorToast()
@@ -636,6 +638,7 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
                     videoUrl: phase4.cleanVideoUrl,
                     heatmapFrames: phase4.cleanHeatmapFrames,
                     accent: '#2a2f42',
+                    regionFrames: phase4.regionMaskFrames,
                   }}
                   right={{
                     label: 'ATTACKED',
@@ -643,6 +646,14 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
                     heatmapFrames: phase4.perturbedFrames,
                     accent: '#ef4444',
                   }}
+                  showRegions={showRegions}
+                />
+
+                {/* Region overlay toggle (below the opacity slider, above the shift) */}
+                <RegionToggle
+                  checked={showRegions}
+                  onChange={setShowRegions}
+                  visible={!!phase4.regionMaskFrames && phase4.regionMaskFrames.length > 0}
                 />
 
                 {/* Attention shifts */}

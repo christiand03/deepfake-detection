@@ -56,9 +56,15 @@ _FRAME_CHANNELS: int = 3
 _FRAME_HEIGHT: int = 224
 _FRAME_WIDTH: int = 224
 _AUDIO_SAMPLES: int = 10_240
+# Per-frame FaceMesh landmark points (roadmap I4): NUM_LANDMARKS × [x, y] in
+# 224-crop space (the source for the per-pixel facial-region partition). Keep
+# NUM_LANDMARKS in sync with FaceExtractor.NUM_LANDMARKS.
+_NUM_LANDMARKS: int = 468
+_LANDMARK_COORDS: int = 2
 
 _VIDEO_SHAPE: tuple[int, ...] = (_NUM_FRAMES, _FRAME_CHANNELS, _FRAME_HEIGHT, _FRAME_WIDTH)
 _AUDIO_SHAPE: tuple[int, ...] = (_AUDIO_SAMPLES,)
+_LANDMARKS_SHAPE: tuple[int, ...] = (_NUM_FRAMES, _NUM_LANDMARKS, _LANDMARK_COORDS)
 
 _CSV_FIELDNAMES: list[str] = [
     "chunk_id",
@@ -163,6 +169,7 @@ class H5Writer:
 
         self._h5: h5py.File = h5py.File(self._h5_path, mode)
         self._audio_enabled: bool | None = self._detect_audio_mode()
+        self._landmarks_enabled: bool | None = self._detect_landmark_mode()
 
         self._csv_is_new: bool = mode == "w" or not self._csv_path.exists()
         if not self._csv_is_new:
@@ -190,7 +197,13 @@ class H5Writer:
             return None  # brand-new file — mode determined on first write
         return "audio" in self._h5
 
-    def _init_datasets(self, *, with_audio: bool) -> None:
+    def _detect_landmark_mode(self) -> bool | None:
+        """Return True/False if the landmarks dataset presence is established, else None."""
+        if "video" not in self._h5:
+            return None  # brand-new file — mode determined on first write
+        return "landmarks" in self._h5
+
+    def _init_datasets(self, *, with_audio: bool, with_landmarks: bool) -> None:
         """Create all HDF5 datasets for the first chunk."""
         self._h5.create_dataset(
             "video",
@@ -208,6 +221,18 @@ class H5Writer:
                 maxshape=(None, *_AUDIO_SHAPE),
                 dtype=np.float32,
                 chunks=(1, *_AUDIO_SHAPE),
+                compression="gzip",
+                compression_opts=4,
+            )
+        if with_landmarks:
+            # Per-frame FaceMesh landmark points (roadmap I4). int16 is ample for
+            # 224-crop pixel coordinates; source of the per-pixel region partition.
+            self._h5.create_dataset(
+                "landmarks",
+                shape=(0, *_LANDMARKS_SHAPE),
+                maxshape=(None, *_LANDMARKS_SHAPE),
+                dtype=np.int16,
+                chunks=(8, *_LANDMARKS_SHAPE),
                 compression="gzip",
                 compression_opts=4,
             )
@@ -233,6 +258,7 @@ class H5Writer:
         video_frames: np.ndarray,
         audio_samples: np.ndarray | None,
         metadata: ChunkMetadata,
+        landmarks: np.ndarray | None = None,
     ) -> int:
         """Append one chunk to the HDF5 file and write one row to ``metadata.csv``.
 
@@ -242,6 +268,9 @@ class H5Writer:
             audio_samples: Aligned audio as float32 array of shape ``(10240,)``,
                            or ``None`` to omit audio storage.
             metadata:      Chunk metadata (labels, IDs, split).
+            landmarks:     Per-frame FaceMesh landmark points (roadmap I4) as an
+                           int array of shape ``(16, 468, 2)`` in 224-crop space,
+                           or ``None`` to omit them (no ``landmarks`` dataset).
 
         Returns:
             The integer row index (``h5_index``) at which the chunk was written.
@@ -249,9 +278,10 @@ class H5Writer:
         Raises:
             ValueError: If ``video_frames`` has wrong shape or dtype.
             ValueError: If ``audio_samples`` has wrong shape or dtype.
-            ValueError: If the audio mode is inconsistent with the file's
-                        existing datasets (e.g. passing ``None`` for a file
-                        that already has an audio dataset, or vice versa).
+            ValueError: If ``landmarks`` has wrong shape.
+            ValueError: If the audio or landmark mode is inconsistent with the
+                        file's existing datasets (e.g. passing ``None`` for a
+                        file that already has that dataset, or vice versa).
         """
         # ── Validate video ─────────────────────────────────────────────────────
         if video_frames.shape != _VIDEO_SHAPE:
@@ -271,14 +301,26 @@ class H5Writer:
                 msg = f"audio_samples must be float32, got {audio_samples.dtype}"
                 raise ValueError(msg)
 
-        # ── Check audio mode consistency ───────────────────────────────────────
+        # ── Validate landmarks ─────────────────────────────────────────────────
+        with_landmarks = landmarks is not None
+        if with_landmarks and landmarks.shape != _LANDMARKS_SHAPE:  # type: ignore[union-attr]
+            msg = f"landmarks must have shape {_LANDMARKS_SHAPE}, got {landmarks.shape}"  # type: ignore[union-attr]
+            raise ValueError(msg)
+
+        # ── Check audio/landmark mode consistency ──────────────────────────────
         if self._audio_enabled is None:
             self._audio_enabled = with_audio
-            self._init_datasets(with_audio=with_audio)
-        elif self._audio_enabled != with_audio:
-            expected = "non-None audio_samples" if self._audio_enabled else "audio_samples=None"
-            msg = f"Audio mode mismatch: this file was opened with {expected}"
-            raise ValueError(msg)
+            self._landmarks_enabled = with_landmarks
+            self._init_datasets(with_audio=with_audio, with_landmarks=with_landmarks)
+        else:
+            if self._audio_enabled != with_audio:
+                expected = "non-None audio_samples" if self._audio_enabled else "audio_samples=None"
+                msg = f"Audio mode mismatch: this file was opened with {expected}"
+                raise ValueError(msg)
+            if self._landmarks_enabled != with_landmarks:
+                expected = "non-None landmarks" if self._landmarks_enabled else "landmarks=None"
+                msg = f"Landmark mode mismatch: this file was opened with {expected}"
+                raise ValueError(msg)
 
         # ── Determine index and resize ─────────────────────────────────────────
         idx = self._current_length()
@@ -286,6 +328,8 @@ class H5Writer:
         self._h5["video"].resize(idx + 1, axis=0)
         if with_audio:
             self._h5["audio"].resize(idx + 1, axis=0)
+        if with_landmarks:
+            self._h5["landmarks"].resize(idx + 1, axis=0)
         for ds_name in ("label", "label_video", "label_audio"):
             self._h5[ds_name].resize(idx + 1, axis=0)
 
@@ -293,6 +337,8 @@ class H5Writer:
         self._h5["video"][idx] = video_frames
         if with_audio:
             self._h5["audio"][idx] = audio_samples
+        if with_landmarks:
+            self._h5["landmarks"][idx] = landmarks.astype(np.int16)  # type: ignore[union-attr]
         self._h5["label"][idx] = metadata.label
         self._h5["label_video"][idx] = metadata.label_video
         self._h5["label_audio"][idx] = metadata.label_audio

@@ -245,6 +245,21 @@ def _load_from_hdf5(h5_path: Path, h5_index: int) -> torch.Tensor:
     return _normalize_uint8_frames(frames_np).unsqueeze(0)  # (1, T, C, H, W)
 
 
+def _load_landmarks_from_hdf5(h5_path: Path, h5_index: int) -> np.ndarray | None:
+    """Load per-frame FaceMesh landmark points for a chunk from HDF5 (roadmap I4).
+
+    Returns the ``(T, L, 2)`` int array (crop-224 space) stored at ``h5_index`` in
+    the ``landmarks`` dataset, or ``None`` when the dataset is absent (legacy files
+    that predate the partition) so callers fall back to the geometric split.
+    """
+    import h5py
+
+    with h5py.File(h5_path, "r") as f:
+        if "landmarks" not in f:
+            return None
+        return np.asarray(f["landmarks"][h5_index])  # (T, L, 2)
+
+
 # ── Heatmap uprojection ───────────────────────────────────────────────────────
 
 
@@ -416,6 +431,9 @@ class _PreparedClip:
     chunk_indices: list[int]  # temporal index of each kept chunk in the 25-fps video
     crop_box: tuple[int, int, int, int]  # per-chunk boxes averaged — display fallback
     chunk_box_map: dict[int, tuple[int, int, int, int]]  # window index -> its face box (A2-Box)
+    # I4: window index -> (16, L, 2) per-frame FaceMesh points in 224-crop space
+    # (source of the per-pixel region partition).
+    chunk_landmarks: dict[int, np.ndarray]
     orig_w: int
     orig_h: int
     video_path: Path  # the 25-fps file the chunks were read from
@@ -441,6 +459,7 @@ def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
     cropped_chunks: list[np.ndarray] = []
     chunk_indices: list[int] = []
     boxes: list[tuple[int, int, int, int]] = []
+    landmarks_list: list[np.ndarray] = []
     orig_w = orig_h = 0
 
     for chunk_idx, frames in enumerate(iter_video_chunks(video_path, num_frames=NUM_FRAMES)):
@@ -448,10 +467,11 @@ def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
             result = extractor(frames)
         if result is None:
             continue
-        cropped, (x1, y1, x2, y2, ow, oh) = result
+        cropped, (x1, y1, x2, y2, ow, oh), landmarks = result
         cropped_chunks.append(cropped)  # (16, 3, 224, 224) uint8
         chunk_indices.append(chunk_idx)
         boxes.append((x1, y1, x2, y2))
+        landmarks_list.append(landmarks)  # (16, L, 2) int16
         orig_w, orig_h = ow, oh
 
     if not cropped_chunks:
@@ -463,11 +483,14 @@ def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
     # A2-Box: keep each kept window's own box (keyed by its temporal window index)
     # so heatmaps can be cropped + upprojected with the box that tracks the face.
     chunk_box_map = dict(zip(chunk_indices, boxes, strict=True))
+    # I4: per-window FaceMesh landmark points, keyed the same way.
+    chunk_landmarks = dict(zip(chunk_indices, landmarks_list, strict=True))
     return _PreparedClip(
         chunks=chunks,
         chunk_indices=chunk_indices,
         crop_box=crop_box,  # type: ignore[arg-type]
         chunk_box_map=chunk_box_map,
+        chunk_landmarks=chunk_landmarks,
         orig_w=orig_w,
         orig_h=orig_h,
         video_path=video_path,
@@ -669,24 +692,274 @@ def _array_to_data_uri(
 # ── Anomaly region extraction ─────────────────────────────────────────────────
 
 
-def _extract_anomaly_regions(heatmap_np: np.ndarray) -> list[dict]:
-    """Identify the most anomalous face regions from an (T, H, W) heatmap.
+def _partition_label_maps(landmarks_seq: np.ndarray | None) -> np.ndarray | None:
+    """Per-frame facial-region partition (roadmap I4): each face pixel → one region.
 
-    Splits the spatial extent into named facial landmarks and returns a list
-    sorted by average absolute relevance (descending).
+    For every frame, each pixel inside the face-oval polygon is assigned to the
+    region of its NEAREST region landmark (hard nearest-landmark Voronoi); pixels
+    outside the face get label ``-1`` (background). Regions therefore never overlap
+    — the mouth can't leak into the jaw — and each pixel's relevance is attributed
+    exactly once.
+
+    Args:
+        landmarks_seq: ``(T, L, 2)`` int landmark points ``[x, y]`` in 224-crop
+                       space, or ``None`` (→ no partition; callers use geometry).
+
+    Returns:
+        ``(T, IMG_SIZE, IMG_SIZE)`` int8 region-label maps (label in ``[0, R)`` or
+        ``-1``), or ``None``.
     """
-    agg = np.mean(np.abs(heatmap_np), axis=0)  # (H, W)
+    if landmarks_seq is None:
+        return None
+    import cv2
+    from scipy.spatial import cKDTree
+
+    # Lazy import: face_extractor pulls in mediapipe (avoided at API import time).
+    from src.data_processing.face_extractor import (
+        FACE_OVAL_INDICES,
+        REGION_POINT_INDICES,
+        REGION_POINT_LABELS,
+    )
+
+    seed_idx = np.asarray(REGION_POINT_INDICES, dtype=np.int64)
+    seed_lab = np.asarray(REGION_POINT_LABELS, dtype=np.int8)
+    oval_idx = np.asarray(FACE_OVAL_INDICES, dtype=np.int64)
+    # Pixel-centre grid, stored as (x, y) to match the landmark coordinate order.
+    yy, xx = np.mgrid[0:IMG_SIZE, 0:IMG_SIZE]
+    grid_xy = np.stack([xx.ravel(), yy.ravel()], axis=-1).astype(np.float32)  # (P, 2)
+
+    t = landmarks_seq.shape[0]
+    labels = np.full((t, IMG_SIZE, IMG_SIZE), -1, dtype=np.int8)
+    for f in range(t):
+        pts = landmarks_seq[f]  # (L, 2) = (x, y)
+        # Face mask from the oval loop (clamped into the crop).
+        oval = np.clip(pts[oval_idx].astype(np.int32), 0, IMG_SIZE - 1)
+        mask = np.zeros((IMG_SIZE, IMG_SIZE), dtype=np.uint8)
+        cv2.fillPoly(mask, [oval], 1)
+        inside = mask.ravel().astype(bool)
+        if not inside.any():
+            continue
+        seeds = pts[seed_idx].astype(np.float32)  # (K, 2) x, y
+        _, nn = cKDTree(seeds).query(grid_xy[inside])
+        lab = labels[f].ravel()
+        lab[inside] = seed_lab[nn]
+        labels[f] = lab.reshape(IMG_SIZE, IMG_SIZE)
+    return labels
+
+
+def _region_means(values: np.ndarray, label_maps: np.ndarray | None) -> dict[str, float]:
+    """Mean of a ``(T, H, W)`` array over each facial region, averaged over frames.
+
+    With *label_maps* ``(T, H, W)`` (the per-pixel partition, roadmap I4) each
+    region's mean is taken over ITS pixels only — regions never overlap. Without
+    landmarks (*label_maps* ``None``) a fixed geometric split is used (face-less
+    fullframe path / legacy H5). *values* is used AS-IS (``|heatmap|`` for a
+    magnitude, or a signed channel for a directional mean).
+    """
+    from src.data_processing.face_extractor import REGION_NAMES
+
+    n_regions = len(REGION_NAMES)
+    if label_maps is not None:
+        t = min(values.shape[0], label_maps.shape[0])
+        acc: list[list[float]] = [[] for _ in range(n_regions)]
+        for f in range(t):
+            lab = label_maps[f]
+            val = values[f]
+            for r in range(n_regions):
+                m = lab == r
+                if m.any():
+                    acc[r].append(float(val[m].mean()))
+        return {REGION_NAMES[r]: (float(np.mean(acc[r])) if acc[r] else 0.0) for r in range(n_regions)}
+
+    # Geometric fallback (no landmarks): coarse rectangles matching REGION_NAMES.
+    # Only hit on the face-less path, so approximate placement is acceptable.
+    agg = np.mean(values, axis=0)  # (H, W)
     h, w = agg.shape
     regions = {
-        "Forehead": agg[: h // 4, w // 4 : 3 * w // 4],
-        "Left Eye": agg[h // 4 : h // 2, : w // 2],
-        "Right Eye": agg[h // 4 : h // 2, w // 2 :],
-        "Mouth": agg[2 * h // 3 :, w // 4 : 3 * w // 4],
-        "Jaw": agg[3 * h // 4 :, :],
+        "Forehead": agg[: h // 5, w // 4 : 3 * w // 4],
+        "Left Eye": agg[h // 5 : 2 * h // 5, : w // 2],
+        "Right Eye": agg[h // 5 : 2 * h // 5, w // 2 :],
+        "Nose": agg[2 * h // 5 : 3 * h // 5, w // 3 : 2 * w // 3],
+        "Mouth": agg[3 * h // 5 : 4 * h // 5, w // 4 : 3 * w // 4],
+        "Jaw": agg[3 * h // 5 :, :],
+        "Chin": agg[4 * h // 5 :, w // 3 : 2 * w // 3],
     }
-    scored = [{"region": name, "score": float(np.mean(patch))} for name, patch in regions.items()]
+    return {name: float(np.mean(patch)) for name, patch in regions.items()}
+
+
+def _extract_anomaly_regions(
+    heatmap_np: np.ndarray,
+    label_maps: np.ndarray | None = None,
+) -> list[dict]:
+    """Identify the most anomalous face regions from an (T, H, W) heatmap.
+
+    Mean absolute relevance per facial region — over the per-pixel partition when
+    *label_maps* is given (roadmap I4), else a fixed geometric split. Used for the
+    Phase-1/2 ``anomalyRegions`` bars.
+
+    Returns:
+        ``[{"region": str, "score": float}, …]`` sorted by score (descending).
+    """
+    means = _region_means(np.abs(heatmap_np), label_maps)
+    scored = [{"region": name, "score": score} for name, score in means.items()]
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored
+
+
+def _extract_region_bivariate(
+    magnitude_np: np.ndarray,
+    direction_np: np.ndarray,
+    label_maps: np.ndarray | None = None,
+) -> list[dict]:
+    """Per-region bivariate LRP scores for the attention-shift visual (I4).
+
+    Aggregates BOTH bivariate channels over each facial region of the per-pixel
+    partition (no overlap):
+      * ``magnitude`` — mean of the magnitude channel (``|R_fake| + |R_real|`` ≥ 0);
+        how much AttnLRP relevance the region carries.
+      * ``direction`` — mean of the signed direction channel (``R_fake − R_real``);
+        the region's contrastive verdict lean (+ fake-supporting, − real-supporting).
+
+    Both channels are expected already percentile-normalised (as :func:`to_bivariate`
+    returns), so a clean-vs-perturbed comparison of these per-region values is a
+    change in normalised attention share / verdict lean.
+
+    Returns:
+        ``[{"region": str, "magnitude": float, "direction": float}, …]`` in a
+        fixed region order (not sorted; the frontend sorts by |Δ|).
+    """
+    mag = _region_means(magnitude_np, label_maps)
+    dirn = _region_means(direction_np, label_maps)
+    return [{"region": name, "magnitude": mag[name], "direction": dirn[name]} for name in mag]
+
+
+def _bivariate_attention_shift(clean: list[dict], perturbed: list[dict]) -> list[dict]:
+    """Pair clean vs. perturbed per-region/-band bivariate scores (I4).
+
+    Both inputs are ``[{"region", "magnitude", "direction"}, …]`` (from
+    :func:`_extract_region_bivariate` for video regions, or an analogous per-band
+    list for audio). Regions are matched by name; the *perturbed* order is kept.
+
+    Returns ``AttentionShiftSchema`` dicts with magnitude + direction before/after.
+    """
+    clean_by = {r["region"]: r for r in clean}
+    out: list[dict] = []
+    for p in perturbed:
+        c = clean_by.get(p["region"], {"magnitude": 0.0, "direction": 0.0})
+        out.append(
+            {
+                "region": p["region"],
+                "magnitudeBefore": float(c["magnitude"]),
+                "magnitudeAfter": float(p["magnitude"]),
+                "directionBefore": float(c["direction"]),
+                "directionAfter": float(p["direction"]),
+            }
+        )
+    return out
+
+
+def _partition_overlay_frames(label_maps: np.ndarray | None) -> list[str]:
+    """Render the per-frame region partition as tan-tinted overlay PNGs (I4 debug).
+
+    Each region is filled with a light-brown tint at low opacity (video shows
+    through), region borders + the face outline are drawn as a crisp lighter-tan
+    edge (visible on any background), and each region's name is labelled at its
+    centroid with a dark outline. One transparent PNG data URI per frame, aligned
+    to the clean crop video (swapped in like the heatmap frames). ``[]`` when no
+    partition exists (face-less fallback).
+    """
+    if label_maps is None:
+        return []
+    import cv2
+    from PIL import ImageDraw, ImageFont
+
+    from src.data_processing.face_extractor import REGION_NAMES
+
+    fill = (214, 188, 146)  # tan fill
+    border = (245, 226, 190)  # lighter tan edge
+    try:
+        font = ImageFont.load_default()
+    except Exception:  # noqa: BLE001
+        font = None
+
+    frames: list[str] = []
+    for f in range(label_maps.shape[0]):
+        lab = label_maps[f]
+        face = lab >= 0
+        rgba = np.zeros((IMG_SIZE, IMG_SIZE, 4), dtype=np.uint8)
+        rgba[face, 0], rgba[face, 1], rgba[face, 2] = fill
+        rgba[face, 3] = 55  # low-alpha fill
+
+        # Borders: pixels where the label changes vs. the right/bottom neighbour
+        # (region↔region AND face↔background). Dilated to ~2 px for a defined edge.
+        edges = np.zeros((IMG_SIZE, IMG_SIZE), dtype=bool)
+        edges[:, 1:] |= lab[:, 1:] != lab[:, :-1]
+        edges[:, :-1] |= lab[:, 1:] != lab[:, :-1]
+        edges[1:, :] |= lab[1:, :] != lab[:-1, :]
+        edges[:-1, :] |= lab[1:, :] != lab[:-1, :]
+        edges = cv2.dilate(edges.astype(np.uint8), np.ones((2, 2), np.uint8)).astype(bool)
+        rgba[edges, 0], rgba[edges, 1], rgba[edges, 2] = border
+        rgba[edges, 3] = 235
+
+        img = Image.fromarray(rgba, "RGBA")
+        draw = ImageDraw.Draw(img)
+        for r, name in enumerate(REGION_NAMES):
+            ys, xs = np.where(lab == r)
+            if xs.size == 0:
+                continue
+            cx, cy = int(xs.mean()), int(ys.mean())
+            draw.text(
+                (cx, cy),
+                name,
+                font=font,
+                anchor="mm",
+                fill=(247, 236, 214, 255),
+                stroke_width=1,
+                stroke_fill=(20, 15, 8, 255),
+            )
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        frames.append(f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}")
+    return frames
+
+
+_AUDIO_BANDS: tuple[tuple[str, str], ...] = (
+    ("low", "Low 0–500 Hz"),
+    ("mid", "Mid 500–4 kHz"),
+    ("high", "High 4–8 kHz"),
+)
+
+
+def _bivariate_band_shift(
+    waveform_np: np.ndarray,
+    sample_rate: int,
+    clean_mag: np.ndarray,
+    clean_dir: np.ndarray,
+    adv_mag: np.ndarray,
+    adv_dir: np.ndarray,
+) -> list[dict]:
+    """Bivariate audio frequency-band attention shift (I4, multimodal Phase 4).
+
+    Energy-weights the bivariate magnitude + direction channels over the Low/Mid/
+    High Butterworth bands (via :func:`_compute_frequency_bands`) for the clean and
+    adversarial audio relevance, returning ``AttentionShiftSchema`` dicts per band.
+    The (clean) waveform's band energies weight both sides — the same convention as
+    the L3 relevance view and the previous band-ablation shift.
+    """
+    cbm = _compute_frequency_bands(waveform_np, clean_mag, sample_rate, normalize=False)
+    cbd = _compute_frequency_bands(waveform_np, clean_dir, sample_rate, normalize=False)
+    abm = _compute_frequency_bands(waveform_np, adv_mag, sample_rate, normalize=False)
+    abd = _compute_frequency_bands(waveform_np, adv_dir, sample_rate, normalize=False)
+    return [
+        {
+            "region": label,
+            "magnitudeBefore": abs(float(cbm[key])),
+            "magnitudeAfter": abs(float(abm[key])),
+            "directionBefore": float(cbd[key]),
+            "directionAfter": float(abd[key]),
+        }
+        for key, label in _AUDIO_BANDS
+    ]
 
 
 # ── Per-frame score estimation ────────────────────────────────────────────────
@@ -789,6 +1062,37 @@ def _resolve_per_window_boxes(
         boxes.append(box)
         last = box
     return boxes
+
+
+def _resolve_per_frame_landmarks(
+    n_frames: int,
+    chunk_landmarks: dict[int, np.ndarray],
+) -> np.ndarray | None:
+    """Per-frame FaceMesh points aligned to *n_frames* heatmap frames (I4).
+
+    *chunk_landmarks* maps a window index to its ``(NUM_FRAMES, L, 2)`` landmark
+    points (crop-224 space). Frame ``i`` belongs to window ``i // NUM_FRAMES``;
+    face-less windows are gap-filled by carrying the previous window forward (the
+    first known window fills any leading gap), mirroring
+    :func:`_resolve_per_window_boxes`.
+
+    Returns ``(n_frames, L, 2)`` int32, or ``None`` when no landmarks exist (→
+    callers fall back to the geometric split).
+    """
+    if not chunk_landmarks:
+        return None
+    first_known = chunk_landmarks[min(chunk_landmarks)]
+    n_points = first_known.shape[1]
+    out = np.zeros((n_frames, n_points, 2), dtype=np.int32)
+    n_windows = -(-n_frames // NUM_FRAMES)  # ceiling division
+    last: np.ndarray | None = None
+    for w in range(n_windows):
+        wb = chunk_landmarks.get(w, last if last is not None else first_known)
+        last = wb
+        f0 = w * NUM_FRAMES
+        f1 = min(f0 + NUM_FRAMES, n_frames)
+        out[f0:f1] = wb[: f1 - f0]
+    return out
 
 
 def _load_all_frames_cropped_per_window(
@@ -963,6 +1267,7 @@ def _video_result_with_heatmaps(
     orig_w: int,
     orig_h: int,
     chunk_box_map: dict[int, tuple[int, int, int, int]] | None = None,
+    chunk_landmarks: dict[int, np.ndarray] | None = None,
 ) -> dict:
     """Build the full analysis dict: face-cropped heatmaps + upprojection + cropBox.
 
@@ -975,6 +1280,9 @@ def _video_result_with_heatmaps(
     upprojected with its OWN face box (tracking the moving face) instead of one
     averaged box for the whole clip; *crop_box* then serves as the gap-fill
     fallback for face-less windows.
+
+    When *chunk_landmarks* is given (I4), the anomaly regions are computed over the
+    per-pixel landmark partition instead of fixed rectangles.
     """
     cx1, cy1, cx2, cy2 = crop_box
 
@@ -1003,8 +1311,14 @@ def _video_result_with_heatmaps(
         dir_full = _upproject_heatmap(direction_np[i], *box, orig_w, orig_h)
         heatmap_frames.append(_array_to_data_uri(mag_full, direction=dir_full))
 
-    # Regions still use the legacy signed map (Phase-3/4 attention-shift unchanged).
-    anomaly_regions = _extract_anomaly_regions(signed_np)
+    # Per-pixel region partition (I4) from the landmarks when available, else the
+    # geometric fallback inside _region_means. Regions use the legacy signed map.
+    per_frame_landmarks = _resolve_per_frame_landmarks(n_frames, chunk_landmarks) if chunk_landmarks else None
+    label_maps = _partition_label_maps(per_frame_landmarks)
+    anomaly_regions = _extract_anomaly_regions(signed_np, label_maps)
+    # Bivariate per-region scores (magnitude + direction) for the Phase-3
+    # attention-shift visual (I4); private, consumed by _robustness_payload.
+    region_bivariate = _extract_region_bivariate(magnitude_np, direction_np, label_maps)
 
     # Per-chunk timelines (A1): confidence (per-window fake prob) + relevance
     # hybrid (magnitude height + contrastive sign), one value per 16-frame window.
@@ -1032,6 +1346,8 @@ def _video_result_with_heatmaps(
         # the robustness paths to encode the crop video + crop-space heatmaps.
         "_cropFrames": all_frames,
         "_heatmapNp": signed_np,
+        "_regionBivariate": region_bivariate,
+        "_regionLabelMaps": label_maps,
     }
 
 
@@ -1063,11 +1379,13 @@ def _run_video_inference_fullframe(clip_path: Path) -> dict:
     # per-window confidence comes from the same windows so the A1 timelines align.
     # The face-less fallback keeps the legacy single-target FAKE map (signed_np);
     # the bivariate overlay is reserved for the in-distribution face-crop path.
-    _, _, heatmap_np, per_chunk_confidence = _compute_heatmaps_chunked(model, all_frames)  # (N, H, W)
+    magnitude_np, direction_np, heatmap_np, per_chunk_confidence = _compute_heatmaps_chunked(model, all_frames)
 
     per_frame_scores = [float(np.clip(np.mean(np.abs(heatmap_np[i])), 0.0, 1.0)) for i in range(n_frames)]
     heatmap_frames = [_array_to_data_uri(heatmap_np[i], magnitude_alpha=True) for i in range(n_frames)]
     anomaly_regions = _extract_anomaly_regions(heatmap_np)
+    # Bivariate per-region scores (geometric split; no landmarks in the fallback).
+    region_bivariate = _extract_region_bivariate(magnitude_np, direction_np, None)
 
     # Per-chunk timelines (A1): one value per 16-frame window of the full-frame
     # heatmaps, so confidence and relevance share the same windows.
@@ -1086,6 +1404,8 @@ def _run_video_inference_fullframe(clip_path: Path) -> dict:
         # the full 224 frame (no face box). Private keys, ignored by the schema.
         "_cropFrames": all_frames,
         "_heatmapNp": heatmap_np,
+        "_regionBivariate": region_bivariate,
+        "_regionLabelMaps": None,
     }
 
 
@@ -1136,6 +1456,7 @@ def run_video_inference(
         prepared.orig_w,
         prepared.orig_h,
         chunk_box_map=prepared.chunk_box_map,
+        chunk_landmarks=prepared.chunk_landmarks,
     )
 
 
@@ -1199,6 +1520,14 @@ def run_video_inference_h5(
     chunk_box_map = (
         {c.chunk_index: (c.crop_x1, c.crop_y1, c.crop_x2, c.crop_y2) for c in h5_chunks} if h5_chunks else None
     )
+    # I4: per-window FaceMesh landmarks read from the stored HDF5 dataset
+    # (absent → None → geometric fallback for legacy files).
+    chunk_landmarks: dict[int, np.ndarray] | None = None
+    if h5_chunks:
+        collected = {
+            c.chunk_index: lm for c in h5_chunks if (lm := _load_landmarks_from_hdf5(c.h5_path, c.h5_index)) is not None
+        }
+        chunk_landmarks = collected or None
     return _video_result_with_heatmaps(
         model,
         verdict,
@@ -1208,6 +1537,7 @@ def run_video_inference_h5(
         h5_metadata.orig_w,
         h5_metadata.orig_h,
         chunk_box_map=chunk_box_map,
+        chunk_landmarks=chunk_landmarks,
     )
 
 
@@ -2062,7 +2392,9 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         mag_full = _upproject_heatmap(magnitude_v[i], *box, prepared.orig_w, prepared.orig_h)
         dir_full = _upproject_heatmap(direction_v[i], *box, prepared.orig_w, prepared.orig_h)
         heatmap_frames.append(_array_to_data_uri(mag_full, direction=dir_full))
-    anomaly_regions = _extract_anomaly_regions(signed_v)
+    per_frame_landmarks = _resolve_per_frame_landmarks(n_frames, prepared.chunk_landmarks)
+    label_maps = _partition_label_maps(per_frame_landmarks)
+    anomaly_regions = _extract_anomaly_regions(signed_v, label_maps)
     rel_magnitude, rel_sign = _per_chunk_bivariate(magnitude_v, direction_v)
 
     # ── Audio panel: bivariate L1 timeline + frequency bands/grids + word segments ─
@@ -2361,17 +2693,12 @@ def _robustness_payload(
     )
     degraded_video_url = _encode_crop_video(degraded["_cropFrames"], fps, f"{media_prefix}_degraded.mp4")
 
-    clean_by_region = {r["region"]: r["score"] for r in clean["anomalyRegions"]}
-    attention_shift = [
-        {
-            "region": r["region"],
-            "before": float(clean_by_region.get(r["region"], 0.0)),
-            "after": float(r["score"]),
-        }
-        for r in degraded["anomalyRegions"]
-    ]
+    attention_shift = _bivariate_attention_shift(clean["_regionBivariate"], degraded["_regionBivariate"])
+    # Overlay = the CLEAN partition rendered per frame (drawn over the clean player).
+    region_mask_frames = _partition_overlay_frames(clean.get("_regionLabelMaps"))
 
     return {
+        "regionMaskFrames": region_mask_frames,
         "degradedHeatmapFrames": _crop_heatmap_frames(degraded["_heatmapNp"]),
         "degradedVerdict": degraded["verdict"],
         "degradedConfidence": degraded["confidence"],
@@ -2480,14 +2807,23 @@ def _run_adversarial_fullframe(
     adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
     adv_confidence = adv_fake_prob if adv_fake_prob > 0.5 else probs_adv[0].item()
 
+    # Dual-seed AttnLRP: raw R_fake/R_real for both the FAKE display map and the
+    # bivariate magnitude/direction channels (I4). Geometric region split (no
+    # landmarks in the face-less fallback).
+    zeros = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     try:
-        clean_hm_np = model.explain(pixel_values=pixel_values, target_class=1)[0].detach().cpu().numpy()[0]
+        rf_c, rr_c, _ = model.explain(pixel_values=pixel_values, per_class=True)
+        clean_fake_np, clean_real_np = rf_c.detach().cpu().numpy()[0], rr_c.detach().cpu().numpy()[0]
     except Exception:  # noqa: BLE001
-        clean_hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        clean_fake_np, clean_real_np = zeros, zeros
     try:
-        hm_np = model.explain(pixel_values=adv_pv, target_class=1)[0].detach().cpu().numpy()[0]
+        rf_a, rr_a, _ = model.explain(pixel_values=adv_pv, per_class=True)
+        adv_fake_np, adv_real_np = rf_a.detach().cpu().numpy()[0], rr_a.detach().cpu().numpy()[0]
     except Exception:  # noqa: BLE001
-        hm_np = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        adv_fake_np, adv_real_np = zeros, zeros
+
+    clean_hm_np = _percentile_normalize(clean_fake_np)
+    hm_np = _percentile_normalize(adv_fake_np)
 
     diff = (adv_pv - pixel_values).abs().detach().cpu().numpy()[0].mean(axis=1)  # (T, H, W)
     diff_norm = diff / (diff.max() + 1e-8)
@@ -2497,16 +2833,12 @@ def _run_adversarial_fullframe(
     )
     attacked_video_url = _encode_crop_video(adv_pv[0], TARGET_FPS, f"{media_prefix}_attacked.mp4")
 
-    adv_regions = _extract_anomaly_regions(hm_np)
-    clean_by_region = {r["region"]: r["score"] for r in base_result["anomalyRegions"]}
-    attention_shift = [
-        {
-            "region": r["region"],
-            "before": float(clean_by_region.get(r["region"], 0.0)),
-            "after": float(r["score"]),
-        }
-        for r in adv_regions
-    ]
+    clean_mag, clean_dir = to_bivariate(clean_fake_np, clean_real_np)
+    adv_mag, adv_dir = to_bivariate(adv_fake_np, adv_real_np)
+    attention_shift = _bivariate_attention_shift(
+        _extract_region_bivariate(clean_mag, clean_dir, None),
+        _extract_region_bivariate(adv_mag, adv_dir, None),
+    )
     return {
         "perturbedFrames": _crop_heatmap_frames(hm_np),
         "perturbedVerdict": adv_verdict,
@@ -2562,8 +2894,13 @@ def run_adversarial_inference(
     n_steps = 1 if method == "FGSM" else steps
     step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
 
-    clean_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
-    adv_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    # Raw per-class relevance accumulators (dual-seed): one AttnLRP pass per window
+    # yields both the FAKE display map and the bivariate magnitude/direction
+    # channels (I4). Normalised clip-global AFTER the loop (matches Phase 1/2).
+    clean_fake_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    clean_real_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    adv_fake_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    adv_real_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     diff_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     adv_frames_full = torch.zeros((n_frames, 3, IMG_SIZE, IMG_SIZE), dtype=torch.float32)
     adv_fake_prob = 0.0
@@ -2587,27 +2924,31 @@ def run_adversarial_inference(
             logits_adv = model.net(pixel_values=adv_pv).logits  # (1, 2)
         adv_fake_prob = max(adv_fake_prob, torch.softmax(logits_adv, dim=-1)[0, 1].item())
 
-        # Clean + adversarial AttnLRP heatmaps (crop space) for the before/after player.
+        # Clean + adversarial bivariate AttnLRP (dual-seed → raw R_fake, R_real).
         try:
-            clean_hm = model.explain(pixel_values=pv, target_class=1)[0].detach().cpu().numpy()[0]
+            rf_c, rr_c, _ = model.explain(pixel_values=pv, per_class=True)
+            clean_fake_full[frame_start:frame_end] = rf_c.detach().cpu().numpy()[0][:k]
+            clean_real_full[frame_start:frame_end] = rr_c.detach().cpu().numpy()[0][:k]
         except Exception:  # noqa: BLE001
             log.exception("Clean AttnLRP failed for window %d of %s", window_idx, clip_path.name)
-            clean_hm = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
         try:
-            hm = model.explain(pixel_values=adv_pv, target_class=1)[0].detach().cpu().numpy()[0]
+            rf_a, rr_a, _ = model.explain(pixel_values=adv_pv, per_class=True)
+            adv_fake_full[frame_start:frame_end] = rf_a.detach().cpu().numpy()[0][:k]
+            adv_real_full[frame_start:frame_end] = rr_a.detach().cpu().numpy()[0][:k]
         except Exception:  # noqa: BLE001
             log.exception("Adversarial AttnLRP failed for window %d of %s", window_idx, clip_path.name)
-            hm = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
 
         diff = (adv_pv - pv).abs().detach().cpu().numpy()[0].mean(axis=1)  # (16, H, W)
-
-        clean_hm_full[frame_start:frame_end] = clean_hm[:k]
-        adv_hm_full[frame_start:frame_end] = hm[:k]
         diff_full[frame_start:frame_end] = diff[:k]
         log.debug("Adversarial window %d/%d processed.", window_idx + 1, n_chunks)
 
     adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
     adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
+
+    # Clip-global single-target FAKE maps for the crop players (I2), matching the
+    # Phase-1/2 signed_np normalisation.
+    clean_hm_full = _percentile_normalize(clean_fake_full)
+    adv_hm_full = _percentile_normalize(adv_fake_full)
 
     # Crop-space heatmaps overlay the 224 face-crop video directly (I2, no
     # upprojection): left = clean crop + clean heatmap, right = adversarial crop +
@@ -2615,17 +2956,17 @@ def run_adversarial_inference(
     clean_video_url = _encode_crop_video(all_frames, TARGET_FPS, f"{clip_path.stem}_clean.mp4", reuse_existing=True)
     attacked_video_url = _encode_crop_video(adv_frames_full, TARGET_FPS, f"{media_prefix}_attacked.mp4")
 
-    # Attention shift (clean vs. perturbed anomaly regions over the whole clip).
-    adv_regions = _extract_anomaly_regions(adv_hm_full)
-    clean_by_region = {r["region"]: r["score"] for r in base_result["anomalyRegions"]}
-    attention_shift = [
-        {
-            "region": r["region"],
-            "before": float(clean_by_region.get(r["region"], 0.0)),
-            "after": float(r["score"]),
-        }
-        for r in adv_regions
-    ]
+    # Bivariate attention shift (I4): per landmark region, magnitude (attention
+    # share) + direction (verdict lean), clean vs. adversarial. Both passes come
+    # from the SAME model + input pipeline (I3), so before/after is like-for-like.
+    per_frame_landmarks = _resolve_per_frame_landmarks(n_frames, prepared.chunk_landmarks)
+    label_maps = _partition_label_maps(per_frame_landmarks)
+    clean_mag, clean_dir = to_bivariate(clean_fake_full, clean_real_full)
+    adv_mag, adv_dir = to_bivariate(adv_fake_full, adv_real_full)
+    attention_shift = _bivariate_attention_shift(
+        _extract_region_bivariate(clean_mag, clean_dir, label_maps),
+        _extract_region_bivariate(adv_mag, adv_dir, label_maps),
+    )
 
     return {
         "perturbedFrames": _crop_heatmap_frames(adv_hm_full),
@@ -2640,6 +2981,7 @@ def run_adversarial_inference(
         "attentionShift": attention_shift,
         "cleanVerdict": base_result["verdict"],
         "cleanConfidence": base_result["confidence"],
+        "regionMaskFrames": _partition_overlay_frames(label_maps),
     }
 
 
@@ -2869,15 +3211,31 @@ def run_multimodal_adversarial_inference(
     step_size = epsilon if method == "FGSM" else epsilon / steps * 2.5
     step_size_audio = audio_epsilon if method == "FGSM" else audio_epsilon / steps * 2.5
 
-    clean_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
-    adv_hm_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    # Raw per-class relevance accumulators (dual-seed): one multimodal AttnLRP pass
+    # per window yields video AND audio R_fake/R_real for the FAKE display map and
+    # the bivariate magnitude/direction channels (I4). Normalised clip-global after
+    # the loop; clean + adversarial kept side by side for the attention shift.
+    clean_vfake = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    clean_vreal = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    adv_vfake = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    adv_vreal = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    clean_afake = np.zeros(len(waveform_np), dtype=np.float32)
+    clean_areal = np.zeros(len(waveform_np), dtype=np.float32)
+    adv_afake = np.zeros(len(waveform_np), dtype=np.float32)
+    adv_areal = np.zeros(len(waveform_np), dtype=np.float32)
     diff_full = np.zeros((n_frames, IMG_SIZE, IMG_SIZE), dtype=np.float32)
     adv_frames_full = torch.zeros((n_frames, 3, IMG_SIZE, IMG_SIZE), dtype=torch.float32)
     adv_fake_prob = 0.0
-    # Per-window video tensors for the band-ablation pass: clean and adversarial so
-    # each band-stopped audio window is re-paired with the matching video window.
-    pv_windows: list[torch.Tensor] = []
-    adv_pv_windows: list[torch.Tensor] = []
+
+    def _stitch_audio(dst_f: np.ndarray, dst_r: np.ndarray, af_t, ar_t, w_idx: int) -> None:
+        """Stitch a window's per-class audio relevance into the full-clip arrays."""
+        af = af_t.detach().cpu().numpy()[0]
+        ar = ar_t.detach().cpu().numpy()[0]
+        a0 = w_idx * AUDIO_SAMPLES_PER_CHUNK
+        a1 = min(a0 + AUDIO_SAMPLES_PER_CHUNK, len(dst_f))
+        if a1 > a0:
+            dst_f[a0:a1] = af[: a1 - a0]
+            dst_r[a0:a1] = ar[: a1 - a0]
 
     n_chunks = -(-n_frames // NUM_FRAMES)  # ceiling division
     for window_idx, frame_start in enumerate(range(0, n_frames, NUM_FRAMES)):
@@ -2889,7 +3247,6 @@ def run_multimodal_adversarial_inference(
             chunk = torch.cat([chunk, pad], dim=0)
         pv = chunk.unsqueeze(0).to(_device)  # (1, 16, C, H, W)
         iv = _audio_window_tensor(waveform_np, window_idx)  # (1, 10240) z-scored
-        pv_windows.append(pv)
 
         adv_pv, adv_iv = _pgd_attack_multimodal(
             model,
@@ -2903,7 +3260,6 @@ def run_multimodal_adversarial_inference(
             step_size_audio,
             attack_modalities,
         )
-        adv_pv_windows.append(adv_pv)
         adv_frames_full[frame_start:frame_end] = adv_pv[0, :k].detach().cpu()
 
         # Adversarial fused fake probability -- max-pooled over windows.
@@ -2911,61 +3267,54 @@ def run_multimodal_adversarial_inference(
             logits_adv = model(pixel_values=adv_pv, input_values=adv_iv)  # (1, 2)
         adv_fake_prob = max(adv_fake_prob, torch.softmax(logits_adv, dim=-1)[0, 1].item())
 
-        # Clean + adversarial video heatmaps (crop space) for the before/after player.
+        # Clean + adversarial bivariate AttnLRP (dual-seed): video + audio raw maps
+        # for the FAKE display maps and the magnitude/direction channels (I4).
         try:
-            clean_hm = model.explain(pixel_values=pv, input_values=iv, target_class=1)[0].detach().cpu().numpy()[0]
+            vfc, vrc, afc, arc, _ = model.explain(pixel_values=pv, input_values=iv, per_class=True)
+            clean_vfake[frame_start:frame_end] = vfc.detach().cpu().numpy()[0][:k]
+            clean_vreal[frame_start:frame_end] = vrc.detach().cpu().numpy()[0][:k]
+            _stitch_audio(clean_afake, clean_areal, afc, arc, window_idx)
         except Exception:  # noqa: BLE001
             log.exception("Multimodal clean AttnLRP failed for window %d of %s", window_idx, clip_path.name)
-            clean_hm = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
         try:
-            video_hm_adv, _, _ = model.explain(pixel_values=adv_pv, input_values=adv_iv, target_class=1)
-            hm = video_hm_adv.detach().cpu().numpy()[0]  # (16, H, W) -- already [-1, 1]
+            vfa, vra, afa, ara, _ = model.explain(pixel_values=adv_pv, input_values=adv_iv, per_class=True)
+            adv_vfake[frame_start:frame_end] = vfa.detach().cpu().numpy()[0][:k]
+            adv_vreal[frame_start:frame_end] = vra.detach().cpu().numpy()[0][:k]
+            _stitch_audio(adv_afake, adv_areal, afa, ara, window_idx)
         except Exception:  # noqa: BLE001
             log.exception("Multimodal adversarial AttnLRP failed for window %d of %s", window_idx, clip_path.name)
-            hm = np.zeros((NUM_FRAMES, IMG_SIZE, IMG_SIZE), dtype=np.float32)
 
         diff = (adv_pv - pv).abs().detach().cpu().numpy()[0].mean(axis=1)  # (16, H, W)
-
-        clean_hm_full[frame_start:frame_end] = clean_hm[:k]
-        adv_hm_full[frame_start:frame_end] = hm[:k]
         diff_full[frame_start:frame_end] = diff[:k]
         log.debug("Multimodal adversarial window %d/%d processed.", window_idx + 1, n_chunks)
 
     adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
     adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
 
+    # Clip-global FAKE maps for the crop players (I2), matching Phase-1/2 signed_np.
+    clean_hm_full = _percentile_normalize(clean_vfake)
+    adv_hm_full = _percentile_normalize(adv_vfake)
+
     # Crop-space heatmaps + face-crop before/after videos (I2, no upprojection):
     # left = clean crop + clean heatmap, right = adversarial crop + perturbed heatmap.
     clean_video_url = _encode_crop_video(all_frames, TARGET_FPS, f"{clip_path.stem}_clean.mp4", reuse_existing=True)
     attacked_video_url = _encode_crop_video(adv_frames_full, TARGET_FPS, f"{media_prefix}_attacked.mp4")
 
-    # Video attention shift (clean base_result vs. adversarial whole clip).
-    adv_regions = _extract_anomaly_regions(adv_hm_full)
-    clean_by_region = {r["region"]: r["score"] for r in base_result["anomalyRegions"]}
-    attention_shift = [
-        {
-            "region": r["region"],
-            "before": float(clean_by_region.get(r["region"], 0.0)),
-            "after": float(r["score"]),
-        }
-        for r in adv_regions
-    ]
+    # Video bivariate attention shift (I4): per landmark region, magnitude + direction,
+    # clean vs. adversarial — same model + input pipeline on both sides (I3).
+    per_frame_landmarks = _resolve_per_frame_landmarks(n_frames, prepared.chunk_landmarks)
+    label_maps = _partition_label_maps(per_frame_landmarks)
+    cvm, cvd = to_bivariate(clean_vfake, clean_vreal)
+    avm, avd = to_bivariate(adv_vfake, adv_vreal)
+    attention_shift = _bivariate_attention_shift(
+        _extract_region_bivariate(cvm, cvd, label_maps),
+        _extract_region_bivariate(avm, avd, label_maps),
+    )
 
-    # Audio frequency-band attention shift: band ablation (D3) on the fusion model,
-    # paired with clean vs. adversarial video windows over the whole clip. The clean
-    # audio waveform is used for both sides; the shift isolates how the attack moved
-    # the fused model's reliance on each audio band.
-    clean_bands = _band_confidence(
-        waveform_np, sample_rate, lambda w: _multimodal_mean_fake_margin(model, pv_windows, w)
-    )
-    adv_bands = _band_confidence(
-        waveform_np, sample_rate, lambda w: _multimodal_mean_fake_margin(model, adv_pv_windows, w)
-    )
-    audio_attention_shift = [
-        {"region": "Low 0–500 Hz", "before": clean_bands["low"], "after": adv_bands["low"]},
-        {"region": "Mid 500–4 kHz", "before": clean_bands["mid"], "after": adv_bands["mid"]},
-        {"region": "High 4–8 kHz", "before": clean_bands["high"], "after": adv_bands["high"]},
-    ]
+    # Audio bivariate band attention shift (I4): magnitude + direction per band.
+    cam, cad = to_bivariate(clean_afake, clean_areal)
+    aam, aad = to_bivariate(adv_afake, adv_areal)
+    audio_attention_shift = _bivariate_band_shift(waveform_np, sample_rate, cam, cad, aam, aad)
 
     return {
         "perturbedFrames": _crop_heatmap_frames(adv_hm_full),
@@ -2982,6 +3331,7 @@ def run_multimodal_adversarial_inference(
         "attackModalities": attack_modalities,
         "cleanVerdict": base_result["verdict"],
         "cleanConfidence": base_result["confidence"],
+        "regionMaskFrames": _partition_overlay_frames(label_maps),
     }
 
 

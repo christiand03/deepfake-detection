@@ -253,8 +253,8 @@ def process_tasks(
                 counts.failures.append(f"{task.video_id} (no face chunks)")
                 continue
 
-            for cropped, audio_chunk, metadata in chunks:
-                writer.write_chunk(cropped, audio_chunk, metadata)
+            for cropped, audio_chunk, metadata, landmarks in chunks:
+                writer.write_chunk(cropped, audio_chunk, metadata, landmarks)
 
             counts.videos_ok += 1
             counts.chunks_written += len(chunks)

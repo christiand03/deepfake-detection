@@ -352,8 +352,9 @@ class TestProcessVideo:
         fake_frames = [np.zeros((num_frames, 64, 64, 3), dtype=np.uint8)] * n_chunks
         fake_cropped = np.zeros((num_frames, 3, 224, 224), dtype=np.uint8)
         fake_bbox = (0, 0, 224, 224, 224, 224)
+        fake_landmarks = np.zeros((num_frames, 468, 2), dtype=np.int16)
 
-        mock_extractor = MagicMock(return_value=(fake_cropped, fake_bbox))
+        mock_extractor = MagicMock(return_value=(fake_cropped, fake_bbox, fake_landmarks))
         mock_writer = MagicMock()
 
         with (
@@ -387,8 +388,9 @@ class TestProcessVideo:
         fake_frames = [np.zeros((num_frames, 64, 64, 3), dtype=np.uint8)]
         fake_cropped = np.zeros((num_frames, 3, 224, 224), dtype=np.uint8)
         fake_bbox = (0, 0, 224, 224, 224, 224)
+        fake_landmarks = np.zeros((num_frames, 468, 2), dtype=np.int16)
 
-        mock_extractor = MagicMock(return_value=(fake_cropped, fake_bbox))
+        mock_extractor = MagicMock(return_value=(fake_cropped, fake_bbox, fake_landmarks))
         mock_writer = MagicMock()
 
         with (
@@ -427,8 +429,9 @@ class TestProcessVideo:
         fake_frames = [np.zeros((num_frames, 64, 64, 3), dtype=np.uint8)] * n_chunks
         fake_cropped = np.zeros((num_frames, 3, 224, 224), dtype=np.uint8)
         fake_bbox = (0, 0, 224, 224, 224, 224)
+        fake_landmarks = np.zeros((num_frames, 468, 2), dtype=np.int16)
 
-        mock_extractor = MagicMock(return_value=(fake_cropped, fake_bbox))
+        mock_extractor = MagicMock(return_value=(fake_cropped, fake_bbox, fake_landmarks))
         mock_writer = MagicMock()
 
         with (

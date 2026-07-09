@@ -8,10 +8,23 @@
 
 import type {
   AnalysisResult,
+  AttentionShift,
   ClipMeta,
   Phase3Result,
   Phase4Result,
 } from '../types/analysis'
+
+/** Build a bivariate attention-shift row (I4) for the mock data. */
+function bshift(
+  region: string,
+  magnitudeBefore: number,
+  magnitudeAfter: number,
+  directionBefore: number,
+  directionAfter: number,
+): AttentionShift {
+  return { region, magnitudeBefore, magnitudeAfter, directionBefore, directionAfter }
+}
+
 
 // ── Demo clip registry ──────────────────────────────────────────────────────
 
@@ -393,11 +406,11 @@ export function makeMockPhase3Result(
     baselineConfidence: baseResult.confidence,
     params,
     attentionShift: [
-      { region: 'Mouth',      before: 0.84, after: Math.max(0.05, 0.84 - degradation * 0.5) },
-      { region: 'Left Eye',   before: 0.41, after: Math.max(0.03, 0.41 - degradation * 0.3) },
-      { region: 'Right Eye',  before: 0.33, after: Math.max(0.02, 0.33 - degradation * 0.25) },
-      { region: 'Jaw',        before: 0.22, after: Math.max(0.02, 0.22 - degradation * 0.2) },
-      { region: 'Background', before: 0.04, after: Math.min(0.60, 0.04 + degradation * 0.3) },
+      bshift('Mouth', 0.84, Math.max(0.05, 0.84 - degradation * 0.5), 0.62, 0.62 - degradation * 0.5),
+      bshift('Left Eye', 0.41, Math.max(0.03, 0.41 - degradation * 0.3), 0.28, 0.28 - degradation * 0.3),
+      bshift('Right Eye', 0.33, Math.max(0.02, 0.33 - degradation * 0.25), 0.2, 0.2 - degradation * 0.25),
+      bshift('Jaw', 0.22, Math.max(0.02, 0.22 - degradation * 0.2), -0.1, -0.1 - degradation * 0.2),
+      bshift('Background', 0.04, Math.min(0.6, 0.04 + degradation * 0.3), -0.3, -0.3 + degradation * 0.6),
     ],
     ...(audioRobustness !== undefined ? { audioRobustness } : {}),
   }
@@ -447,23 +460,19 @@ export function makeMockPhase4Result(
     cleanVerdict: baseResult.verdict,
     cleanConfidence: baseResult.confidence,
     attentionShift: [
-      { region: 'Mouth', before: 0.84, after: Math.max(0.04, 0.84 - attackStrength * 0.9) },
-      { region: 'Left Eye', before: 0.41, after: Math.max(0.03, 0.41 - attackStrength * 0.6) },
-      { region: 'Jaw', before: 0.22, after: Math.max(0.02, 0.22 - attackStrength * 0.4) },
-      { region: 'Shoulder', before: 0.03, after: Math.min(0.94, 0.03 + attackStrength * 0.8) },
-      {
-        region: 'Background',
-        before: 0.01,
-        after: Math.min(0.82, 0.01 + attackStrength * 0.6),
-      },
+      bshift('Mouth', 0.84, Math.max(0.04, 0.84 - attackStrength * 0.9), 0.66, 0.66 - attackStrength * 1.2),
+      bshift('Left Eye', 0.41, Math.max(0.03, 0.41 - attackStrength * 0.6), 0.3, 0.3 - attackStrength * 0.8),
+      bshift('Jaw', 0.22, Math.max(0.02, 0.22 - attackStrength * 0.4), -0.12, -0.12 - attackStrength * 0.3),
+      bshift('Shoulder', 0.03, Math.min(0.94, 0.03 + attackStrength * 0.8), -0.2, -0.2 + attackStrength * 1.1),
+      bshift('Background', 0.01, Math.min(0.82, 0.01 + attackStrength * 0.6), -0.4, -0.4 + attackStrength * 0.9),
     ],
   }
 
   if (useMultimodal) {
     base.audioAttentionShift = [
-      { region: 'Low 0\u2013500 Hz', before: 0.21, after: Math.max(0.02, 0.21 - attackStrength * 0.4) },
-      { region: 'Mid 500\u20134 kHz', before: 0.54, after: Math.max(0.03, 0.54 - attackStrength * 0.7) },
-      { region: 'High 4\u20138 kHz', before: 0.25, after: Math.min(0.88, 0.25 + attackStrength * 0.9) },
+      bshift('Low 0\u2013500 Hz', 0.21, Math.max(0.02, 0.21 - attackStrength * 0.4), 0.15, 0.15 - attackStrength * 0.5),
+      bshift('Mid 500\u20134 kHz', 0.54, Math.max(0.03, 0.54 - attackStrength * 0.7), 0.44, 0.44 - attackStrength * 0.9),
+      bshift('High 4\u20138 kHz', 0.25, Math.min(0.88, 0.25 + attackStrength * 0.9), -0.18, -0.18 + attackStrength * 1.0),
     ]
     base.attackModalities = attackModalities ?? 'both'
   }

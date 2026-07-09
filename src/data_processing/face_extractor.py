@@ -29,10 +29,12 @@ Typical usage::
 
     extractor = FaceExtractor(crop_scale=1.4, target_size=224)
     for chunk in iter_video_chunks(video_path, num_frames=16):
-        cropped = extractor(chunk)
-        if cropped is None:
+        result = extractor(chunk)
+        if result is None:
             continue          # no face detected in at least one frame
+        cropped, bbox, landmarks = result
         # cropped.shape == (16, 3, 224, 224), dtype uint8
+        # landmarks.shape == (16, 468, 2), dtype int16, crop space (roadmap I4)
 """
 
 from __future__ import annotations
@@ -47,7 +49,308 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
+# ── Facial region landmark groups (roadmap I4) ────────────────────────────────
+#
+# Canonical MediaPipe FaceMesh landmark indices (468-topology, stable across the
+# FaceLandmarker Tasks API and the legacy FaceMesh solution). Used to aggregate
+# the AttnLRP heatmap over the REAL facial regions per frame instead of fixed
+# geometric rectangles. The eye groups are mapped to IMAGE space — "Left Eye" is
+# the eye on the left of the frame (MediaPipe's own naming is subject-anatomical,
+# i.e. mirrored) — so the frontend labels match what a viewer sees.
+
+_FACEMESH_SUBJECT_LEFT_EYE = (
+    263,
+    249,
+    390,
+    373,
+    374,
+    380,
+    381,
+    382,
+    362,
+    466,
+    388,
+    387,
+    386,
+    385,
+    384,
+    398,
+)
+_FACEMESH_SUBJECT_RIGHT_EYE = (
+    33,
+    7,
+    163,
+    144,
+    145,
+    153,
+    154,
+    155,
+    133,
+    246,
+    161,
+    160,
+    159,
+    158,
+    157,
+    173,
+)
+_FACEMESH_LIPS = (
+    61,
+    146,
+    91,
+    181,
+    84,
+    17,
+    314,
+    405,
+    321,
+    375,
+    291,
+    308,
+    324,
+    318,
+    402,
+    317,
+    14,
+    87,
+    178,
+    88,
+    95,
+    185,
+    40,
+    39,
+    37,
+    0,
+    267,
+    269,
+    270,
+    409,
+    78,
+    80,
+    81,
+    82,
+    13,
+    312,
+    311,
+    310,
+    415,
+)
+_FACEMESH_FOREHEAD = (
+    10,
+    338,
+    297,
+    332,
+    284,
+    251,
+    21,
+    54,
+    103,
+    67,
+    109,
+    151,
+    9,
+    8,
+    107,
+    336,
+    105,
+    334,
+    69,
+    299,
+)
+# Nose: tip + bridge + both alae/nostrils.
+_FACEMESH_NOSE = (
+    1,
+    2,
+    4,
+    5,
+    6,
+    8,
+    19,
+    45,
+    48,
+    94,
+    97,
+    98,
+    115,
+    131,
+    134,
+    168,
+    195,
+    197,
+    275,
+    278,
+    279,
+    326,
+    327,
+    344,
+    358,
+    360,
+    438,
+)
+# Jaw: the lateral jawline / mandible angle on both sides (NOT the centre chin).
+_FACEMESH_JAW = (
+    172,
+    136,
+    58,
+    132,
+    93,
+    234,
+    215,
+    138,
+    135,
+    169,
+    397,
+    365,
+    288,
+    361,
+    323,
+    454,
+    435,
+    367,
+    364,
+    394,
+)
+# Chin: the centre-bottom of the face (menton and its immediate neighbours).
+_FACEMESH_CHIN = (
+    152,
+    148,
+    176,
+    149,
+    150,
+    377,
+    400,
+    378,
+    379,
+    175,
+    199,
+    200,
+    18,
+    83,
+    313,
+)
+
+# Fixed order of the returned region boxes; the frontend expects these labels.
+REGION_NAMES: tuple[str, ...] = (
+    "Forehead",
+    "Left Eye",
+    "Right Eye",
+    "Nose",
+    "Mouth",
+    "Jaw",
+    "Chin",
+)
+_REGION_LANDMARKS: dict[str, tuple[int, ...]] = {
+    "Forehead": _FACEMESH_FOREHEAD,
+    # Image-space left = subject's right, and vice versa (mirror).
+    "Left Eye": _FACEMESH_SUBJECT_RIGHT_EYE,
+    "Right Eye": _FACEMESH_SUBJECT_LEFT_EYE,
+    "Nose": _FACEMESH_NOSE,
+    "Mouth": _FACEMESH_LIPS,
+    "Jaw": _FACEMESH_JAW,
+    "Chin": _FACEMESH_CHIN,
+}
+
+# Face-oval loop — the face silhouette. Used as the mask for the per-pixel region
+# partition (pixels outside the oval belong to no region / background).
+_FACEMESH_FACE_OVAL = (
+    10,
+    338,
+    297,
+    332,
+    284,
+    251,
+    389,
+    356,
+    454,
+    323,
+    361,
+    288,
+    397,
+    365,
+    379,
+    378,
+    400,
+    377,
+    152,
+    148,
+    176,
+    149,
+    150,
+    136,
+    172,
+    58,
+    132,
+    93,
+    234,
+    127,
+    162,
+    21,
+    54,
+    103,
+    67,
+    109,
+)
+FACE_OVAL_INDICES: tuple[int, ...] = _FACEMESH_FACE_OVAL
+
+# Number of FaceMesh landmarks stored per frame (partition source, roadmap I4).
+NUM_LANDMARKS: int = 468
+
+
+def _build_region_point_table() -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Flatten REGION_LANDMARKS into (indices, region-labels), deduped first-wins.
+
+    A landmark can appear in more than one region group (e.g. index 8 sits in both
+    Forehead and Nose); the per-pixel partition needs each seed point to carry a
+    single region, so the first region in :data:`REGION_NAMES` order wins.
+    """
+    seen: dict[int, int] = {}
+    for r, name in enumerate(REGION_NAMES):
+        for i in _REGION_LANDMARKS[name]:
+            seen.setdefault(i, r)
+    return tuple(seen.keys()), tuple(seen.values())
+
+
+# Seed points for the nearest-landmark partition: which stored landmark indices
+# carry a region, and the region index (into REGION_NAMES) each one carries.
+REGION_POINT_INDICES, REGION_POINT_LABELS = _build_region_point_table()
+
+
 # ── Module-level private helpers ──────────────────────────────────────────────
+
+
+def _landmarks_to_crop(
+    landmarks: list,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    img_w: int,
+    img_h: int,
+    target_size: int,
+) -> np.ndarray:
+    """Project one frame's landmarks into target_size crop space (roadmap I4).
+
+    Each landmark (normalised to the FULL frame) is mapped into the square face
+    crop ``(x1, y1, x2, y2)`` and rescaled to the ``target_size`` model input, so
+    the points line up with the stored ``(3, target_size, target_size)`` frames.
+    These points are the source for the per-pixel facial-region partition (nearest
+    landmark) used at xAI time. Coordinates are kept RAW (may fall slightly
+    outside ``[0, target_size]`` for off-crop points); the partition clamps.
+
+    Returns:
+        ``(NUM_LANDMARKS, 2)`` int16 array of ``[x, y]`` in crop space.
+    """
+    crop_w = max(x2 - x1, 1)
+    crop_h = max(y2 - y1, 1)
+    pts = np.zeros((NUM_LANDMARKS, 2), dtype=np.int16)
+    n = min(NUM_LANDMARKS, len(landmarks))
+    for i in range(n):
+        lm = landmarks[i]
+        px = (lm.x * img_w - x1) / crop_w * target_size
+        py = (lm.y * img_h - y1) / crop_h * target_size
+        pts[i, 0] = int(np.clip(round(px), -32768, 32767))
+        pts[i, 1] = int(np.clip(round(py), -32768, 32767))
+    return pts
 
 
 def _landmarks_to_bbox(
@@ -196,7 +499,7 @@ class FaceExtractor:
     Example::
 
         with FaceExtractor() as extractor:
-            cropped = extractor(frames)   # (16, H, W, 3) → (16, 3, 224, 224) or None
+            result = extractor(frames)   # → (cropped, bbox, landmarks) or None
     """
 
     _DEFAULT_MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "face_landmarker.task"
@@ -267,15 +570,17 @@ class FaceExtractor:
         self._timestamp_ms = 0
         self._face_landmarker = self._create_landmarker()
 
-    def _detect_bbox(self, frame_rgb: np.ndarray) -> tuple[int, int, int, int] | None:
+    def _detect_bbox(self, frame_rgb: np.ndarray) -> tuple[tuple[int, int, int, int], list] | None:
         """Run MediaPipe FaceLandmarker on a single RGB frame.
 
         Args:
             frame_rgb: ``(H, W, 3)`` uint8 RGB array.
 
         Returns:
-            Tight pixel bounding box ``(x1, y1, x2, y2)`` or ``None`` if no
-            face was detected.
+            ``(bbox, landmarks)`` where *bbox* is the tight pixel bounding box
+            ``(x1, y1, x2, y2)`` and *landmarks* is the raw
+            ``list[NormalizedLandmark]`` for the face (kept for landmark-based
+            region extraction, roadmap I4).  ``None`` if no face was detected.
         """
         img_h, img_w = frame_rgb.shape[:2]
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
@@ -286,11 +591,12 @@ class FaceExtractor:
             result = self._face_landmarker.detect(mp_image)
         if not result.face_landmarks:
             return None
-        return _landmarks_to_bbox(result.face_landmarks[0], img_h, img_w)
+        landmarks = result.face_landmarks[0]
+        return _landmarks_to_bbox(landmarks, img_h, img_w), landmarks
 
     # ── Public ────────────────────────────────────────────────────────────────
 
-    def __call__(self, frames: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int, int, int]] | None:
+    def __call__(self, frames: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int, int, int], np.ndarray] | None:
         """Crop and resize faces from a chunk of video frames.
 
         Runs MediaPipe FaceMesh on every frame.  If any frame yields no
@@ -306,13 +612,15 @@ class FaceExtractor:
                     ``N >= 1`` is enforced; wrong shapes raise ``ValueError``.
 
         Returns:
-            ``(cropped_frames, bbox)`` where ``cropped_frames`` is an
-            ``(N, 3, target_size, target_size)`` uint8 RGB array
-            (channels-first, PyTorch-ready) and ``bbox`` is
-            ``(x1, y1, x2, y2, orig_w, orig_h)`` — the temporally-smoothed,
-            scaled crop rectangle in the normalised-video pixel space together
-            with the original frame dimensions.  Returns ``None`` if any frame
-            had no detectable face.
+            ``(cropped_frames, bbox, landmarks)`` where ``cropped_frames`` is an
+            ``(N, 3, target_size, target_size)`` uint8 RGB array (channels-first,
+            PyTorch-ready), ``bbox`` is ``(x1, y1, x2, y2, orig_w, orig_h)`` — the
+            temporally-smoothed, scaled crop rectangle in the normalised-video
+            pixel space with the original frame dimensions — and ``landmarks`` is
+            an ``(N, NUM_LANDMARKS, 2)`` int16 array of per-frame FaceMesh points
+            in ``target_size`` crop space (the source for the per-pixel region
+            partition, roadmap I4). Returns ``None`` if any frame had no
+            detectable face.
 
         Raises:
             ValueError: If ``frames`` has wrong number of dimensions or dtype.
@@ -329,13 +637,16 @@ class FaceExtractor:
 
         img_h, img_w = frames.shape[1], frames.shape[2]
 
-        # ── Detect bboxes for all frames ──────────────────────────────────────
+        # ── Detect bboxes + landmarks for all frames ──────────────────────────
         bboxes: list[tuple[int, int, int, int]] = []
+        all_landmarks: list[list] = []
         for frame in frames:
-            bbox = self._detect_bbox(frame)
-            if bbox is None:
+            detected = self._detect_bbox(frame)
+            if detected is None:
                 return None
+            bbox, landmarks = detected
             bboxes.append(bbox)
+            all_landmarks.append(landmarks)
 
         # ── Temporal smoothing: average across all frames ─────────────────────
         arr = np.array(bboxes, dtype=np.float32)  # (N, 4)
@@ -353,15 +664,22 @@ class FaceExtractor:
         # to the square target_size x target_size model input.
         x1_s, y1_s, x2_s, y2_s = _expand_to_square(x1_s, y1_s, x2_s, y2_s, img_h, img_w)
 
-        # ── Crop + resize each frame ──────────────────────────────────────────
+        # ── Crop + resize each frame + per-frame landmark points ──────────────
         out_frames: list[np.ndarray] = []
-        for frame in frames:
+        landmark_pts: list[np.ndarray] = []
+        for frame, landmarks in zip(frames, all_landmarks, strict=True):
             crop = frame[y1_s:y2_s, x1_s:x2_s]
             resized = cv2.resize(crop, (self._target_size, self._target_size))
             # (H, W, C) → (C, H, W)
             out_frames.append(resized.transpose(2, 0, 1))
+            # Landmarks map into the SAME per-chunk square crop the frame used.
+            landmark_pts.append(_landmarks_to_crop(landmarks, x1_s, y1_s, x2_s, y2_s, img_w, img_h, self._target_size))
 
-        return np.stack(out_frames, axis=0), (x1_s, y1_s, x2_s, y2_s, img_w, img_h)
+        return (
+            np.stack(out_frames, axis=0),
+            (x1_s, y1_s, x2_s, y2_s, img_w, img_h),
+            np.stack(landmark_pts, axis=0),
+        )
 
     def close(self) -> None:
         """Release MediaPipe FaceLandmarker resources."""
