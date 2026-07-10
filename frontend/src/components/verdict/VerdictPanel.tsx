@@ -229,42 +229,6 @@ export function VerdictPanel({ result, isScanning }: VerdictPanelProps) {
       </Section>
 
       {/* TOP ANOMALY REGIONS removed — not supported by current inference pipeline */}
-
-      {/* ── RESULT METADATA ────────────────────────────────────────────── */}
-      {result && (
-        <motion.div
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3, delay: 0.4 }}
-          className="rounded-lg px-4 py-3"
-          style={{ backgroundColor: '#141720', border: '1px solid #2a2f42' }}
-        >
-          <div className="flex justify-between items-center">
-            <span
-              style={{ fontSize: 10, fontFamily: 'monospace', color: '#4d5470', letterSpacing: '0.1em' }}
-            >
-              FRAMES ANALYZED
-            </span>
-            <span
-              style={{ fontSize: 10, fontFamily: 'monospace', color: '#8b92a8' }}
-            >
-              {result.heatmapFrames.length}
-            </span>
-          </div>
-          <div className="flex justify-between items-center mt-1.5">
-            <span
-              style={{ fontSize: 10, fontFamily: 'monospace', color: '#4d5470', letterSpacing: '0.1em' }}
-            >
-              CLIP ID
-            </span>
-            <span
-              style={{ fontSize: 10, fontFamily: 'monospace', color: '#8b92a8' }}
-            >
-              {result.clipId}
-            </span>
-          </div>
-        </motion.div>
-      )}
     </div>
   )
 }
