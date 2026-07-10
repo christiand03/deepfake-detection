@@ -2451,6 +2451,9 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
     per_frame_landmarks = _resolve_per_frame_landmarks(n_frames, prepared.chunk_landmarks)
     label_maps = _partition_label_maps(per_frame_landmarks)
     anomaly_regions = _extract_anomaly_regions(signed_v, label_maps)
+    # Whole-clip bivariate per-region scores for the Phase-1/2 face map (exposed
+    # to the frontend as regionRelevance).
+    region_bivariate = _extract_region_bivariate(magnitude_v, direction_v, label_maps)
     rel_magnitude, rel_sign = _per_chunk_bivariate(magnitude_v, direction_v)
 
     # ── Audio panel: bivariate L1 timeline + frequency bands/grids + word segments ─
@@ -2513,6 +2516,7 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
         "perChunkRelevanceSign": rel_sign,
         "heatmapFrames": heatmap_frames,
         "anomalyRegions": anomaly_regions,
+        "_regionBivariate": region_bivariate,
         "cropBox": {
             "x1": cx1,
             "y1": cy1,

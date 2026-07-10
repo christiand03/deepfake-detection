@@ -110,6 +110,23 @@ class AnomalyRegionSchema(BaseModel):
     score: float
 
 
+class RegionRelevanceSchema(BaseModel):
+    """Whole-clip bivariate AttnLRP score per facial region (Phase 1/2 face map).
+
+    Aggregates BOTH channels over the per-pixel region partition, averaged across
+    every frame of the clip (not a before/after shift — that is Phase 3/4):
+
+    * ``magnitude`` — relevance magnitude (``|R_fake|+|R_real|`` ≥ 0); how much
+      AttnLRP relevance the region carries across the whole clip.
+    * ``direction`` — signed contrastive lean (``R_fake − R_real``); + fake-
+      supporting, − real-supporting. Drives the region's seismic fill hue.
+    """
+
+    region: str
+    magnitude: float
+    direction: float
+
+
 class Phase3ParamsSchema(BaseModel):
     crf: int
     fps: int
@@ -228,6 +245,9 @@ class AnalysisResultSchema(BaseModel):
     perChunkRelevanceSign: list[float] = []
     heatmapFrames: list[str]
     anomalyRegions: list[AnomalyRegionSchema]
+    # Whole-clip bivariate per-region relevance (Phase 1/2 face map). Empty on
+    # older cached results / the face-less fallback.
+    regionRelevance: list[RegionRelevanceSchema] = []
     audio: AudioAnalysisSchema | None = None
     phase3: Phase3ResultSchema | None = None
     phase4: Phase4ResultSchema | None = None

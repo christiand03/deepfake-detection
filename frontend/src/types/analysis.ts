@@ -109,6 +109,19 @@ export interface AudioAnalysis {
   frequencyGridRelevance: FrequencyGridRelevance | null
 }
 
+/**
+ * Whole-clip bivariate relevance for one facial region (Phase 1/2 face map).
+ * Aggregated over the per-pixel region partition across every frame — NOT a
+ * before/after shift (that is AttentionShift, Phase 3/4).
+ *   • magnitude — |R_fake|+|R_real| ≥ 0; how much relevance the region carries.
+ *   • direction — signed R_fake−R_real; + fake-supporting, − real-supporting.
+ */
+export interface RegionRelevance {
+  region: string
+  magnitude: number
+  direction: number
+}
+
 export interface AttentionShift {
   region: string
   // Bivariate LRP before/after (roadmap I4): magnitude = relevance/attention
@@ -223,6 +236,11 @@ export interface AnalysisResult {
   heatmapFrames: string[]
   /** Top spatial anomaly regions with their LRP contribution scores */
   anomalyRegions: { region: string; score: number }[]
+  /**
+   * Whole-clip bivariate per-region relevance for the Phase-1/2 face map.
+   * Empty for older cached results / the face-less fallback.
+   */
+  regionRelevance: RegionRelevance[]
   audio: AudioAnalysis | null
   cropBox: CropBox | null
   phase3: Phase3Result | null

@@ -280,6 +280,23 @@ export function makeMockResult(clip: ClipMeta): AnalysisResult {
           { region: 'Jaw', score: 0.02 },
           { region: 'Forehead', score: 0.01 },
         ],
+    regionRelevance: isFake
+      ? [
+          { region: 'Forehead', magnitude: 0.12, direction: 0.08 },
+          { region: 'Left Eye', magnitude: 0.41, direction: 0.34 },
+          { region: 'Right Eye', magnitude: 0.38, direction: 0.31 },
+          { region: 'Nose', magnitude: 0.29, direction: 0.12 },
+          { region: 'Mouth', magnitude: 0.84, direction: 0.72 },
+          { region: 'Jaw', magnitude: 0.22, direction: 0.18 },
+        ]
+      : [
+          { region: 'Forehead', magnitude: 0.1, direction: -0.05 },
+          { region: 'Left Eye', magnitude: 0.28, direction: -0.19 },
+          { region: 'Right Eye', magnitude: 0.26, direction: -0.17 },
+          { region: 'Nose', magnitude: 0.22, direction: -0.08 },
+          { region: 'Mouth', magnitude: 0.35, direction: -0.24 },
+          { region: 'Jaw', magnitude: 0.18, direction: -0.11 },
+        ],
     audio,
     cropBox: null,
     phase3: null,

@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { DemoSelector } from './DemoSelector'
 import { VideoAnalysisPlayer } from './VideoAnalysisPlayer'
 import { ChunkTimelines } from './ChunkTimelines'
+import { RegionFacePanel } from './RegionFacePanel'
 import { AnalysisControls } from './AnalysisControls'
 import { useAnalysis } from '../../hooks/useAnalysis'
 import { useVideoSync } from '../../hooks/useVideoSync'
@@ -121,14 +122,16 @@ export function VideoPanel({
         disabled={isScanning}
       />
 
-      <VideoAnalysisPlayer
-        ref={videoRef}
-        clip={selectedClip}
-        heatmapFrames={result?.heatmapFrames ?? null}
-        frameIndex={frameIndex}
-        isScanning={isScanning}
-        heatmapOpacity={heatmapOpacity}
-      />
+      <RegionFacePanel regions={result?.regionRelevance ?? []}>
+        <VideoAnalysisPlayer
+          ref={videoRef}
+          clip={selectedClip}
+          heatmapFrames={result?.heatmapFrames ?? null}
+          frameIndex={frameIndex}
+          isScanning={isScanning}
+          heatmapOpacity={heatmapOpacity}
+        />
+      </RegionFacePanel>
 
       {result && (
         <ChunkTimelines

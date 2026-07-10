@@ -76,6 +76,7 @@ def _run_multimodal_analysis(clip_id: str, fusion_mode: str) -> AnalysisResultSc
         perChunkRelevanceSign=mm_result.get("perChunkRelevanceSign", []),
         heatmapFrames=mm_result["heatmapFrames"],
         anomalyRegions=mm_result["anomalyRegions"],
+        regionRelevance=mm_result.get("_regionBivariate", []),
         audio=audio_result,
         cropBox=crop_box,
         modelMode="multimodal",
@@ -134,6 +135,7 @@ def _run_unimodal_analysis(clip_id: str) -> AnalysisResultSchema:
         perChunkRelevanceSign=video_result.get("perChunkRelevanceSign", []),
         heatmapFrames=video_result["heatmapFrames"],
         anomalyRegions=video_result["anomalyRegions"],
+        regionRelevance=video_result.get("_regionBivariate", []),
         audio=audio_result,
         cropBox=crop_box,
     )
