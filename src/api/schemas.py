@@ -20,6 +20,12 @@ class ClipMetaSchema(BaseModel):
     duration: float
     fps: float
     hasAudio: bool
+    # Hierarchy fields for the identity->scenario->segment->variant selector
+    # (roadmap H1). Default "" keeps older clips.json entries loadable.
+    identity: str = ""
+    scenario: str = ""
+    segment: str = ""
+    variant: str = ""
 
 
 class WordSegmentSchema(BaseModel):

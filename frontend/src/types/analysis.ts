@@ -6,13 +6,18 @@ export interface ClipMeta {
   title: string
   /** Path relative to /public, e.g. "/clips/obama_fake.mp4" */
   videoSrc: string
-  /** Path to poster image, e.g. "/clips/obama_fake.jpg" */
+  /** Thumbnail URL — first-frame face crop served by the API (H2). */
   posterSrc: string
   /** Duration in seconds */
   duration: number
   /** Nominal frame-rate used when mapping currentTime → frame index */
   fps: number
   hasAudio: boolean
+  /** Hierarchy fields for the identity→scenario→segment→variant selector (H1). */
+  identity: string
+  scenario: string
+  segment: string
+  variant: string
 }
 
 export interface WordSegment {

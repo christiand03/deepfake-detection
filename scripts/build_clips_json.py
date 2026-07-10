@@ -107,6 +107,21 @@ def _make_title(video_id: str) -> str:
     return f"{identity} — {mod_type}"
 
 
+def _parse_hierarchy(video_id: str) -> tuple[str, str, str, str]:
+    """Split a *video_id* into ``(identity, scenario, segment, variant)``.
+
+    ``video_id`` is ``{identity}__{clip_id}__{segment}__{variant}`` — the four
+    fields the hierarchical clip selector (roadmap H1) groups by. The ``__``
+    separator is unambiguous because a *variant* only ever contains single
+    underscores (e.g. ``fake_video_fake_audio``). Missing trailing parts fall
+    back to empty strings so a non-conforming id still yields four values.
+    """
+    parts = video_id.split("__")
+    parts += [""] * (4 - len(parts))
+    identity, scenario, segment, variant = parts[:4]
+    return identity, scenario, segment, variant
+
+
 def build_clips(
     normalized_dir: Path,
     csv_index: dict[str, dict[str, str]],
@@ -143,20 +158,30 @@ def build_clips(
 
         fps, duration = _video_props(mp4)
         i = len(clips) + 1
+        clip_id = f"clip_{i:02d}"
+        identity, scenario, segment, variant = _parse_hierarchy(video_id)
 
         clips.append(
             {
-                "id": f"clip_{i:02d}",
+                "id": clip_id,
                 "label": label,
                 "title": _make_title(video_id),
                 "videoSrc": f"/clips/{mp4.name}",
-                "posterSrc": "",
+                # First-frame face-crop thumbnail served + cached by the API
+                # (roadmap H2); drives the hierarchical selector's previews.
+                "posterSrc": f"/api/clips/{clip_id}/thumbnail",
                 "videoPath": f"data/normalized/{mp4.name}",
                 "h5ChunkId": f"{video_id}__chunk00000",
                 "duration": duration,
                 "fps": fps,
                 # All normalized talking-head clips carry an audio stream.
                 "hasAudio": True,
+                # Hierarchy fields for the identity->scenario->segment->variant
+                # selector (roadmap H1); grouped client-side.
+                "identity": identity,
+                "scenario": scenario,
+                "segment": segment,
+                "variant": variant,
             }
         )
 

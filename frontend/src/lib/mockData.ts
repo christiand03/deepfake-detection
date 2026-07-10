@@ -38,6 +38,10 @@ export const DEMO_CLIPS: ClipMeta[] = [
     duration: 9.48,
     fps: 25,
     hasAudio: true,
+    identity: 'id00012',
+    scenario: '21Uxsk56VDQ',
+    segment: '00001',
+    variant: 'fake_video_fake_audio',
   },
   {
     id: 'clip_02',
@@ -48,6 +52,10 @@ export const DEMO_CLIPS: ClipMeta[] = [
     duration: 9.44,
     fps: 25,
     hasAudio: true,
+    identity: 'id00012',
+    scenario: '21Uxsk56VDQ',
+    segment: '00001',
+    variant: 'fake_video_real_audio',
   },
   {
     id: 'clip_03',
@@ -58,6 +66,10 @@ export const DEMO_CLIPS: ClipMeta[] = [
     duration: 9.44,
     fps: 25,
     hasAudio: true,
+    identity: 'id00012',
+    scenario: '21Uxsk56VDQ',
+    segment: '00001',
+    variant: 'real',
   },
   {
     id: 'clip_04',
@@ -68,6 +80,10 @@ export const DEMO_CLIPS: ClipMeta[] = [
     duration: 9.48,
     fps: 25,
     hasAudio: true,
+    identity: 'id00012',
+    scenario: '21Uxsk56VDQ',
+    segment: '00001',
+    variant: 'real_video_fake_audio',
   },
   {
     id: 'clip_05',
@@ -78,6 +94,10 @@ export const DEMO_CLIPS: ClipMeta[] = [
     duration: 14.96,
     fps: 25,
     hasAudio: true,
+    identity: 'id00012',
+    scenario: '21Uxsk56VDQ',
+    segment: '00002',
+    variant: 'fake_video_fake_audio',
   },
 ]
 

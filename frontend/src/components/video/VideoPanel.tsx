@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { DemoSelector } from './DemoSelector'
+import { ClipSelector } from './ClipSelector'
 import { VideoAnalysisPlayer } from './VideoAnalysisPlayer'
 import { ChunkTimelines } from './ChunkTimelines'
 import { RegionFacePanel } from './RegionFacePanel'
@@ -115,7 +115,7 @@ export function VideoPanel({
 
   return (
     <div className="flex flex-col gap-4">
-      <DemoSelector
+      <ClipSelector
         clips={clips}
         selectedId={selectedId}
         onSelect={handleSelect}
