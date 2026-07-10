@@ -166,6 +166,11 @@ class Phase3ResultSchema(BaseModel):
     baselineConfidence: float
     params: Phase3ParamsSchema
     attentionShift: list[AttentionShiftSchema]
+    # True when MediaPipe could not detect a face in the DEGRADED clip and the
+    # classifier was graded on the clean-baseline face crop instead (transparency
+    # flag for the robustness panel — the pipeline's face detector broke, not the
+    # classifier). False on normal runs and older cached results.
+    degradedFaceLost: bool = False
     audioRobustness: AudioRobustnessSchema | None = None
     # Per-frame CLEAN-crop region-partition overlay (I4 debug view): one PNG data
     # URI per frame (tan-tinted facial regions + borders + labels), aligned to the

@@ -122,16 +122,34 @@ export function VideoPanel({
         disabled={isScanning}
       />
 
-      <RegionFacePanel regions={result?.regionRelevance ?? []}>
-        <VideoAnalysisPlayer
-          ref={videoRef}
-          clip={selectedClip}
-          heatmapFrames={result?.heatmapFrames ?? null}
-          frameIndex={frameIndex}
-          isScanning={isScanning}
-          heatmapOpacity={heatmapOpacity}
-        />
-      </RegionFacePanel>
+      <div style={{ position: 'relative' }}>
+        <RegionFacePanel regions={result?.regionRelevance ?? []}>
+          <VideoAnalysisPlayer
+            ref={videoRef}
+            clip={selectedClip}
+            heatmapFrames={result?.heatmapFrames ?? null}
+            frameIndex={frameIndex}
+            isScanning={isScanning}
+            heatmapOpacity={heatmapOpacity}
+          />
+        </RegionFacePanel>
+
+        {/* Analysis controls overlay — top-right corner of the player. */}
+        <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 7 }}>
+          <AnalysisControls
+            onAnalyze={handleAnalyze}
+            isScanning={isScanning}
+            isDone={isDone}
+            heatmapOpacity={heatmapOpacity}
+            onOpacityChange={setHeatmapOpacity}
+            modelMode={modelMode}
+            onModelModeChange={handleModelModeChange}
+            fusionMode={fusionMode}
+            onFusionModeChange={handleFusionModeChange}
+            multimodalDisabled={multimodalDisabled}
+          />
+        </div>
+      </div>
 
       {result && (
         <ChunkTimelines
@@ -142,19 +160,6 @@ export function VideoPanel({
           totalFrames={result.perFrameScores.length}
         />
       )}
-
-      <AnalysisControls
-        onAnalyze={handleAnalyze}
-        isScanning={isScanning}
-        isDone={isDone}
-        heatmapOpacity={heatmapOpacity}
-        onOpacityChange={setHeatmapOpacity}
-        modelMode={modelMode}
-        onModelModeChange={handleModelModeChange}
-        fusionMode={fusionMode}
-        onFusionModeChange={handleFusionModeChange}
-        multimodalDisabled={multimodalDisabled}
-      />
 
       {state.status === 'error' && (
         <div

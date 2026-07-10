@@ -89,111 +89,116 @@ export function AnalysisControls({
   const isMultimodal = modelMode === 'multimodal'
   const accent = isMultimodal ? PURPLE : CYAN
 
+  const labelStyle = {
+    fontSize: 9,
+    fontFamily: 'monospace',
+    letterSpacing: '0.16em',
+    color: '#8b92a8',
+  } as const
+
   return (
-    <div className="flex flex-col gap-3">
-      {/* ── Model-mode + fusion selection ──────────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+    <div
+      className="flex flex-col items-end gap-2.5"
+      style={{
+        padding: '10px 12px',
+        borderRadius: 8,
+        backgroundColor: 'rgba(13,15,20,0.82)',
+        backdropFilter: 'blur(6px)',
+        border: '1px solid #2a2f42',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+      }}
+    >
+      {/* ── Model-mode selection ───────────────────────────────────────────── */}
+      <div className="flex items-center gap-2">
+        <span style={labelStyle}>MODEL</span>
+        <SegmentedToggle<ModelMode>
+          options={[
+            { value: 'unimodal', label: 'UNIMODAL' },
+            { value: 'multimodal', label: 'MULTIMODAL' },
+          ]}
+          value={modelMode}
+          onChange={onModelModeChange}
+          accent={accent}
+          disabled={isScanning}
+          disabledOptions={multimodalDisabled ? ['multimodal'] : undefined}
+          disabledTitle="Requires an audio track"
+        />
+      </div>
+
+      {/* ── Fusion variant (multimodal only) ───────────────────────────────── */}
+      {isMultimodal && (
         <div className="flex items-center gap-2">
-          <span
-            style={{ fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.16em', color: '#4d5470' }}
-          >
-            MODEL
-          </span>
-          <SegmentedToggle<ModelMode>
+          <span style={labelStyle}>VARIANT</span>
+          <SegmentedToggle<FusionMode>
             options={[
-              { value: 'unimodal', label: 'UNIMODAL' },
-              { value: 'multimodal', label: 'MULTIMODAL' },
+              { value: 'cross_attention', label: 'FUSION' },
+              { value: 'concat', label: 'CONCATENATION' },
             ]}
-            value={modelMode}
-            onChange={onModelModeChange}
-            accent={accent}
+            value={fusionMode}
+            onChange={onFusionModeChange}
+            accent={PURPLE}
             disabled={isScanning}
-            disabledOptions={multimodalDisabled ? ['multimodal'] : undefined}
-            disabledTitle="Requires an audio track"
           />
         </div>
+      )}
 
-        {isMultimodal && (
-          <div className="flex items-center gap-2">
-            <span
-              style={{ fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.16em', color: '#4d5470' }}
-            >
-              VARIANT
-            </span>
-            <SegmentedToggle<FusionMode>
-              options={[
-                { value: 'cross_attention', label: 'FUSION' },
-                { value: 'concat', label: 'CONCATENATION' },
-              ]}
-              value={fusionMode}
-              onChange={onFusionModeChange}
-              accent={PURPLE}
-              disabled={isScanning}
-            />
-          </div>
-        )}
-      </div>
+      {/* ── Analyze button ─────────────────────────────────────────────────── */}
+      <button
+        onClick={onAnalyze}
+        disabled={isScanning}
+        style={{
+          width: '100%',
+          paddingInline: 20,
+          paddingBlock: 9,
+          borderRadius: 6,
+          fontSize: 12,
+          fontFamily: 'monospace',
+          fontWeight: 700,
+          letterSpacing: '0.12em',
+          cursor: isScanning ? 'not-allowed' : 'pointer',
+          border: '1px solid',
+          transition: 'all 0.15s',
+          ...(isScanning
+            ? {
+                backgroundColor: `${accent}0a`,
+                borderColor: `${accent}26`,
+                color: `${accent}66`,
+              }
+            : {
+                backgroundColor: `${accent}1a`,
+                borderColor: `${accent}66`,
+                color: accent,
+                boxShadow: `0 0 12px ${accent}1f`,
+              }),
+        }}
+      >
+        {isScanning ? '⏳ ANALYZING…' : isDone ? '↺ RE-ANALYZE' : '▶ ANALYZE'}
+      </button>
 
-      {/* ── Analyze button + overlay slider ────────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={onAnalyze}
-          disabled={isScanning}
-          style={{
-            paddingInline: 20,
-            paddingBlock: 9,
-            borderRadius: 6,
-            fontSize: 12,
-            fontFamily: 'monospace',
-            fontWeight: 700,
-            letterSpacing: '0.12em',
-            cursor: isScanning ? 'not-allowed' : 'pointer',
-            border: '1px solid',
-            transition: 'all 0.15s',
-            ...(isScanning
-              ? {
-                  backgroundColor: `${accent}0a`,
-                  borderColor: `${accent}26`,
-                  color: `${accent}66`,
-                }
-              : {
-                  backgroundColor: `${accent}1a`,
-                  borderColor: `${accent}66`,
-                  color: accent,
-                  boxShadow: `0 0 12px ${accent}1f`,
-                }),
-          }}
-        >
-          {isScanning ? '⏳ ANALYZING…' : isDone ? '↺ RE-ANALYZE' : '▶ ANALYZE'}
-        </button>
-
-        {/* Opacity slider — only shown when heatmap is visible */}
-        {isDone && (
-          <div className="flex items-center gap-2">
-            <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#4d5470' }}>
-              OVERLAY
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={heatmapOpacity}
-              onChange={e => onOpacityChange(parseFloat(e.target.value))}
-              style={{
-                width: 80,
-                accentColor: accent,
-                cursor: 'pointer',
-              }}
-            />
-            <span
-              style={{ fontSize: 11, fontFamily: 'monospace', color: '#8b92a8', width: 28 }}
-            >
-              {Math.round(heatmapOpacity * 100)}%
-            </span>
-          </div>
-        )}
-      </div>
+      {/* ── Overlay slider — only shown when heatmap is visible ─────────────── */}
+      {isDone && (
+        <div className="flex items-center gap-2">
+          <span style={labelStyle}>OVERLAY</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={heatmapOpacity}
+            onChange={e => onOpacityChange(parseFloat(e.target.value))}
+            style={{
+              width: 80,
+              accentColor: accent,
+              cursor: 'pointer',
+            }}
+          />
+          <span
+            style={{ fontSize: 11, fontFamily: 'monospace', color: '#8b92a8', width: 28 }}
+          >
+            {Math.round(heatmapOpacity * 100)}%
+          </span>
+        </div>
+      )}
     </div>
   )
 }

@@ -127,11 +127,12 @@ def test_ensure_target_fps_offfps_reencodes_once_and_caches(tmp_path: Path):
 # ── _prepare_uploaded_video ───────────────────────────────────────────────────
 
 
-def _patched_prepare(clip: Path, extractor_results: list):
+def _patched_prepare(clip: Path, extractor_results: list, fallback=None):
     """Run _prepare_uploaded_video with all external boundaries mocked.
 
     Accepts legacy 2-tuple ``(chunk, bbox6)`` results and auto-appends a valid
-    landmark array (roadmap I4) so existing test data stays terse.
+    landmark array (roadmap I4) so existing test data stays terse. *fallback* is
+    forwarded to reuse a prior clip's crop geometry on detection failure.
     """
     norm_results = [r if (r is None or len(r) == 3) else (r[0], r[1], _make_landmarks()) for r in extractor_results]
     extractor = MagicMock(side_effect=norm_results)
@@ -141,7 +142,7 @@ def _patched_prepare(clip: Path, extractor_results: list):
         patch("src.api.inference._get_face_extractor", return_value=extractor),
         patch("src.data_processing.face_extractor.iter_video_chunks", return_value=iter(raw_chunks)),
     ):
-        return _prepare_uploaded_video(clip)
+        return _prepare_uploaded_video(clip, fallback=fallback)
 
 
 def test_prepare_uploaded_video_shapes_indices_and_box(tmp_path: Path):
@@ -175,6 +176,35 @@ def test_prepare_uploaded_video_skips_faceless_chunks(tmp_path: Path):
     assert prepared.chunk_indices == [0, 2]
     # A2-Box: the face-less window 1 has no box entry (gap-filled at heatmap time).
     assert set(prepared.chunk_box_map) == {0, 2}
+
+
+def test_prepare_uploaded_video_reuses_fallback_box_on_detection_failure(tmp_path: Path):
+    """Robustness lab: a degraded chunk MediaPipe can't detect reuses the clean box."""
+    clip = tmp_path / "clip.mp4"
+    box6 = (10, 10, 50, 50, 64, 64)  # orig 64x64 matches the mocked raw chunks
+    clean = _patched_prepare(clip, [(_make_chunk(120), box6)])
+    assert clean is not None
+
+    # Degraded pass: detection fails on the only chunk, but the fallback fills it.
+    degraded = _patched_prepare(clip, [None], fallback=clean)
+    assert degraded is not None
+    assert degraded.chunks.shape == (1, NUM_FRAMES, 3, 224, 224)
+    assert degraded.chunk_indices == [0]
+    assert degraded.chunk_box_map == {0: (10, 10, 50, 50)}
+    assert (degraded.orig_w, degraded.orig_h) == (64, 64)
+    # Landmarks are carried over from the clean baseline for the reused chunk.
+    np.testing.assert_array_equal(degraded.chunk_landmarks[0], clean.chunk_landmarks[0])
+
+
+def test_prepare_uploaded_video_fallback_ignored_on_resolution_mismatch(tmp_path: Path):
+    """A fallback from a different resolution (e.g. upscaled) is NOT reused."""
+    clip = tmp_path / "clip.mp4"
+    # Clean baseline at 32x32 — does not match the mocked 64x64 degraded frames.
+    clean = _patched_prepare(clip, [(_make_chunk(120), (5, 5, 25, 25, 32, 32))])
+    assert clean is not None
+
+    degraded = _patched_prepare(clip, [None], fallback=clean)
+    assert degraded is None  # mismatched geometry → no reuse → no detectable face
 
 
 def test_resolve_per_window_boxes_gap_fill():

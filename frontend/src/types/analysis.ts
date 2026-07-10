@@ -167,8 +167,15 @@ export interface Phase3Result {
     crf: number
     fps: number
     noiseSigma: number
+    upscale?: boolean
   }
   attentionShift: AttentionShift[]
+  /**
+   * True when MediaPipe could not detect a face in the DEGRADED clip and the
+   * classifier was graded on the clean-baseline crop instead (the pipeline's
+   * face detector broke, not the classifier). Surfaced as a warning badge.
+   */
+  degradedFaceLost?: boolean
   audioRobustness?: AudioRobustness
   /**
    * Per-frame CLEAN-crop region-partition overlay (I4 debug view): one PNG data

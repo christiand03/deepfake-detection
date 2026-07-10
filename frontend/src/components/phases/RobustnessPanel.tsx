@@ -188,13 +188,21 @@ function BreakingPoint({
   original,
   degraded,
   params,
+  faceLost = false,
 }: {
   original: number
   degraded: number
   params: { crf: number; fps: number; noiseSigma: number }
+  /** True when the degraded clip's face was undetectable; graded on clean crop. */
+  faceLost?: boolean
 }) {
   const drop = original - degraded
   const dropPct = (drop / original) * 100
+  const magnitudePct = Math.abs(dropPct)
+  // Below 0.05 rounds to 0.0% — report it as "no change" rather than a tiny drop/gain.
+  const unchanged = magnitudePct < 0.05
+  // Negative drop == the model became MORE confident under degradation.
+  const gained = !unchanged && dropPct < 0
   const severity = dropPct > 50 ? 'critical' : dropPct > 25 ? 'moderate' : 'low'
   const severityColor =
     severity === 'critical' ? '#ef4444' : severity === 'moderate' ? '#f59e0b' : '#22c55e'
@@ -219,6 +227,39 @@ function BreakingPoint({
       >
         ROBUSTNESS ANALYSIS
       </div>
+
+      {/* Transparency badge: the degraded clip's face was undetectable, so the
+          classifier was graded on the clean-baseline crop (the pipeline's face
+          detector broke at this level — not the classifier). */}
+      {faceLost && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            alignItems: 'flex-start',
+            marginBottom: 8,
+            padding: '7px 10px',
+            borderRadius: 6,
+            backgroundColor: 'rgba(245,158,11,0.08)',
+            border: '1px solid rgba(245,158,11,0.35)',
+          }}
+        >
+          <span style={{ fontSize: 12, lineHeight: '14px' }}>⚠</span>
+          <span
+            style={{
+              fontSize: 9,
+              fontFamily: 'monospace',
+              color: '#f59e0b',
+              lineHeight: '14px',
+              letterSpacing: '0.02em',
+            }}
+          >
+            Face no longer detectable at this degradation level — the classifier
+            was graded on the clean-baseline face crop. The detection stage
+            broke, not the classifier.
+          </span>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         <div>
           <span
@@ -228,7 +269,7 @@ function BreakingPoint({
               color: '#4d5470',
             }}
           >
-            Confidence drop:{' '}
+            Confidence {unchanged ? 'change' : gained ? 'gain' : 'drop'}:{' '}
           </span>
           <span
             style={{
@@ -238,7 +279,8 @@ function BreakingPoint({
               fontWeight: 700,
             }}
           >
-            −{dropPct.toFixed(1)}%
+            {unchanged ? '' : gained ? '+' : '−'}
+            {magnitudePct.toFixed(1)}%
           </span>
         </div>
         <div>
@@ -267,7 +309,12 @@ function BreakingPoint({
           ` — Breaking point reached. Classifier unreliable under these conditions.`}
         {severity === 'moderate' &&
           ` — Significant degradation. Detection weakened but functional.`}
-        {severity === 'low' && ` — Minimal impact. Classifier remains robust.`}
+        {severity === 'low' &&
+          (unchanged
+            ? ` — No measurable change. Classifier remains robust.`
+            : gained
+              ? ` — Confidence increased under degradation. Classifier remains robust.`
+              : ` — Minimal impact. Classifier remains robust.`)}
       </div>
     </div>
   )
@@ -279,6 +326,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
   const [crf, setCrf] = useState(28)
   const [fps, setFps] = useState(25)
   const [noiseSigma, setNoiseSigma] = useState(0)
+  const [upscale, setUpscale] = useState(false)
   const [audioEnabled, setAudioEnabled] = useState(false)
   const [audioBitrate, setAudioBitrate] = useState(64)
   const [useMultimodal, setUseMultimodal] = useState(false)
@@ -303,6 +351,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
         crf,
         fps,
         noiseSigma,
+        upscale,
         audioBitrate: audioEnabled ? audioBitrate : undefined,
         useMultimodal,
         fusionMode: 'cross_attention',
@@ -386,6 +435,41 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
             onChange={setNoiseSigma}
             disabled={isRunning}
           />
+
+          {/* Upscale toggle — simulate the TikTok/WhatsApp downscale→upscale
+              re-encode (640×360 → 1280×720) that softens/blocks fine detail. */}
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #2a2f42' }}>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                cursor: isRunning ? 'not-allowed' : 'pointer',
+                opacity: isRunning ? 0.4 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={upscale}
+                onChange={e => setUpscale(e.target.checked)}
+                disabled={isRunning}
+                style={{ accentColor: '#00e5ff', cursor: 'inherit' }}
+              />
+              <span
+                style={{
+                  fontSize: 10,
+                  fontFamily: 'monospace',
+                  color: upscale ? '#8b92a8' : '#4d5470',
+                  letterSpacing: '0.08em',
+                }}
+              >
+                DOWNSCALE → UPSCALE RE-ENCODE
+              </span>
+            </label>
+            <div style={{ marginTop: 4, fontSize: 9, fontFamily: 'monospace', color: '#4d5470' }}>
+              640×360 → 1280×720, simulating social-media re-compression.
+            </div>
+          </div>
 
           {/* Audio compression toggle — standalone Wav2Vec audio test; only
               meaningful in unimodal mode (the fusion model grades audio jointly),
@@ -638,6 +722,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                   original={phase3.baselineConfidence}
                   degraded={phase3.degradedConfidence}
                   params={phase3.params}
+                  faceLost={!!phase3.degradedFaceLost}
                 />
 
                 {/* Whole-clip crop player: clean → degraded (I2) */}

@@ -63,6 +63,7 @@ export async function runRobustnessTest(
     crf: number
     fps: number
     noiseSigma: number
+    upscale?: boolean
     audioBitrate?: number
     useMultimodal?: boolean
     fusionMode?: 'cross_attention' | 'concat'
@@ -81,6 +82,7 @@ export async function runRobustnessTest(
       crf: params.crf,
       fps: params.fps,
       noise_sigma: params.noiseSigma,
+      upscale: params.upscale ?? false,
       audio_bitrate: params.audioBitrate ?? null,
       ...(params.useMultimodal !== undefined && { use_multimodal: params.useMultimodal }),
       ...(params.fusionMode !== undefined && { fusion_mode: params.fusionMode }),

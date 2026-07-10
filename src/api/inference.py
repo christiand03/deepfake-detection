@@ -457,15 +457,57 @@ class _PreparedClip:
     orig_w: int
     orig_h: int
     video_path: Path  # the 25-fps file the chunks were read from
+    # True when ≥1 chunk's face detection failed and a fallback crop box was reused
+    # (robustness lab: the clip was too degraded for MediaPipe). Purely informational.
+    reused_fallback: bool = False
 
 
-def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
+def _crop_chunk_with_box(frames: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray:
+    """Crop a raw RGB chunk with a known square box (no face detection).
+
+    Reproduces :meth:`FaceExtractor.__call__`'s crop+resize step for a box that
+    was already detected elsewhere — used to reuse the clean baseline's crop
+    geometry on a degraded clip whose pixels MediaPipe can no longer detect a
+    face in (robustness lab).
+
+    Args:
+        frames: ``(16, H, W, 3)`` uint8 RGB chunk.
+        box:    ``(x1, y1, x2, y2)`` square crop rectangle in *frames* pixel space.
+
+    Returns:
+        ``(16, 3, 224, 224)`` uint8 RGB array (channels-first), matching the
+        extractor's output layout.
+    """
+    import cv2
+
+    x1, y1, x2, y2 = box
+    out: list[np.ndarray] = []
+    for frame in frames:
+        crop = frame[y1:y2, x1:x2]
+        resized = cv2.resize(crop, (IMG_SIZE, IMG_SIZE))
+        out.append(resized.transpose(2, 0, 1))
+    return np.stack(out, axis=0)
+
+
+def _prepare_uploaded_video(
+    clip_path: Path,
+    fallback: _PreparedClip | None = None,
+) -> _PreparedClip | None:
     """Preprocess an uploaded clip exactly like the training pipeline.
 
     25-fps normalisation → consecutive non-overlapping 16-frame chunks →
     MediaPipe face crop per chunk (temporally smoothed, 1.4×-scaled, square)
     → uint8 → ImageNet normalisation.  Face-less chunks are skipped, matching
     training.  The whole clip is processed end to end (no frame cap).
+
+    Args:
+        clip_path: The clip to preprocess.
+        fallback:  A previously prepared clip whose crop geometry is reused for
+                   any chunk whose face detection fails here. Enables the
+                   robustness lab to grade a heavily degraded clip (where
+                   MediaPipe can no longer find the face) on the SAME face crop
+                   the clean baseline used. Only applied when the degraded frame
+                   resolution matches the fallback's (i.e. no upscaling).
 
     Returns:
         A :class:`_PreparedClip`, or ``None`` when no chunk contains a
@@ -481,11 +523,24 @@ def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
     boxes: list[tuple[int, int, int, int]] = []
     landmarks_list: list[np.ndarray] = []
     orig_w = orig_h = 0
+    reused_fallback = False
 
     for chunk_idx, frames in enumerate(iter_video_chunks(video_path, num_frames=NUM_FRAMES)):
         with _face_extractor_lock:
             result = extractor(frames)
         if result is None:
+            # Detection failed on this chunk. In the robustness lab the pixels are
+            # too degraded to detect, but the face has not moved — reuse the clean
+            # baseline's box + landmarks for this chunk index (same resolution only).
+            fb_box = fallback.chunk_box_map.get(chunk_idx) if fallback is not None else None
+            fh, fw = frames.shape[1], frames.shape[2]
+            if fb_box is not None and (fw, fh) == (fallback.orig_w, fallback.orig_h):
+                cropped_chunks.append(_crop_chunk_with_box(frames, fb_box))
+                chunk_indices.append(chunk_idx)
+                boxes.append(fb_box)
+                landmarks_list.append(fallback.chunk_landmarks[chunk_idx])
+                orig_w, orig_h = fallback.orig_w, fallback.orig_h
+                reused_fallback = True
             continue
         cropped, (x1, y1, x2, y2, ow, oh), landmarks = result
         cropped_chunks.append(cropped)  # (16, 3, 224, 224) uint8
@@ -514,6 +569,7 @@ def _prepare_uploaded_video(clip_path: Path) -> _PreparedClip | None:
         orig_w=orig_w,
         orig_h=orig_h,
         video_path=video_path,
+        reused_fallback=reused_fallback,
     )
 
 
@@ -1467,6 +1523,8 @@ def _run_video_inference_fullframe(clip_path: Path) -> dict:
 
 def run_video_inference(
     clip_path: Path,
+    *,
+    prepared: _PreparedClip | None = None,
 ) -> dict:
     """Run video deepfake detection with per-frame AttnLRP heatmaps.
 
@@ -1487,7 +1545,8 @@ def run_video_inference(
     """
     model = get_video_model()
 
-    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is None:
+        prepared = _prepare_uploaded_video(clip_path)
     if prepared is None:
         log.warning(
             "No face detected in %s — falling back to full-frame inference; "
@@ -2330,7 +2389,12 @@ def _audio_window_tensor(waveform_np: np.ndarray, window_idx: int) -> torch.Tens
     return (tensor - tensor.mean()) / (tensor.std() + 1e-7)
 
 
-def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attention") -> dict:
+def run_multimodal_inference(
+    clip_path: Path,
+    fusion_mode: str = "cross_attention",
+    *,
+    prepared: _PreparedClip | None = None,
+) -> dict:
     """Run multimodal deepfake detection with joint AttnLRP xAI.
 
     Pairs each 16-frame video window with its time-aligned 10240-sample audio
@@ -2354,7 +2418,8 @@ def run_multimodal_inference(clip_path: Path, fusion_mode: str = "cross_attentio
     """
     model = get_multimodal_model(fusion_mode)  # type: ignore[arg-type]
 
-    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is None:
+        prepared = _prepare_uploaded_video(clip_path)
     if prepared is None:
         raise RuntimeError(
             f"No face detected in {clip_path.name}; multimodal analysis requires a "
@@ -2739,6 +2804,7 @@ def _robustness_payload(
     upscale: bool,
     media_prefix: str,
     clip_stem: str,
+    face_lost: bool = False,
 ) -> dict:
     """Assemble the Phase-3 dict from a clean + degraded inference result (I2).
 
@@ -2769,6 +2835,7 @@ def _robustness_payload(
         "degradedVideoUrl": degraded_video_url,
         "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma, "upscale": upscale},
         "attentionShift": attention_shift,
+        "degradedFaceLost": face_lost,
     }
 
 
@@ -2791,12 +2858,17 @@ def run_robustness_inference(
     """
     import tempfile
 
-    clean = run_video_inference(clip_path)
+    # Prepare the clean clip once so the degraded pass can reuse its face crop
+    # when heavy degradation makes the face undetectable (I2 like-for-like).
+    clean_prepared = _prepare_uploaded_video(clip_path)
+    clean = run_video_inference(clip_path, prepared=clean_prepared)
     with tempfile.TemporaryDirectory() as tmpdir:
         degraded_path = Path(tmpdir) / "degraded.mp4"
         _ffmpeg_degrade(clip_path, degraded_path, crf, fps, noise_sigma, upscale, {"acodec": "copy"})
-        degraded = run_video_inference(degraded_path)
-    return _robustness_payload(clean, degraded, crf, fps, noise_sigma, upscale, media_prefix, clip_path.stem)
+        degraded_prepared = _prepare_uploaded_video(degraded_path, fallback=clean_prepared)
+        degraded = run_video_inference(degraded_path, prepared=degraded_prepared)
+    face_lost = degraded_prepared is not None and degraded_prepared.reused_fallback
+    return _robustness_payload(clean, degraded, crf, fps, noise_sigma, upscale, media_prefix, clip_path.stem, face_lost)
 
 
 def run_multimodal_robustness_inference(
@@ -2822,7 +2894,11 @@ def run_multimodal_robustness_inference(
     """
     import tempfile
 
-    clean = run_multimodal_inference(clip_path, fusion_mode=fusion_mode)
+    # Prepare the clean clip once so the degraded pass can reuse its face crop
+    # when heavy degradation makes the face undetectable (multimodal otherwise
+    # hard-errors on a face-less degraded clip).
+    clean_prepared = _prepare_uploaded_video(clip_path)
+    clean = run_multimodal_inference(clip_path, fusion_mode=fusion_mode, prepared=clean_prepared)
     # Degrade audio in-place (the fusion model grades it) or copy it through.
     audio_kwargs = (
         {"acodec": "aac", "audio_bitrate": f"{audio_bitrate}k"} if audio_bitrate is not None else {"acodec": "copy"}
@@ -2830,8 +2906,10 @@ def run_multimodal_robustness_inference(
     with tempfile.TemporaryDirectory() as tmpdir:
         degraded_path = Path(tmpdir) / "degraded.mp4"
         _ffmpeg_degrade(clip_path, degraded_path, crf, fps, noise_sigma, upscale, audio_kwargs)
-        degraded = run_multimodal_inference(degraded_path, fusion_mode=fusion_mode)
-    return _robustness_payload(clean, degraded, crf, fps, noise_sigma, upscale, media_prefix, clip_path.stem)
+        degraded_prepared = _prepare_uploaded_video(degraded_path, fallback=clean_prepared)
+        degraded = run_multimodal_inference(degraded_path, fusion_mode=fusion_mode, prepared=degraded_prepared)
+    face_lost = degraded_prepared is not None and degraded_prepared.reused_fallback
+    return _robustness_payload(clean, degraded, crf, fps, noise_sigma, upscale, media_prefix, clip_path.stem, face_lost)
 
 
 # ── Adversarial inference ─────────────────────────────────────────────────────
