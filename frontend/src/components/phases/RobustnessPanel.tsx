@@ -753,7 +753,10 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
 
                 {/* Attention shift */}
                 {phase3.attentionShift.length > 0 && (
-                  <AttentionShiftTable shifts={phase3.attentionShift} />
+                  <AttentionShiftTable
+                    shifts={phase3.attentionShift}
+                    warn={!!phase3.faceRotationWarning}
+                  />
                 )}
 
                 {/* Audio frequency-band shift */}

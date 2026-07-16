@@ -21,6 +21,7 @@ import { useState } from 'react'
 
 import { relevanceToRgb } from '../../lib/seismicColormap'
 import type { AttentionShift } from '../../types/analysis'
+import { RotationWarning } from './RotationWarning'
 
 const HALF_WIDTH = 46 // % of the lane each side of centre (leaves a small margin)
 
@@ -45,7 +46,18 @@ function signed(v: number): string {
   return `${v >= 0 ? '+' : ''}${v.toFixed(2)}`
 }
 
-export function AttentionShiftTable({ shifts }: { shifts: AttentionShift[] }) {
+export function AttentionShiftTable({
+  shifts,
+  warn = false,
+}: {
+  shifts: AttentionShift[]
+  /**
+   * Face is near profile → the per-region partition behind these bars is
+   * unreliable (shows a caution). Only meaningful for the VIDEO-region table;
+   * audio-band usages leave it off.
+   */
+  warn?: boolean
+}) {
   const [hover, setHover] = useState<string | null>(null)
 
   const rows = shifts.map(s => ({
@@ -73,6 +85,12 @@ export function AttentionShiftTable({ shifts }: { shifts: AttentionShift[] }) {
       >
         ATTENTION SHIFT (LRP)
       </div>
+
+      {warn && (
+        <div style={{ marginBottom: 8 }}>
+          <RotationWarning compact />
+        </div>
+      )}
 
       {/* Axis hint */}
       <div

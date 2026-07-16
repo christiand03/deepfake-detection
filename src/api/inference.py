@@ -1074,33 +1074,6 @@ def _bivariate_band_shift(
     ]
 
 
-# ── Per-frame score estimation ────────────────────────────────────────────────
-
-
-def _estimate_per_frame_scores(
-    model: VideoMAEModule,
-    pixel_values: torch.Tensor,
-    global_fake_prob: float,
-) -> list[float]:
-    """Approximate per-frame fake probabilities via occlusion sensitivity.
-
-    Zeros out one frame at a time and measures the change in the global
-    fake probability — higher sensitivity → that frame is more relevant.
-    """
-    t_len = pixel_values.shape[1]
-    scores: list[float] = []
-    with torch.no_grad():
-        for t in range(t_len):
-            masked = pixel_values.clone()
-            masked[0, t] = 0.0
-            logits_t = model.net(pixel_values=masked).logits
-            prob_t = torch.softmax(logits_t, dim=-1)[0, 1].item()
-            sensitivity = abs(global_fake_prob - prob_t)
-            direction = 1.0 if global_fake_prob > 0.5 else -1.0
-            scores.append(float(np.clip(global_fake_prob + sensitivity * direction, 0.0, 1.0)))
-    return scores
-
-
 # ── Full-video frame loaders ──────────────────────────────────────────────────
 
 
@@ -1205,6 +1178,18 @@ def _resolve_per_frame_landmarks(
         f1 = min(f0 + NUM_FRAMES, n_frames)
         out[f0:f1] = wb[: f1 - f0]
     return out
+
+
+def _face_rotation_warning(per_frame_landmarks: np.ndarray | None) -> bool:
+    """True when the clip's face is turned far enough (near profile) that the
+    FaceMesh region partition is unreliable — surfaced to the frontend so the
+    region-based visuals (face schematic, attention shift) can warn (I4).
+
+    ``False`` when no landmarks exist (the geometric fallback has no pose signal).
+    """
+    from src.data_processing.face_extractor import is_face_rotated
+
+    return is_face_rotated(per_frame_landmarks)
 
 
 def _load_all_frames_cropped_per_window(
@@ -1460,6 +1445,7 @@ def _video_result_with_heatmaps(
         "_heatmapNp": signed_np,
         "_regionBivariate": region_bivariate,
         "_regionLabelMaps": label_maps,
+        "faceRotationWarning": _face_rotation_warning(per_frame_landmarks),
     }
 
 
@@ -1518,6 +1504,8 @@ def _run_video_inference_fullframe(clip_path: Path) -> dict:
         "_heatmapNp": heatmap_np,
         "_regionBivariate": region_bivariate,
         "_regionLabelMaps": None,
+        # No landmarks in the full-frame fallback → no pose signal to warn on.
+        "faceRotationWarning": False,
     }
 
 
@@ -2582,6 +2570,7 @@ def run_multimodal_inference(
         "heatmapFrames": heatmap_frames,
         "anomalyRegions": anomaly_regions,
         "_regionBivariate": region_bivariate,
+        "faceRotationWarning": _face_rotation_warning(per_frame_landmarks),
         "cropBox": {
             "x1": cx1,
             "y1": cy1,
@@ -2836,6 +2825,8 @@ def _robustness_payload(
         "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma, "upscale": upscale},
         "attentionShift": attention_shift,
         "degradedFaceLost": face_lost,
+        # Pose warning is a property of the CLEAN clip (the partition source).
+        "faceRotationWarning": clean.get("faceRotationWarning", False),
     }
 
 
@@ -3120,6 +3111,7 @@ def run_adversarial_inference(
         "cleanVerdict": base_result["verdict"],
         "cleanConfidence": base_result["confidence"],
         "regionMaskFrames": _partition_overlay_frames(label_maps),
+        "faceRotationWarning": _face_rotation_warning(per_frame_landmarks),
     }
 
 
@@ -3485,6 +3477,7 @@ def run_multimodal_adversarial_inference(
         "cleanVerdict": base_result["verdict"],
         "cleanConfidence": base_result["confidence"],
         "regionMaskFrames": _partition_overlay_frames(label_maps),
+        "faceRotationWarning": _face_rotation_warning(per_frame_landmarks),
     }
 
 

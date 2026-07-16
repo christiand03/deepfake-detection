@@ -171,6 +171,9 @@ class Phase3ResultSchema(BaseModel):
     # flag for the robustness panel — the pipeline's face detector broke, not the
     # classifier). False on normal runs and older cached results.
     degradedFaceLost: bool = False
+    # True when the CLEAN clip's face is turned far enough (near profile) that the
+    # FaceMesh region partition is unreliable — the attention-shift table warns.
+    faceRotationWarning: bool = False
     audioRobustness: AudioRobustnessSchema | None = None
     # Per-frame CLEAN-crop region-partition overlay (I4 debug view): one PNG data
     # URI per frame (tan-tinted facial regions + borders + labels), aligned to the
@@ -219,6 +222,9 @@ class Phase4ResultSchema(BaseModel):
     epsilon: float
     attentionShift: list[AttentionShiftSchema]
     audioAttentionShift: list[AttentionShiftSchema] | None = None
+    # True when the CLEAN clip's face is near profile (unreliable region
+    # partition) — the video attention-shift table warns. Audio bands are exempt.
+    faceRotationWarning: bool = False
     attackModalities: str | None = None
     # Clean baseline from the SAME model as the attack (I3), so the frontend can
     # show a like-for-like "clean vs. attacked" comparison independent of the main
@@ -259,6 +265,9 @@ class AnalysisResultSchema(BaseModel):
     # Whole-clip bivariate per-region relevance (Phase 1/2 face map). Empty on
     # older cached results / the face-less fallback.
     regionRelevance: list[RegionRelevanceSchema] = []
+    # True when the face is turned far enough (near profile) that the FaceMesh
+    # region partition is unreliable — the whole-clip face schematic warns.
+    faceRotationWarning: bool = False
     audio: AudioAnalysisSchema | None = None
     phase3: Phase3ResultSchema | None = None
     phase4: Phase4ResultSchema | None = None

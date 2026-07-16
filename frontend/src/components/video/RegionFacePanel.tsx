@@ -17,9 +17,12 @@ import { FaceSchematic } from './FaceSchematic'
 
 export function RegionFacePanel({
   regions,
+  rotated = false,
   children,
 }: {
   regions: RegionRelevance[]
+  /** Clip's face is near profile → the schematic shows an unreliability caution. */
+  rotated?: boolean
   children: React.ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -48,7 +51,7 @@ export function RegionFacePanel({
               boxShadow: '0 10px 34px rgba(0,0,0,0.55)',
             }}
           >
-            <FaceSchematic regions={regions} />
+            <FaceSchematic regions={regions} rotated={rotated} />
           </motion.div>
         )}
       </AnimatePresence>

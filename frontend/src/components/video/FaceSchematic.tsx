@@ -20,6 +20,7 @@ import { useRef, useState } from 'react'
 
 import { bivariateRgba } from '../../lib/seismicColormap'
 import type { RegionRelevance } from '../../types/analysis'
+import { RotationWarning } from '../shared/RotationWarning'
 
 // ── Region geometry (viewBox 0 0 200 250) ────────────────────────────────────
 // Each region is an independently fillable + hoverable closed path. Shapes are
@@ -77,7 +78,14 @@ function signed(v: number): string {
   return `${v >= 0 ? '+' : ''}${v.toFixed(3)}`
 }
 
-export function FaceSchematic({ regions }: { regions: RegionRelevance[] }) {
+export function FaceSchematic({
+  regions,
+  rotated = false,
+}: {
+  regions: RegionRelevance[]
+  /** Clip's face is near profile → region partition unreliable (shows a caution). */
+  rotated?: boolean
+}) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<{ region: string; x: number; y: number; w: number } | null>(
     null,
@@ -226,6 +234,7 @@ export function FaceSchematic({ regions }: { regions: RegionRelevance[] }) {
         >
           REGION RELEVANCE · WHOLE CLIP
         </div>
+        {rotated && <RotationWarning compact />}
         {top && (
           <div style={{ fontFamily: 'monospace' }}>
             <div style={{ fontSize: 9, color: '#4d5470', letterSpacing: '0.1em', marginBottom: 3 }}>

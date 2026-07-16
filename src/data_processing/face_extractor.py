@@ -315,6 +315,59 @@ def _build_region_point_table() -> tuple[tuple[int, ...], tuple[int, ...]]:
 REGION_POINT_INDICES, REGION_POINT_LABELS = _build_region_point_table()
 
 
+# ── Head-pose (yaw) proxy ─────────────────────────────────────────────────────
+# FaceMesh regresses a frontal-template mesh and degrades badly at high yaw: near
+# profile the self-occluded far side is hallucinated, so the per-region partition
+# built from these landmarks no longer lines up with the visible face. We cannot
+# fix MediaPipe, but we can flag it. These indices give a cheap 2D yaw proxy from
+# the stored crop-space landmarks (no dependency on the unreliable far side beyond
+# the two cheek extremes).
+_NOSE_TIP_INDEX = 1  # nose tip
+_LEFT_CHEEK_INDEX = 234  # image-left face-oval extreme
+_RIGHT_CHEEK_INDEX = 454  # image-right face-oval extreme
+# Warn above this mean nose-to-cheek asymmetry. Frontal faces sit near 0; a strong
+# 3/4 turn / profile approaches 1. 0.55 catches near-profile poses (where the
+# partition visibly breaks) without firing on mild, harmless head turns.
+FACE_ROTATION_WARN_THRESHOLD: float = 0.55
+
+
+def estimate_face_yaw(landmarks_seq: np.ndarray | None) -> float:
+    """Mean normalised nose-to-cheek asymmetry over frames — a 2D yaw proxy in [0, 1].
+
+    Per frame, the nose tip's horizontal offset from the cheek midpoint is
+    normalised by the inter-cheek width: ``|d_right - d_left| / (d_right + d_left)``
+    where ``d_left``/``d_right`` are the nose-to-cheek distances. 0 ≈ frontal (nose
+    centred), →1 ≈ profile (nose at a cheek edge). Averaged over all frames.
+
+    Args:
+        landmarks_seq: ``(T, L, 2)`` crop-space landmark points ``[x, y]``.
+
+    Returns:
+        Mean asymmetry in ``[0, 1]``; ``0.0`` when the sequence is empty.
+    """
+    if landmarks_seq is None or len(landmarks_seq) == 0:
+        return 0.0
+    xs = np.asarray(landmarks_seq, dtype=np.float32)[..., 0]  # (T, L) x-coords
+    nose = xs[:, _NOSE_TIP_INDEX]
+    d_left = np.abs(nose - xs[:, _LEFT_CHEEK_INDEX])
+    d_right = np.abs(xs[:, _RIGHT_CHEEK_INDEX] - nose)
+    denom = d_left + d_right
+    # Degenerate (collapsed) faces contribute nothing rather than dividing by zero.
+    valid = denom > 1e-3
+    if not np.any(valid):
+        return 0.0
+    asym = np.abs(d_right[valid] - d_left[valid]) / denom[valid]
+    return float(np.clip(np.mean(asym), 0.0, 1.0))
+
+
+def is_face_rotated(landmarks_seq: np.ndarray | None) -> bool:
+    """True when the yaw proxy indicates a near-profile pose whose region
+    partition is unreliable. ``False`` when landmarks are absent."""
+    if landmarks_seq is None:
+        return False
+    return estimate_face_yaw(landmarks_seq) >= FACE_ROTATION_WARN_THRESHOLD
+
+
 # ── Module-level private helpers ──────────────────────────────────────────────
 
 

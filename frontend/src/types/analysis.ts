@@ -176,6 +176,12 @@ export interface Phase3Result {
    * face detector broke, not the classifier). Surfaced as a warning badge.
    */
   degradedFaceLost?: boolean
+  /**
+   * True when the CLEAN clip's face is near profile: FaceMesh fits a frontal
+   * template at high yaw, so the per-region partition — and the attention-shift
+   * table built from it — is unreliable. Surfaced as a caution on the visual.
+   */
+  faceRotationWarning?: boolean
   audioRobustness?: AudioRobustness
   /**
    * Per-frame CLEAN-crop region-partition overlay (I4 debug view): one PNG data
@@ -201,6 +207,11 @@ export interface Phase4Result {
   epsilon: number
   attentionShift: AttentionShift[]
   audioAttentionShift?: AttentionShift[]
+  /**
+   * True when the CLEAN clip's face is near profile — the per-region partition
+   * (and the video attention-shift table) is unreliable. Audio bands are exempt.
+   */
+  faceRotationWarning?: boolean
   attackModalities?: string
   /**
    * Clean baseline from the SAME model as the attack (I3) — use these for the
@@ -253,6 +264,11 @@ export interface AnalysisResult {
    * Empty for older cached results / the face-less fallback.
    */
   regionRelevance: RegionRelevance[]
+  /**
+   * True when the face is near profile: FaceMesh fits a frontal template at high
+   * yaw, so the per-region partition behind the face schematic is unreliable.
+   */
+  faceRotationWarning?: boolean
   audio: AudioAnalysis | null
   cropBox: CropBox | null
   phase3: Phase3Result | null

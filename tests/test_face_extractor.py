@@ -11,11 +11,17 @@ import numpy as np
 import pytest
 
 from src.data_processing.face_extractor import (
+    _LEFT_CHEEK_INDEX,
+    _NOSE_TIP_INDEX,
+    _RIGHT_CHEEK_INDEX,
+    FACE_ROTATION_WARN_THRESHOLD,
     NUM_LANDMARKS,
     FaceExtractor,
     _landmarks_to_bbox,
     _landmarks_to_crop,
     _scale_bbox,
+    estimate_face_yaw,
+    is_face_rotated,
     iter_video_chunks,
 )
 
@@ -367,3 +373,58 @@ def test_full_pipeline_shape() -> None:
 
     if not found_any:
         pytest.skip("No face detected in any chunk of the sample video")
+
+
+# ── Head-pose (yaw) proxy ─────────────────────────────────────────────────────
+
+
+def _yaw_landmarks(nose_x: float, left_x: float = 20.0, right_x: float = 80.0, t: int = 4) -> np.ndarray:
+    """(T, L, 2) crop-space landmarks with fixed cheeks and a placed nose tip.
+
+    Only the nose-tip and two cheek x-coords matter to the yaw proxy; all other
+    points are filled with the cheek midpoint so they never dominate.
+    """
+    mid = (left_x + right_x) / 2
+    pts = np.full((t, NUM_LANDMARKS, 2), mid, dtype=np.int32)
+    pts[:, _NOSE_TIP_INDEX, 0] = int(nose_x)
+    pts[:, _LEFT_CHEEK_INDEX, 0] = int(left_x)
+    pts[:, _RIGHT_CHEEK_INDEX, 0] = int(right_x)
+    return pts
+
+
+class TestFaceYaw:
+    def test_frontal_nose_centred_is_near_zero(self) -> None:
+        """Nose midway between the cheeks → symmetric → yaw ≈ 0, not rotated."""
+        lm = _yaw_landmarks(nose_x=50.0)  # midpoint of 20..80
+        assert estimate_face_yaw(lm) < 0.05
+        assert is_face_rotated(lm) is False
+
+    def test_profile_nose_at_cheek_edge_is_near_one(self) -> None:
+        """Nose pinned to the left cheek → maximal asymmetry → yaw ≈ 1, rotated."""
+        lm = _yaw_landmarks(nose_x=20.0)  # sits on the left cheek
+        assert estimate_face_yaw(lm) > 0.9
+        assert is_face_rotated(lm) is True
+
+    def test_threshold_boundary(self) -> None:
+        """Asymmetry crosses the warn threshold as the nose slides off-centre."""
+        # Place the nose so the normalised asymmetry equals the threshold exactly:
+        # asym = |d_right - d_left| / (d_left + d_right); with span 60 and nose at
+        # offset o from centre, asym = 2*o / 60. Solve o for asym = threshold.
+        span = 80.0 - 20.0
+        offset = FACE_ROTATION_WARN_THRESHOLD * span / 2
+        below = _yaw_landmarks(nose_x=50.0 + offset - 2)
+        above = _yaw_landmarks(nose_x=50.0 + offset + 2)
+        assert is_face_rotated(below) is False
+        assert is_face_rotated(above) is True
+
+    def test_none_and_empty_are_safe(self) -> None:
+        """No landmarks → no pose signal (0.0 / not rotated), never raises."""
+        assert estimate_face_yaw(None) == 0.0
+        assert estimate_face_yaw(np.zeros((0, NUM_LANDMARKS, 2), dtype=np.int32)) == 0.0
+        assert is_face_rotated(None) is False
+
+    def test_degenerate_collapsed_face_is_safe(self) -> None:
+        """All three x-coords coincident (zero span) → 0.0, no divide-by-zero."""
+        pts = np.full((3, NUM_LANDMARKS, 2), 40, dtype=np.int32)
+        assert estimate_face_yaw(pts) == 0.0
+        assert is_face_rotated(pts) is False

@@ -123,7 +123,10 @@ export function VideoPanel({
       />
 
       <div style={{ position: 'relative' }}>
-        <RegionFacePanel regions={result?.regionRelevance ?? []}>
+        <RegionFacePanel
+          regions={result?.regionRelevance ?? []}
+          rotated={!!result?.faceRotationWarning}
+        >
           <VideoAnalysisPlayer
             ref={videoRef}
             clip={selectedClip}

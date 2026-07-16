@@ -657,7 +657,10 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
                 />
 
                 {/* Attention shifts */}
-                <AttentionShiftTable shifts={phase4.attentionShift} />
+                <AttentionShiftTable
+                  shifts={phase4.attentionShift}
+                  warn={!!phase4.faceRotationWarning}
+                />
 
                 {/* Audio frequency-band shift (multimodal attacks only) */}
                 {phase4.audioAttentionShift && phase4.audioAttentionShift.length > 0 && (
