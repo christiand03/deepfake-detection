@@ -1,6 +1,6 @@
 # Registry
 
-Last updated: 2026-07-05T17:11:12Z
+Last updated: 2026-07-15T00:00:00Z
 
 ## Sources
 
@@ -82,6 +82,7 @@ Last updated: 2026-07-05T17:11:12Z
 | results-003 | Multimodal Concat Fusion Phase-1 (ablation) | [[Results/multimodal-concat-phase1-ablation]] | active | Phase 2 — multimodal fusion (concat ablation) | [[Sources/Papers/videomae-tong-2022]], [[Sources/Papers/wav2vec2-baevski-2020]] | 2026-07-05T17:11:12Z |
 | results-004 | VideoMAE Unimodal Video Baseline (P1/P2) | [[Results/videomae-unimodal-video-baseline]] | active | Phase 1/2 — unimodal video | [[Sources/Papers/videomae-tong-2022]] | 2026-07-05T17:11:12Z |
 | results-005 | Wav2Vec2 Phase-2 Audio End-to-End | [[Results/wav2vec2-phase2-audio-end-to-end]] | active | Phase 2 — unimodal audio | [[Sources/Papers/wav2vec2-baevski-2020]] | 2026-07-05T17:11:12Z |
+| results-006 | Phase 3 Robustness — Social-Media Re-encoding | [[Results/phase3-robustness-social-media-sweep]] | active | Phase 3 — robustness (compression/framerate/bitrate/upscale) | [[Sources/Papers/av-deepfake1m]], [[Sources/Papers/robust-deepfake-review-khan-2025]] | 2026-07-15T00:00:00Z |
 | result-001 | Dataset Ablation Pairing Diversity | [[Results/dataset-ablation-pairing-diversity]] | active |  |  | 2026-07-05T17:11:12Z |
 | result-002 | Videomae Frame Perturbation Temporal | [[Results/videomae-frame-perturbation-temporal]] | active |  |  | 2026-07-05T17:11:12Z |
 

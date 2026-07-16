@@ -86,6 +86,7 @@ Managed block. Refresh with `/kb-sync` or `/kb-index`. Put hand-written navigati
 - [[Results/multimodal-concat-phase1-ablation]]
 - [[Results/videomae-unimodal-video-baseline]]
 - [[Results/wav2vec2-phase2-audio-end-to-end]]
+- [[Results/phase3-robustness-social-media-sweep]]
 - [[Results/dataset-ablation-pairing-diversity]]
 - [[Results/videomae-frame-perturbation-temporal]]
 

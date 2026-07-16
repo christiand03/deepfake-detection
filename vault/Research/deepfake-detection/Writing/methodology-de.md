@@ -126,7 +126,33 @@ Bewusst analog zur Video-Heatmap (gleiche Methode AttnLRP, gleiche seismic-Farbs
 - **Layer 2 — Word-Level Aggregation:** **WhisperX** (Forced Aligner) liefert Wort-Zeitstempel (offline gecacht); die Relevanz pro Wort-Token wird aufsummiert. Wort-Tokens übernehmen damit die Rolle, die im Video die Gesichtsregionen spielen.
 - **Layer 3 — Frequenzband-Zusammenfassung:** Relevanz aggregiert in drei Bändern — Low (0–500 Hz, Grundfrequenz/Prosodie), Mid (500 Hz–4 kHz, Formanten/Vokale), High (4–8 kHz, Frikative/Vocoder-Artefakte).
 
-Für die Video-Heatmap wird die Frame-Relevanz zusätzlich auf anatomische Regionen (Mund, Augen, Kiefer, Schulter, Hintergrund) aggregiert; diese Region-Scores sind die quantitative Grundlage der Attention-Shift-Analyse in Phase 3 und 4.
+Für die Video-Heatmap wird die Frame-Relevanz zusätzlich auf anatomische Regionen (Mund, Augen, Kiefer, Schulter, Hintergrund) aggregiert; diese Region-Scores sind die quantitative Grundlage der Attention-Shift-Analyse in Phase 3 und 4 (§6.3).
+
+## 6. Robustheits- und Adversarial-Methodik (Phase 3 & 4)
+
+Die Vertrauenswürdigkeit des Detektors wird in zwei Stufen unter kontrollierter Störung geprüft. Dieser Abschnitt beschreibt die *Methoden*; die konkreten Sweep-Gitter und Metrik-Keys stehen in [[experimental-setup-de]] §3.3. Beide Phasen trainieren — mit Ausnahme der adversarialen Härtung (§4, Phase 4.2) — kein Modell, sondern evaluieren die besten Phase-1/2-Checkpoints.
+
+### 6.1 Phase 3 — Social-Media-Robustheit
+
+Auf den sauberen Eingang werden, je Modalität und über zunehmende Schweregrade, realitätsnahe Degradierungsoperatoren angewandt (`scripts/eval_robustness_sweep.py`): H.264-Rekompression (CRF), Gauß-Rauschen ($\sigma$), Framerate-Reduktion, Down-/Upscaling sowie Audio-Bitraten-Reduktion. Verglichen wird clean → degradiert auf Video-Ebene; der Schweregrad, ab dem die AUC einbricht, ist der **Breaking Point**.
+
+### 6.2 Phase 4.1 — White-Box-Angriffe
+
+Drei gradientenbasierte Angriffe auf die besten Checkpoints (`scripts/eval_adversarial_sweep.py`, `scripts/compute_uap.py`):
+
+- **FGSM** \cite{goodfellow2015fgsm} — ein Ein-Schritt-$L_\infty$-Angriff.
+- **PGD** \cite{madry2018pgd} — die iterative $L_\infty$-Variante (untargeted, maximiert die Cross-Entropy gegenüber dem wahren Label).
+- **UAP** \cite{moosavi2017uap} — eine einzige, eingabe-unabhängige Störung als Beleg systematischer statt clip-spezifischer Schwächen.
+
+Der Schalter `--attack-modalities video | audio | both` wählt, welche Modalität perturbiert wird (multimodal); je Angriff werden die Störstärke $\varepsilon$ und die PGD-Schrittzahl variiert.
+
+### 6.3 Attention-Shift unter Angriff (Kernmethode, G4)
+
+Der zentrale Beitrag (RQ4b, [[Research Gaps]] Gap G4) misst, ob ein Angriff, der die *Vorhersage* kippt, auch die *treue Erklärung* verschiebt. Nach einem erfolgreichen Angriff wird die AttnLRP-Heatmap neu berechnet und die Verteilung der Relevanz-Magnitude über die anatomischen Regionen (Mund, Augen, Kiefer, Schulter, Hintergrund) mit der Clean-Heatmap verglichen. Die aggregierte Verschiebung wird als `mean_attention_shift` berichtet: Wandert die Relevanz von semantischen Regionen (Mund/Augen) auf den Hintergrund, ist die Erklärung so fragil wie der Detektor. Die Region-Scores nutzen den Betrag $|\cdot|$ der Relevanz.
+
+### 6.4 Adversariale Härtung
+
+Als Verteidigungsstufe härtet das PGD-augmentierte Fine-Tuning (Phase 4.2, §4) den Detektor; gemessen wird, wie stark die Fooling Rate sinkt und um welchen Preis bei der Clean-Accuracy.
 
 ---
 

@@ -4,7 +4,7 @@ type: writing/experimental-setup
 status: draft-grounded
 language: de
 created: 2026-07-05
-updated: 2026-07-05
+updated: 2026-07-15
 tags: [Writing, ExperimentalSetup, Deutsch, Belegarbeit]
 ---
 
@@ -19,16 +19,20 @@ Dieser Abschnitt beschreibt die konkrete experimentelle Konfiguration: den reali
 
 **Quelle.** Primärdaten sind ein **~15-GB-Subset von AV-Deepfake1M** \cite{cai2024avdeepfake1m} (Vollset 404 GB, CC BY-NC). **SWAN-DF** \cite{korshunov2023swandf} wird als ausgelagerte Cross-Dataset-Probe zurückgehalten und ausschließlich zur Evaluation verwendet, nicht zum Training.
 
-**Realisierter Datensatz** (gemessen aus `data/processed/*_metadata.csv`, Stand 2026-06-13):
+**Realisierter Datensatz** (gemessen aus `data/processed/*_metadata.csv`, Stand 2026-07-15 — Evaluationsbasis für Phase 3/4):
 
 | Split | Identitäten | Videos | Chunks (16-Frame) |
 |---|---|---|---|
-| train | 22 | 9\,863 | 133\,708 |
-| val | 4 | 854 | 9\,477 |
-| test | 6 | 1\,169 | 14\,541 |
-| **Σ** | **32** | **11\,886** | **157\,726** |
+| train | 119 | 9\,482 | 116\,170 |
+| val | 22 | 1\,382 | 17\,219 |
+| test | 24 | 1\,471 | 18\,298 |
+| **Σ** | **165** | **12\,335** | **151\,687** |
 
-Die Splits sind **identitätsdisjunkt** und werden über einen deterministischen Per-Identität-Hash erzeugt (`md5(f"{seed}:{identity}")` → Bucket in $[0,1)$; `split_seed=11`, `run.max_videos=12000`). Der deterministische Hash ist unabhängig von der jeweils vorhandenen Identitäten-Teilmenge und verhindert damit Identity Leakage auch über inkrementelle Preprocessing-Läufe hinweg.
+Die Splits sind **identitätsdisjunkt** (verifiziert: `train∩val = train∩test = val∩test = ∅`) und werden über einen deterministischen Per-Identität-Hash erzeugt (`md5(f"{seed}:{identity}")` → Bucket in $[0,1)$; `split_seed=11`, Ratios `test/val = 0.15/0.15`, `run.max_videos=12000`). Der deterministische Hash ist unabhängig von der jeweils vorhandenen Identitäten-Teilmenge und verhindert damit Identity Leakage auch über inkrementelle Preprocessing-Läufe hinweg.
+
+> [!warning] Datensatz-Versionierung — Phase 1/2 vs. Phase 3/4 (kein Leakage)
+> Die **Phase-1/2-Modelle wurden auf einer früheren Ausbaustufe** des Subsets trainiert (Stand 2026-06-13: **32 Identitäten**, train 22 Id / 9\,863 Videos, test 6 Id / 1\,169 Videos). Seither wurden weitere Identitäten präprozessiert; **Phase 3 (Robustheit)** und **Phase 4 (Adversarial)** evaluieren dieselben Phase-1/2-Checkpoints auf dem **Testsplit der ausgebauten Stufe (165 Identitäten, 1\,471 Test-Videos)** oben.
+> Weil der Split ein **reiner Per-Identität-Hash** ist (Bucket $<0{,}15 \Rightarrow$ test, $[0{,}15,0{,}30) \Rightarrow$ val, sonst train), hängt die Zuordnung **nur** an der Identität, nicht an der präprozessierten Teilmenge. Eine in Phase 1/2 **trainierte** Identität (Bucket $\ge 0{,}30$) kann daher **niemals** in den Phase-3-**Test**split (Bucket $<0{,}15$) geraten. **Verifiziert:** die aktuellen CSVs reproduzieren exakt aus `seed=11` (0 Abweichungen); Test-Buckets liegen bei $0{,}007$–$0{,}147$, Train-Buckets bei $\ge 0{,}300$. Der ausgebaute Testsplit ist damit ein **echtes, leakage-freies Holdout** — er fügt nur zusätzliche, nie im Training gesehene Identitäten hinzu.
 
 **Chunk-Labeling.** Da das mediane Fake-Segment nur $0{,}36\,\text{s}$ (~9 von 16 Frames) dauert, verwendet das Per-Chunk-Labeling ein **Min-Overlap-Kriterium**: Ein Chunk gilt pro Modalität nur dann als fake, wenn sein Zeitfenster ein Manipulationsintervall um $\ge 0{,}1\,\text{s}$ **oder** $\ge 50\,\%$ der Segmentdauer überlappt. Dieses Kriterium senkt die `label_video`-Fake-Rate von ~7 % auf ~5 % und entfernt Boundary-Labelrauschen. Die Label-Definition und das `modify_type`-Mapping stehen in [[methodology-de]] §1.
 
@@ -131,4 +135,4 @@ In Phase 1 ist `accumulate_grad_batches: 1` (effektive Batch-Größe = Per-Step-
 ---
 
 > [!note] Werte und Quellen
-> Datensatz-Tabelle und Split-Parameter aus Handout §1 (gemessen 2026-06-13); Klassengewichte aus Handout §2; Metrikdefinitionen aus `docs/metrics.md`; Batch-Größen/VRAM aus `docs/model.md` §6–§7; Scheduler/Clip/`class_weights`-auto aus `docs/audit_2026-06.md`. Architektur- und Methodennotation: [[methodology-de]]. Ergebnisse Phase 1/2: [[videomae-unimodal-video-baseline]], [[wav2vec2-phase1-audio-baseline]], [[multimodal-fusion-phase1-baseline]]; Phase 3/4 stehen aus.
+> Datensatz-Tabelle neu gemessen aus `data/processed/*_metadata.csv` (Stand 2026-07-15, 165-Identitäten-Stufe; die Phase-1/2-Trainingsstufe von 2026-06-13 hatte 32 Identitäten — siehe Versionierungs-Hinweis in §1); Split-Parameter und Klassengewichte aus Handout §1/§2; Metrikdefinitionen aus `docs/metrics.md`; Batch-Größen/VRAM aus `docs/model.md` §6–§7; Scheduler/Clip/`class_weights`-auto aus `docs/audit_2026-06.md`. Architektur- und Methodennotation: [[methodology-de]]. Ergebnisse Phase 1/2: [[videomae-unimodal-video-baseline]], [[wav2vec2-phase1-audio-baseline]], [[multimodal-fusion-phase1-baseline]]; Phase 3: [[phase3-robustness-social-media-sweep]]; Phase 4 steht aus.
