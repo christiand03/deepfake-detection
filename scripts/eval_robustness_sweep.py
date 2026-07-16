@@ -39,9 +39,10 @@ import ffmpeg
 import numpy as np
 import rootutils
 import torch
-import wandb
 from torchmetrics.functional.classification import binary_auroc
 from tqdm import tqdm
+
+import wandb
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -240,8 +241,13 @@ def _compute_metrics(
 def _run_baseline(
     videos: list[dict],
     run_audio: bool,
+    run_video: bool = True,
 ) -> tuple[list[str], list[float], list[str | None], list[float | None]]:
     """Evaluate the model on clean (un-degraded) clips.
+
+    ``run_video`` / ``run_audio`` gate the two modalities independently, so a run
+    that only needs one baseline (e.g. an audio-only sweep) does not pay for the
+    other modality's inference. A disabled modality returns an empty list.
 
     Returns:
         ``(video_verdicts, video_scores, audio_verdicts, audio_scores)``
@@ -253,9 +259,10 @@ def _run_baseline(
     audio_scores: list[float | None] = []
 
     for rec in tqdm(videos, desc="Baseline", unit="video"):
-        v_verdict, v_conf = run_video_inference_fast(rec["video_path"])
-        video_verdicts.append(v_verdict)
-        video_scores.append(_to_fake_score(v_verdict, v_conf))
+        if run_video:
+            v_verdict, v_conf = run_video_inference_fast(rec["video_path"])
+            video_verdicts.append(v_verdict)
+            video_scores.append(_to_fake_score(v_verdict, v_conf))
 
         if run_audio:
             result = run_audio_inference_score(rec["video_path"])
@@ -871,25 +878,41 @@ def main() -> None:
     summary_rows: list[list] = []
 
     # ── Baseline ───────────────────────────────────────────────────────────────
-    log.info("Running baseline (clean) evaluation …")
-    baseline_v_verdicts, baseline_v_scores, baseline_a_verdicts, baseline_a_scores = _run_baseline(videos, run_audio)
+    # The clean baseline is only consumed by the sweeps that measure degradation
+    # against it: the video and upscale sweeps use the video baseline, the audio
+    # sweep uses the audio baseline. Skip the whole pass when none of those run
+    # (e.g. a multimodal-only run, which builds its own baseline below) instead of
+    # paying for an unnecessary full inference pass over the test set.
+    need_video_baseline = not args.no_video_sweep or not args.no_upscale_sweep
+    baseline_v_verdicts: list[str] = []
+    baseline_v_scores: list[float] = []
+    baseline_a_verdicts: list[str | None] = []
+    baseline_a_scores: list[float | None] = []
+    if need_video_baseline or run_audio:
+        log.info("Running baseline (clean) evaluation …")
+        baseline_v_verdicts, baseline_v_scores, baseline_a_verdicts, baseline_a_scores = _run_baseline(
+            videos, run_audio, run_video=need_video_baseline
+        )
+    else:
+        log.info("Baseline (clean) evaluation skipped — no unimodal sweep needs it.")
 
-    labels_video = [rec["label"] for rec in videos]
-    baseline_video_auc = _safe_auc(labels_video, baseline_v_scores)
-    baseline_video_accuracy = float(
-        np.mean([int((v == "FAKE") == bool(lbl)) for v, lbl in zip(baseline_v_verdicts, labels_video, strict=True)])
-    )
-    wandb.log(
-        {
-            "baseline/video_auc": baseline_video_auc,
-            "baseline/video_accuracy": baseline_video_accuracy,
-        }
-    )
-    log.info(
-        "Baseline video — AUC: %.3f  Accuracy: %.3f",
-        baseline_video_auc if not np.isnan(baseline_video_auc) else -1.0,
-        baseline_video_accuracy,
-    )
+    if need_video_baseline:
+        labels_video = [rec["label"] for rec in videos]
+        baseline_video_auc = _safe_auc(labels_video, baseline_v_scores)
+        baseline_video_accuracy = float(
+            np.mean([int((v == "FAKE") == bool(lbl)) for v, lbl in zip(baseline_v_verdicts, labels_video, strict=True)])
+        )
+        wandb.log(
+            {
+                "baseline/video_auc": baseline_video_auc,
+                "baseline/video_accuracy": baseline_video_accuracy,
+            }
+        )
+        log.info(
+            "Baseline video — AUC: %.3f  Accuracy: %.3f",
+            baseline_video_auc if not np.isnan(baseline_video_auc) else -1.0,
+            baseline_video_accuracy,
+        )
 
     if run_audio:
         valid_audio_idx = [i for i, v in enumerate(baseline_a_verdicts) if v is not None]

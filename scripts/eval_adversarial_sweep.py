@@ -207,6 +207,62 @@ def _run_baseline(videos: list[dict]) -> tuple[list[str], list[float]]:
 # ── Adversarial sweep ──────────────────────────────────────────────────────────
 
 
+# Column order of the W&B Table / resume checkpoint (mirrors main()).
+_ADV_TABLE_COLS: tuple[str, ...] = (
+    "method",
+    "attack_modalities",
+    "epsilon",
+    "pgd_steps",
+    "n_clips",
+    "auc",
+    "accuracy",
+    "fooling_rate",
+    "mean_fake_prob_delta",
+    "mean_attention_shift",
+)
+
+
+def _ckpt_load(path: Path) -> tuple[list[list], set[tuple]]:
+    """Load completed rows and their ``(method, modality, epsilon)`` keys from a resume CSV.
+
+    Returns ``([], set())`` when the file does not exist yet, so a first run starts clean.
+    """
+    if not path.exists():
+        return [], set()
+    rows: list[list] = []
+    done: set[tuple] = set()
+    with path.open(newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            eps = float(r["epsilon"])
+            rows.append(
+                [
+                    r["method"],
+                    r["attack_modalities"],
+                    eps,
+                    int(r["pgd_steps"]),
+                    int(r["n_clips"]) if r["n_clips"] else None,
+                    float(r["auc"]) if r["auc"] not in ("", "nan") else float("nan"),
+                    float(r["accuracy"]),
+                    float(r["fooling_rate"]) if r["fooling_rate"] not in ("", "nan") else float("nan"),
+                    float(r["mean_fake_prob_delta"]),
+                    float(r["mean_attention_shift"]),
+                ]
+            )
+            done.add((r["method"], r["attack_modalities"], round(eps, 6)))
+    return rows, done
+
+
+def _ckpt_append(path: Path, row: list) -> None:
+    """Append one completed grid row to the resume CSV, writing the header if new."""
+    new = not path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        if new:
+            w.writerow(_ADV_TABLE_COLS)
+        w.writerow(["" if v is None else v for v in row])
+
+
 def _run_adversarial_sweep(
     videos: list[dict],
     baseline_verdicts: list[str],
@@ -215,6 +271,8 @@ def _run_adversarial_sweep(
     epsilon_grid: list[float],
     pgd_steps: int,
     summary_rows: list[list],
+    checkpoint_path: Path | None = None,
+    done_keys: set[tuple] | None = None,
 ) -> None:
     """Method × ε grid sweep over the test set.
 
@@ -232,6 +290,10 @@ def _run_adversarial_sweep(
     with tqdm(total=total, desc="Adversarial sweep", unit="grid-pt") as pbar:
         for method in methods:
             for epsilon in epsilon_grid:
+                if done_keys and (method, "video", round(float(epsilon), 6)) in done_keys:
+                    log.info("Resume: skipping %s ε=%.3f (already in checkpoint).", method, epsilon)
+                    pbar.update(1)
+                    continue
                 adv_verdicts: list[str] = []
                 adv_scores: list[float] = []
                 shift_intensities: list[float] = []
@@ -297,6 +359,8 @@ def _run_adversarial_sweep(
                         mean_attention_shift,
                     ]
                 )
+                if checkpoint_path is not None:
+                    _ckpt_append(checkpoint_path, summary_rows[-1])
                 log.info(
                     "%-4s  ε=%.3f | AUC=%.3f  Acc=%.3f  FR=%.3f  Δfake=%.4f  Shift=%.4f",
                     method,
@@ -343,6 +407,8 @@ def _run_multimodal_adversarial_sweep(
     pgd_steps: int,
     attack_modalities: str,
     summary_rows: list[list],
+    checkpoint_path: Path | None = None,
+    done_keys: set[tuple] | None = None,
 ) -> None:
     """Method × ε grid sweep on the fused model under a multimodal attack.
 
@@ -368,6 +434,12 @@ def _run_multimodal_adversarial_sweep(
     with tqdm(total=total, desc="MM adversarial sweep", unit="grid-pt") as pbar:
         for method in methods:
             for epsilon in epsilon_grid:
+                if done_keys and (method, attack_modalities, round(float(epsilon), 6)) in done_keys:
+                    log.info(
+                        "Resume: skipping %s [%s] ε=%.3f (already in checkpoint).", method, attack_modalities, epsilon
+                    )
+                    pbar.update(1)
+                    continue
                 a_eps = epsilon if audio_epsilon is None else audio_epsilon
                 adv_verdicts: list[str] = []
                 adv_scores: list[float] = []
@@ -432,6 +504,8 @@ def _run_multimodal_adversarial_sweep(
                         mean_attention_shift,
                     ]
                 )
+                if checkpoint_path is not None:
+                    _ckpt_append(checkpoint_path, summary_rows[-1])
                 log.info(
                     "%-4s [%s] ε=%.3f | AUC=%.3f  Acc=%.3f  FR=%.3f  Δfake=%.4f  Shift=%.4f",
                     method,
@@ -525,6 +599,16 @@ def main() -> None:
         default="adversarial-sweep",
         help='W&B run name (default: "adversarial-sweep").',
     )
+    parser.add_argument(
+        "--resume-csv",
+        type=Path,
+        default=None,
+        help=(
+            "Enable resumable grid-point checkpointing: append each (method, ε) result to this "
+            "CSV as it completes and skip rows already present on restart (also lets you extract "
+            "partial results anytime). Omitted = original behaviour (table written only at end)."
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -586,6 +670,12 @@ def main() -> None:
     )
 
     summary_rows: list[list] = []
+    done_keys: set[tuple] = set()
+    if args.resume_csv is not None:
+        preloaded, done_keys = _ckpt_load(args.resume_csv)
+        summary_rows.extend(preloaded)
+        if preloaded:
+            log.info("Resume: loaded %d completed grid point(s) from %s.", len(preloaded), args.resume_csv)
 
     # ── Baseline ───────────────────────────────────────────────────────────────
     log.info("Running baseline (clean) evaluation …")
@@ -636,6 +726,8 @@ def main() -> None:
             args.pgd_steps,
             args.attack_modalities,
             summary_rows,
+            checkpoint_path=args.resume_csv,
+            done_keys=done_keys,
         )
     else:
         _run_adversarial_sweep(
@@ -646,6 +738,8 @@ def main() -> None:
             args.epsilon_grid,
             args.pgd_steps,
             summary_rows,
+            checkpoint_path=args.resume_csv,
+            done_keys=done_keys,
         )
 
     # ── W&B summary table ──────────────────────────────────────────────────────
