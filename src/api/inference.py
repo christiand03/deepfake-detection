@@ -333,6 +333,17 @@ def _crop_heatmap_frames(heatmap_np: np.ndarray) -> list[str]:
     return [_array_to_data_uri(heatmap_np[i], magnitude_alpha=True) for i in range(len(heatmap_np))]
 
 
+def _crop_heatmap_frames_bivariate(magnitude_np: np.ndarray, direction_np: np.ndarray) -> list[str]:
+    """Render per-frame 224x224 bivariate heatmaps as data-URIs (no upprojection).
+
+    Matches the Phase-1/2 overlay encoding: alpha from the clip-global magnitude
+    channel, hue/saturation from the direction channel (via the bivariate branch
+    of :func:`_array_to_data_uri`). Used by the Phase-3/4 crop players so the
+    before/after face-crop overlays read identically to the main analysis panel.
+    """
+    return [_array_to_data_uri(magnitude_np[i], direction=direction_np[i]) for i in range(len(magnitude_np))]
+
+
 def _encode_crop_video(
     frames_norm: torch.Tensor,
     fps: int,
@@ -1443,6 +1454,8 @@ def _video_result_with_heatmaps(
         # the robustness paths to encode the crop video + crop-space heatmaps.
         "_cropFrames": all_frames,
         "_heatmapNp": signed_np,
+        "_magnitudeNp": magnitude_np,
+        "_directionNp": direction_np,
         "_regionBivariate": region_bivariate,
         "_regionLabelMaps": label_maps,
         "faceRotationWarning": _face_rotation_warning(per_frame_landmarks),
@@ -2584,6 +2597,8 @@ def run_multimodal_inference(
         # ignored by the API schema (see _video_result_with_heatmaps).
         "_cropFrames": all_frames,
         "_heatmapNp": signed_v,
+        "_magnitudeNp": magnitude_v,
+        "_directionNp": direction_v,
     }
 
 
@@ -2814,12 +2829,12 @@ def _robustness_payload(
 
     return {
         "regionMaskFrames": region_mask_frames,
-        "degradedHeatmapFrames": _crop_heatmap_frames(degraded["_heatmapNp"]),
+        "degradedHeatmapFrames": _crop_heatmap_frames_bivariate(degraded["_magnitudeNp"], degraded["_directionNp"]),
         "degradedVerdict": degraded["verdict"],
         "degradedConfidence": degraded["confidence"],
         "baselineVerdict": clean["verdict"],
         "baselineConfidence": clean["confidence"],
-        "cleanHeatmapFrames": _crop_heatmap_frames(clean["_heatmapNp"]),
+        "cleanHeatmapFrames": _crop_heatmap_frames_bivariate(clean["_magnitudeNp"], clean["_directionNp"]),
         "cleanVideoUrl": clean_video_url,
         "degradedVideoUrl": degraded_video_url,
         "params": {"crf": crf, "fps": fps, "noiseSigma": noise_sigma, "upscale": upscale},
@@ -3074,11 +3089,6 @@ def run_adversarial_inference(
     adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
     adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
 
-    # Clip-global single-target FAKE maps for the crop players (I2), matching the
-    # Phase-1/2 signed_np normalisation.
-    clean_hm_full = _percentile_normalize(clean_fake_full)
-    adv_hm_full = _percentile_normalize(adv_fake_full)
-
     # Crop-space heatmaps overlay the 224 face-crop video directly (I2, no
     # upprojection): left = clean crop + clean heatmap, right = adversarial crop +
     # perturbed heatmap. The difference map marks where the attack changed pixels.
@@ -3098,11 +3108,11 @@ def run_adversarial_inference(
     )
 
     return {
-        "perturbedFrames": _crop_heatmap_frames(adv_hm_full),
+        "perturbedFrames": _crop_heatmap_frames_bivariate(adv_mag, adv_dir),
         "perturbedVerdict": adv_verdict,
         "perturbedConfidence": adv_confidence,
         "differenceFrames": _crop_heatmap_frames(diff_full),
-        "cleanHeatmapFrames": _crop_heatmap_frames(clean_hm_full),
+        "cleanHeatmapFrames": _crop_heatmap_frames_bivariate(clean_mag, clean_dir),
         "cleanVideoUrl": clean_video_url,
         "attackedVideoUrl": attacked_video_url,
         "attackMethod": method,
@@ -3436,10 +3446,6 @@ def run_multimodal_adversarial_inference(
     adv_verdict: Literal["FAKE", "REAL"] = "FAKE" if adv_fake_prob > 0.5 else "REAL"
     adv_confidence = adv_fake_prob if adv_verdict == "FAKE" else 1.0 - adv_fake_prob
 
-    # Clip-global FAKE maps for the crop players (I2), matching Phase-1/2 signed_np.
-    clean_hm_full = _percentile_normalize(clean_vfake)
-    adv_hm_full = _percentile_normalize(adv_vfake)
-
     # Crop-space heatmaps + face-crop before/after videos (I2, no upprojection):
     # left = clean crop + clean heatmap, right = adversarial crop + perturbed heatmap.
     clean_video_url = _encode_crop_video(all_frames, TARGET_FPS, f"{clip_path.stem}_clean.mp4", reuse_existing=True)
@@ -3462,11 +3468,11 @@ def run_multimodal_adversarial_inference(
     audio_attention_shift = _bivariate_band_shift(waveform_np, sample_rate, cam, cad, aam, aad)
 
     return {
-        "perturbedFrames": _crop_heatmap_frames(adv_hm_full),
+        "perturbedFrames": _crop_heatmap_frames_bivariate(avm, avd),
         "perturbedVerdict": adv_verdict,
         "perturbedConfidence": adv_confidence,
         "differenceFrames": _crop_heatmap_frames(diff_full),
-        "cleanHeatmapFrames": _crop_heatmap_frames(clean_hm_full),
+        "cleanHeatmapFrames": _crop_heatmap_frames_bivariate(cvm, cvd),
         "cleanVideoUrl": clean_video_url,
         "attackedVideoUrl": attacked_video_url,
         "attackMethod": method,

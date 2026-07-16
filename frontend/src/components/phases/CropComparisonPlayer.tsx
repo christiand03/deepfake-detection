@@ -64,6 +64,10 @@ function CropPlayer({
   )
   const imgRef = useRef<HTMLImageElement>(null)
   const lastIdx = useRef(-1)
+  const lastSwapMs = useRef(0)
+  // Decode cache: preloading every overlay frame warms the browser's image
+  // decode so each imperative src swap is instant (no per-frame decode flash).
+  const preloadCache = useRef<Map<number, HTMLImageElement>>(new Map())
 
   // Overlay layer content:
   //   • "show regions" on  → this side's region-partition PNGs, or NOTHING when it
@@ -80,17 +84,37 @@ function CropPlayer({
     [showRegions, side.regionFrames, side.heatmapFrames],
   )
 
+  // Preload every overlay frame when the set changes (new analysis / region
+  // toggle) so the imperative swaps below hit a warm decode. Mirrors HeatmapCanvas.
+  useEffect(() => {
+    preloadCache.current.clear()
+    overlayFrames.forEach((src, i) => {
+      const preImg = new Image()
+      preImg.src = src
+      preloadCache.current.set(i, preImg)
+    })
+  }, [overlayFrames])
+
   // Sync the overlay frame to the video position via rAF (no React re-render per
-  // frame). Imperative img.src swap mirrors HeatmapCanvas.
+  // frame; reads currentTime live so the overlay stays locked to THIS video —
+  // unchanged sync mechanism). Imperative img.src swap mirrors HeatmapCanvas.
+  //
+  // The rAF runs at ~60 Hz but the crop videos carry one heatmap frame per video
+  // frame (~25 fps), so an un-throttled swap repaints the overlay 25×/s and every
+  // per-frame relevance fluctuation strobes. The VISIBLE swap is throttled to
+  // ~4 Hz to match the Phase-1 overlay, which rides the browser's timeupdate
+  // event (~250 ms). Sync is unaffected — only the repaint cadence changes.
   useEffect(() => {
     lastIdx.current = -1
+    lastSwapMs.current = 0
     const video = videoRef.current
     const img = imgRef.current
     if (!video || !img || overlayFrames.length === 0) return
+    const SWAP_INTERVAL_MS = 250 // ~4 Hz, matching the Phase-1 timeupdate cadence
     let raf = 0
-    const tick = () => {
+    const tick = (nowMs: number) => {
       const d = video.duration
-      if (d && Number.isFinite(d) && d > 0) {
+      if (d && Number.isFinite(d) && d > 0 && nowMs - lastSwapMs.current >= SWAP_INTERVAL_MS) {
         const idx = Math.min(
           overlayFrames.length - 1,
           Math.max(0, Math.round((video.currentTime / d) * (overlayFrames.length - 1))),
@@ -98,6 +122,7 @@ function CropPlayer({
         if (idx !== lastIdx.current) {
           lastIdx.current = idx
           img.src = overlayFrames[idx]
+          lastSwapMs.current = nowMs
         }
       }
       raf = requestAnimationFrame(tick)
