@@ -86,9 +86,40 @@ export const audioL2Words: Explanation = {
       kind: 'resolution',
       body: (
         <P>
-          Auflösung = ein Balken pro Wort. Ein Wort kann über mehrere 16-Frame-Chunks
-          laufen; sein Balken ist die Aggregation darüber.
+          Auflösung = ein Balken pro Wort. Der Wert eines Wortes ist der{' '}
+          <Term>Mittelwert der Relevanz über seine Wav2Vec2-Feature-Frames</Term> —
+          ein Frame entspricht dem 320-Sample-Stride des Encoders, also 20 ms
+          (50 Frames/s). Ein Wort deckt je nach Länge 1 bis mehrere Dutzend Frames ab.
         </P>
+      ),
+    },
+    {
+      kind: 'trust',
+      body: (
+        <>
+          <P>
+            Der Balkenwert eines Wortes ist der <Term>Mittelwert der Relevanz über
+            seine Feature-Frames</Term>. AttnLRP zerlegt die Fenster-Entscheidung in
+            vorzeichenbehaftete Beiträge pro Frame; über <em>viele</em> Frames
+            gleichen sich gegenläufige Beiträge aus, und es bleibt ein robustes
+            Netto-Signal. Genau dieses Ausmitteln macht den Wert vertrauenswürdig.
+          </P>
+          <Callout variant="warn" title="Sehr kurze Wörter: Wert nicht belastbar">
+            <P>
+              Ein sehr kurzes Wort wie <Term>„a" (20 ms ≈ 1 Frame)</Term> hat kaum
+              etwas zum Ausmitteln: sein Wert ist ein <em>einzelner, nicht
+              ausgeglichener</em> Frame-Beitrag. Ein einzelner Frame kann zufällig
+              stark ausschlagen, ohne dass sich benachbarte Beiträge dagegen
+              aufheben — daher kann ein <em>hoher Balken auf einem 1–2-Frame-Wort
+              reines Rauschen sein</em> und nicht echte Manipulations-Evidenz.
+            </P>
+            <P>
+              Faustregel: Balken auf den kürzesten Funktionswörtern („a", „of", „an")
+              nicht als Signal lesen. Erst ab mehreren Frames (~normale Wortlänge)
+              trägt der Mittelwert genug Frames, um belastbar zu sein.
+            </P>
+          </Callout>
+        </>
       ),
     },
     {
