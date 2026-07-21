@@ -115,7 +115,13 @@ function CropPlayer({
     const video = videoRef.current
     const img = imgRef.current
     if (!video || !img || overlayFrames.length === 0) return
-    const SWAP_INTERVAL_MS = 250 // ~4 Hz, matching the Phase-1 timeupdate cadence
+    // Heatmaps: throttle to ~4 Hz (matching the Phase-1 timeupdate cadence) so
+    // per-frame relevance fluctuations don't strobe. Region overlays barely
+    // change frame-to-frame, so they get a lighter ~8 Hz throttle (120 ms ≈
+    // every third video frame): fast enough that the face-to-region drift stays
+    // imperceptible, slow enough that the region labels don't jitter. Heatmap
+    // cadence is unchanged.
+    const SWAP_INTERVAL_MS = showRegions ? 120 : 250
     let raf = 0
     const tick = (nowMs: number) => {
       const d = video.duration
@@ -134,7 +140,7 @@ function CropPlayer({
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [overlayFrames, videoRef])
+  }, [overlayFrames, videoRef, showRegions])
 
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
