@@ -18,6 +18,8 @@ import { WaveformRelevanceLayer } from './WaveformRelevanceLayer'
 import { WordTokenChart } from './WordTokenChart'
 import { FrequencyBandChart } from './FrequencyBandChart'
 import { FrequencyHeatmap } from './FrequencyHeatmap'
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
+import type { VisualId } from '../../explanations/types'
 import type {
   AnalysisResult,
   AudioView,
@@ -95,11 +97,20 @@ function ViewToggle({
   )
 }
 
-// Layer sub-header label
-function LayerLabel({ children }: { children: React.ReactNode }) {
+// Layer sub-header label, with an optional explanation button on the right.
+function LayerLabel({
+  children,
+  explain,
+}: {
+  children: React.ReactNode
+  explain?: VisualId
+}) {
   return (
     <div
       style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
         fontSize: 9,
         fontFamily: 'monospace',
         letterSpacing: '0.12em',
@@ -107,7 +118,8 @@ function LayerLabel({ children }: { children: React.ReactNode }) {
         marginBottom: 6,
       }}
     >
-      {children}
+      <span>{children}</span>
+      {explain && <ExplanationButton id={explain} size={15} />}
     </div>
   )
 }
@@ -165,7 +177,12 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
           AUDIO ANALYSIS
         </span>
         <div style={{ flex: 1, height: 1, backgroundColor: '#1e2233' }} />
-        {audio !== null && <ViewToggle view={view} onChange={setView} />}
+        {audio !== null && (
+          <>
+            <ViewToggle view={view} onChange={setView} />
+            <ExplanationButton id="audio-toggle" label="Relevance/Confidence-Toggle erklären" size={16} />
+          </>
+        )}
         <span style={{ fontSize: 10, fontFamily: 'monospace', color: '#2a2f42' }}>
           Wav2Vec 2.0 · AttnLRP
         </span>
@@ -211,7 +228,7 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
           >
             {/* L1 — Waveform Relevance */}
             <div>
-              <LayerLabel>
+              <LayerLabel explain="audio-l1-waveform">
                 L1 — WAVEFORM {view === 'confidence' ? 'CONFIDENCE' : 'RELEVANCE'}
               </LayerLabel>
               <LayerCard>
@@ -226,7 +243,7 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
 
             {/* L2 — Word Tokens */}
             <div>
-              <LayerLabel>L2 — WORD TOKENS</LayerLabel>
+              <LayerLabel explain="audio-l2-words">L2 — WORD TOKENS</LayerLabel>
               {/* No maxHeight on the L2 card: the chart height is fixed
                   (independent of word count), so the card sizes exactly to its
                   content. A cap a few px below content made a scrollbar appear,
@@ -260,7 +277,7 @@ export function AudioLayers({ result, clip, videoRef }: AudioLayersProps) {
             {/* L3 — Frequency × Time (heatmap; falls back to the 3-bar chart for
                 older caches / multimodal that don't provide the grids). */}
             <div>
-              <LayerLabel>L3 — FREQUENCY × TIME</LayerLabel>
+              <LayerLabel explain="audio-l3-frequency">L3 — FREQUENCY × TIME</LayerLabel>
               <LayerCard>
                 {audio.frequencyGridConfidence ? (
                   <FrequencyHeatmap

@@ -18,6 +18,7 @@
 
 import { useState } from 'react'
 import { relevanceToRgb } from '../../lib/seismicColormap'
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
 
 interface ChunkTimelinesProps {
   confidence: number[]
@@ -270,6 +271,13 @@ export function ChunkTimelines({
       className="w-full rounded-lg px-3 py-3 flex flex-col gap-3"
       style={{ backgroundColor: '#141720', border: '1px solid #2a2f42' }}
     >
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-mono" style={{ color: '#4d5470', letterSpacing: '0.12em' }}>
+          PER-CHUNK TIMELINES
+        </span>
+        <ExplanationButton id="chunk-timelines" label="Chunk-Timelines erklären" size={16} />
+      </div>
+
       {confidence.length > 0 && (
         <ChartRow
           label="CHUNK CONFIDENCE"

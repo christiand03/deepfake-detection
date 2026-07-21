@@ -15,6 +15,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
+import type { VisualId } from '../../explanations/types'
+
 interface CropPlayerSide {
   label: string
   /** Served /media URL of the face-crop video, or null when unavailable. */
@@ -37,6 +40,8 @@ interface CropComparisonPlayerProps {
   right: CropPlayerSide
   /** When true, hide the heatmaps and draw the left side's region overlay (I4). */
   showRegions?: boolean
+  /** When set, shows an explanation button next to the title (F1). */
+  explainId?: VisualId
 }
 
 function CropPlayer({
@@ -213,7 +218,7 @@ function CropPlayer({
   )
 }
 
-export function CropComparisonPlayer({ title, left, right, showRegions = false }: CropComparisonPlayerProps) {
+export function CropComparisonPlayer({ title, left, right, showRegions = false, explainId }: CropComparisonPlayerProps) {
   const [videoOpacity, setVideoOpacity] = useState(1)
   // The actual <video> elements, set via callback refs. Using STATE (not refs)
   // means the sync effect below re-runs and re-binds whenever a node (re)mounts —
@@ -298,16 +303,19 @@ export function CropComparisonPlayer({ title, left, right, showRegions = false }
           marginBottom: 6,
         }}
       >
-        <span
-          style={{
-            fontSize: 9,
-            fontFamily: 'monospace',
-            color: '#4d5470',
-            letterSpacing: '0.12em',
-          }}
-        >
-          {title}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span
+            style={{
+              fontSize: 9,
+              fontFamily: 'monospace',
+              color: '#4d5470',
+              letterSpacing: '0.12em',
+            }}
+          >
+            {title}
+          </span>
+          {explainId && <ExplanationButton id={explainId} size={15} />}
+        </div>
         <span style={{ fontSize: 8, fontFamily: 'monospace', color: '#2a2f42' }}>SYNCED</span>
       </div>
 

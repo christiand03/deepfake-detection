@@ -9,6 +9,7 @@
 
 import { motion, AnimatePresence } from 'framer-motion'
 import { VerdictGauge } from './VerdictGauge'
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
 import type { AnalysisResult, ClipMeta } from '../../types/analysis'
 
 interface VerdictPanelProps {
@@ -37,9 +38,11 @@ function SkeletonBlock({ height, style }: { height: number; style?: React.CSSPro
 
 function Section({
   title,
+  action,
   children,
 }: {
   title: string
+  action?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
@@ -47,11 +50,14 @@ function Section({
       className="rounded-lg p-4"
       style={{ backgroundColor: '#141720', border: '1px solid #2a2f42' }}
     >
-      <div
-        className="text-xs font-mono tracking-widest mb-3"
-        style={{ color: '#4d5470' }}
-      >
-        {title}
+      <div className="flex items-center justify-between mb-3">
+        <div
+          className="text-xs font-mono tracking-widest"
+          style={{ color: '#4d5470' }}
+        >
+          {title}
+        </div>
+        {action}
       </div>
       {children}
     </div>
@@ -64,7 +70,10 @@ export function VerdictPanel({ result, isScanning }: VerdictPanelProps) {
   return (
     <div className="flex flex-col gap-4">
       {/* ── VERDICT GAUGE ──────────────────────────────────────────────── */}
-      <Section title="VERDICT">
+      <Section
+        title="VERDICT"
+        action={<ExplanationButton id="verdict-gauges" label="Verdict-Gauges erklären" size={16} />}
+      >
         <AnimatePresence mode="wait">
           {isScanning ? (
             <motion.div

@@ -10,6 +10,8 @@
  * isn't read literally.
  */
 
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
+
 const AMBER = '#e8b23c'
 
 export function RotationWarning({ compact = false }: { compact?: boolean }) {
@@ -35,6 +37,7 @@ export function RotationWarning({ compact = false }: { compact?: boolean }) {
         ⚠
       </span>
       <span>Head rotated — face regions may be unreliable</span>
+      <ExplanationButton id="rotation-warning" label="Rotation-Warning erklären" size={compact ? 13 : 15} />
     </div>
   )
 }

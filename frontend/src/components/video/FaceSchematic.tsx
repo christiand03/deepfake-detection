@@ -226,13 +226,17 @@ export function FaceSchematic({
       >
         <div
           style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
             fontSize: 10,
             fontFamily: 'monospace',
             color: '#4d5470',
             letterSpacing: '0.14em',
           }}
         >
-          REGION RELEVANCE · WHOLE CLIP
+          <span>REGION RELEVANCE · WHOLE CLIP</span>
         </div>
         {rotated && <RotationWarning compact />}
         {top && (

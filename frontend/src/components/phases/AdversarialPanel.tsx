@@ -14,6 +14,7 @@ import type { AnalysisResult, Phase4Result } from '../../types/analysis'
 import { AttentionShiftTable } from '../shared/AttentionShiftTable'
 import { RegionToggle } from '../shared/RegionToggle'
 import { CropComparisonPlayer } from './CropComparisonPlayer'
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
 
 interface AdversarialPanelProps {
   result: AnalysisResult | null
@@ -623,15 +624,33 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
                 style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
               >
                 {/* Verdict comparison */}
-                <VerdictCompare
-                  original={phase4.cleanVerdict}
-                  originalConf={phase4.cleanConfidence}
-                  perturbed={perturbedVerdict}
-                  perturbedConf={phase4.perturbedConfidence}
-                />
+                <div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      fontSize: 9,
+                      fontFamily: 'monospace',
+                      color: '#4d5470',
+                      letterSpacing: '0.12em',
+                      marginBottom: 6,
+                    }}
+                  >
+                    <span>ADVERSARIAL VERDICT (CLEAN → ATTACKED)</span>
+                    <ExplanationButton id="adversarial-confidence" label="Adversarial Verdict erklären" size={15} />
+                  </div>
+                  <VerdictCompare
+                    original={phase4.cleanVerdict}
+                    originalConf={phase4.cleanConfidence}
+                    perturbed={perturbedVerdict}
+                    perturbedConf={phase4.perturbedConfidence}
+                  />
+                </div>
 
                 {/* Whole-clip crop player: clean → attacked (I2) */}
                 <CropComparisonPlayer
+                  explainId="adversarial-heatmaps"
                   title="HEATMAP — WHOLE CLIP (CLEAN → ATTACKED)"
                   left={{
                     label: 'CLEAN',
@@ -660,6 +679,7 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
                 <AttentionShiftTable
                   shifts={phase4.attentionShift}
                   warn={!!phase4.faceRotationWarning}
+                  explainId="attention-shift"
                 />
 
                 {/* Audio frequency-band shift (multimodal attacks only) */}
@@ -667,6 +687,9 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
                   <>
                     <div
                       style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
                         fontSize: 9,
                         fontFamily: 'monospace',
                         color: '#a855f7',
@@ -674,18 +697,21 @@ export function AdversarialPanel({ result }: AdversarialPanelProps) {
                         marginTop: 4,
                       }}
                     >
-                      AUDIO FREQUENCY SHIFT
-                      {phase4.attackModalities && (
-                        <span
-                          style={{
-                            marginLeft: 8,
-                            color: '#4d5470',
-                            textTransform: 'uppercase',
-                          }}
-                        >
-                          [{phase4.attackModalities}]
-                        </span>
-                      )}
+                      <span>
+                        AUDIO FREQUENCY SHIFT
+                        {phase4.attackModalities && (
+                          <span
+                            style={{
+                              marginLeft: 8,
+                              color: '#4d5470',
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            [{phase4.attackModalities}]
+                          </span>
+                        )}
+                      </span>
+                      <ExplanationButton id="audio-frequency-shift" label="Audio-Frequency-Shift erklären" size={15} />
                     </div>
                     <AttentionShiftTable shifts={phase4.audioAttentionShift} />
                   </>

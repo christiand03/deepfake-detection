@@ -11,6 +11,7 @@
 import type { AttentionShift, AudioRobustness } from '../../types/analysis'
 
 import { AttentionShiftTable } from './AttentionShiftTable'
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
 
 export function AudioFrequencyShift({ audio }: { audio: AudioRobustness }) {
   const confDelta = audio.degradedConfidence - audio.baseConfidence
@@ -38,6 +39,9 @@ export function AudioFrequencyShift({ audio }: { audio: AudioRobustness }) {
       {/* Section header */}
       <div
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
           fontSize: 9,
           fontFamily: 'monospace',
           color: '#4d5470',
@@ -45,7 +49,8 @@ export function AudioFrequencyShift({ audio }: { audio: AudioRobustness }) {
           marginBottom: 6,
         }}
       >
-        AUDIO COMPRESSION (AAC {audio.bitrate} kbps)
+        <span>AUDIO COMPRESSION (AAC {audio.bitrate} kbps)</span>
+        <ExplanationButton id="audio-frequency-shift" label="Audio-Frequency-Shift erklären" size={15} />
       </div>
 
       {/* Confidence delta */}

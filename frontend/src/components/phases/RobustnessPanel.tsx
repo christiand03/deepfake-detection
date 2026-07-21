@@ -16,6 +16,7 @@ import { AttentionShiftTable } from '../shared/AttentionShiftTable'
 import { RegionToggle } from '../shared/RegionToggle'
 import { AudioFrequencyShift } from '../shared/AudioFrequencyShift'
 import { CropComparisonPlayer } from './CropComparisonPlayer'
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
 
 interface RobustnessPanelProps {
   result: AnalysisResult | null
@@ -218,6 +219,9 @@ function BreakingPoint({
     >
       <div
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
           fontSize: 9,
           fontFamily: 'monospace',
           color: '#4d5470',
@@ -225,7 +229,8 @@ function BreakingPoint({
           marginBottom: 8,
         }}
       >
-        ROBUSTNESS ANALYSIS
+        <span>ROBUSTNESS ANALYSIS</span>
+        <ExplanationButton id="robustness-confidence" label="Robustness-Analyse erklären" size={15} />
       </div>
 
       {/* Transparency badge: the degraded clip's face was undetectable, so the
@@ -727,6 +732,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
 
                 {/* Whole-clip crop player: clean → degraded (I2) */}
                 <CropComparisonPlayer
+                  explainId="robustness-crop-compare"
                   title="HEATMAP — WHOLE CLIP (CLEAN → DEGRADED)"
                   left={{
                     label: 'CLEAN',
@@ -756,6 +762,7 @@ export function RobustnessPanel({ result }: RobustnessPanelProps) {
                   <AttentionShiftTable
                     shifts={phase3.attentionShift}
                     warn={!!phase3.faceRotationWarning}
+                    explainId="attention-shift"
                   />
                 )}
 

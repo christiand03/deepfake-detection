@@ -22,6 +22,8 @@ import { useState } from 'react'
 import { relevanceToRgb } from '../../lib/seismicColormap'
 import type { AttentionShift } from '../../types/analysis'
 import { RotationWarning } from './RotationWarning'
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
+import type { VisualId } from '../../explanations/types'
 
 const HALF_WIDTH = 46 // % of the lane each side of centre (leaves a small margin)
 
@@ -49,6 +51,7 @@ function signed(v: number): string {
 export function AttentionShiftTable({
   shifts,
   warn = false,
+  explainId,
 }: {
   shifts: AttentionShift[]
   /**
@@ -57,6 +60,8 @@ export function AttentionShiftTable({
    * audio-band usages leave it off.
    */
   warn?: boolean
+  /** When set, shows an explanation button in the header (F1). */
+  explainId?: VisualId
 }) {
   const [hover, setHover] = useState<string | null>(null)
 
@@ -76,6 +81,9 @@ export function AttentionShiftTable({
     <div>
       <div
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
           fontSize: 9,
           fontFamily: 'monospace',
           color: '#4d5470',
@@ -83,7 +91,8 @@ export function AttentionShiftTable({
           marginBottom: 8,
         }}
       >
-        ATTENTION SHIFT (LRP)
+        <span>ATTENTION SHIFT (LRP)</span>
+        {explainId && <ExplanationButton id={explainId} size={15} />}
       </div>
 
       {warn && (

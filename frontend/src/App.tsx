@@ -7,6 +7,7 @@ import { VerdictPanel } from './components/verdict/VerdictPanel'
 import { AudioLayers } from './components/audio/AudioLayers'
 import { BottomTabs } from './components/layout/BottomTabs'
 import { ErrorToastProvider } from './context/ErrorToastContext'
+import { ExplanationProvider } from './context/ExplanationContext'
 import type { AnalysisResult, ClipMeta } from './types/analysis'
 
 function App() {
@@ -18,6 +19,7 @@ function App() {
 
   return (
     <ErrorToastProvider>
+      <ExplanationProvider>
       <Header />
       <MainLayout
         left={
@@ -40,6 +42,7 @@ function App() {
           <BottomTabs result={result} activeTab={activeTab} onTabChange={setActiveTab} />
         }
       />
+      </ExplanationProvider>
     </ErrorToastProvider>
   )
 }

@@ -10,7 +10,6 @@
  */
 
 import { AnimatePresence, motion } from 'framer-motion'
-import { useState } from 'react'
 
 import type { RegionRelevance } from '../../types/analysis'
 import { FaceSchematic } from './FaceSchematic'
@@ -18,14 +17,19 @@ import { FaceSchematic } from './FaceSchematic'
 export function RegionFacePanel({
   regions,
   rotated = false,
+  open,
+  onOpenChange,
   children,
 }: {
   regions: RegionRelevance[]
   /** Clip's face is near profile → the schematic shows an unreliability caution. */
   rotated?: boolean
+  /** Controlled open state (lifted to VideoPanel so the explain button can
+   *  switch between the heatmap and the region-face explanation). */
+  open: boolean
+  onOpenChange: (open: boolean) => void
   children: React.ReactNode
 }) {
-  const [open, setOpen] = useState(false)
   const hasData = regions.length > 0
 
   return (
@@ -60,7 +64,7 @@ export function RegionFacePanel({
       {hasData && (
         <button
           type="button"
-          onClick={() => setOpen(o => !o)}
+          onClick={() => onOpenChange(!open)}
           title={open ? 'Hide face map' : 'Show whole-clip face relevance map'}
           style={{
             position: 'absolute',

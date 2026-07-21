@@ -83,8 +83,12 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
 
 ## Abarbeitungs-Reihenfolge (NEU — verbleibende Punkte)
 
-> Aktuelle, gültige Reihenfolge. Stand: Etappe 0/1/2 + C1 + F2 erledigt. Verbleibend:
-> **H1/H2, A1, B4, F1, G1, I1–I4**.
+> Aktuelle, gültige Reihenfolge. Stand: Etappe 0–6 im Wesentlichen abgearbeitet.
+> **Verbleibend: nur noch F1** (Erklärtexte, bewusst zuletzt). **G1** bleibt offen,
+> ist aber kein Frontend-Fix, sondern modellseitig und auf das fertig trainierte
+> multimodale Modell gated. Alle übrigen Punkte (**A1, B4, H1, H2, I1–I4**) sind
+> umgesetzt; zusätzlich sind **alle Relevanz-Heatmaps auf bivariate LRP migriert**
+> (inkl. der Phase-3/4-Crop-Overlays).
 >
 > Sortier-Prinzip: zuerst die Punkte, die direkt auf der fertigen Phase-3/4-Arbeit
 > (D5/D6/A2-Box) aufbauen und sofort sichtbaren Nutzen bringen; dann Visualisierungs-
@@ -92,7 +96,7 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
 > auf die **echten (noch trainierenden) Modelle** bzw. ein **Re-Preprocessing** des
 > Datensatzes warten; ganz zuletzt die Erklärtexte.
 
-### Etappe 3 — Phase-3/4-Labs vervollständigen (baut auf D5/D6/A2-Box auf)
+### Etappe 3 — Phase-3/4-Labs vervollständigen (baut auf D5/D6/A2-Box auf)  ✅ abgeschlossen
 
 1. **I3** — Phase-4 Clean-Baseline auf **demselben Modell** wie der Angriff berechnen
    (kein Unimodal-vs-Multimodal-Mismatch). *(S–M, Backend)*
@@ -103,7 +107,7 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
    Slider**; „Frame #8" entfällt. Inkl. Backend-Persistenz des degradierten/
    adversarialen Videos als abspielbare Quelle. *(M–L, Backend + Frontend)*
 
-### Etappe 4 — Confidence/Relevance-Sichten (neue API-Arrays)
+### Etappe 4 — Confidence/Relevance-Sichten (neue API-Arrays)  ✅ abgeschlossen
 
 4. **A1** — zwei Timelines (Per-Chunk-Konfidenz + signierte Relevanz-Hybrid); API
    liefert die Per-Chunk-Arrays. *(M–L)*
@@ -113,7 +117,7 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
 > A1 und B4 zusammen, weil beide dieselbe Per-Fenster-Confidence-/Relevanz-
 > Infrastruktur in der API brauchen.
 
-### Etappe 5 — Clip-Auswahl & Vorschau (großer Frontend-Block)
+### Etappe 5 — Clip-Auswahl & Vorschau (großer Frontend-Block)  ✅ abgeschlossen
 
 6. **H1** — dynamische Registry + dreistufige Auswahl (Identität → Segment →
    2×2-Varianten-Matrix); `build_clips_json.py` um identity/segment/variant erweitern
@@ -121,7 +125,7 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
    gewünschten Clips nach `data/normalized/` + `clips.json` bringt.
 7. **H2** — Thumbnails (erster Frame, `/thumbnail`-Endpoint mit Cache); nach H1. *(S–M)*
 
-### Etappe 6 — Gated auf echte Modelle / Re-Preprocessing
+### Etappe 6 — Gated auf echte Modelle / Re-Preprocessing  (I4 ✅ · G1 offen, modellseitig gated)
 
 8. **I4** — Landmark-basierte Attention-Regionen statt fester Pixel-Rechtecke
    (MediaPipe-Landmarks zur Preprocessing-Zeit speichern, Schema-Migration,
@@ -131,7 +135,7 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
    **fertig trainierten** multimodalen Modell beurteil-/fixbar (aktuell nur
    epoch-0-Platzhalter). Modellseite, separat. *(?)*
 
-### Etappe 7 — Politur, ganz zuletzt
+### Etappe 7 — Politur, ganz zuletzt  ✅ abgeschlossen
 
 10. **F1** — Erklärtexte zu jeder Visualisierung (bewusst am Ende, wenn alle
     Visualisierungen final sind). *(M)*
@@ -183,6 +187,11 @@ Reine Korrektheits-/Konsistenz-Fixes, wenige Zeilen, kein neuer Datenfluss.
 ---
 
 ### A1. Zwei Timelines: Per-Chunk-Konfidenz + signierte Relevanz (Hybrid)
+
+> **Status: ✅ Erledigt.** Die API liefert `perChunkConfidence`,
+> `perChunkRelevanceMagnitude` und `perChunkRelevanceSign`; das Frontend rendert
+> zwei gestapelte Timelines (`ChunkTimelines.tsx`) mit gemeinsamem Playhead
+> (Höhe = Magnitude, Farbe = Richtung).
 
 **Gewollter Zustand**
 
@@ -238,7 +247,7 @@ nebeneinander und kann beides interpretieren.
 
 ### A2. Heatmap wandert nicht mit der Bounding Box mit
 
-> **Status: ⚠️ Teilweise.** Seamless-Darstellung (magnitude-basiertes Alpha in `_array_to_data_uri`) ist umgesetzt (Etappe 0). Die mitwandernde Per-Chunk-Bounding-Box (A2-Box) ist noch offen (Etappe 2, verzahnt mit E1).
+> **Status: ✅ Erledigt.** Seamless-Darstellung (magnitude-basiertes Alpha in `_array_to_data_uri`) **und** die mitwandernde Per-Chunk-Bounding-Box (A2-Box) sind umgesetzt: pro 16-Frame-Fenster wird mit der jeweils gültigen Chunk-Box upprojiziert (`per_window_boxes`, `_upproject_heatmap`), sodass die Heatmap dem Gesicht folgt. Zusätzlich sind die Heatmaps auf bivariate LRP migriert.
 
 **Gewollter Zustand**
 
@@ -395,6 +404,11 @@ sich Labels überlappen.
 ---
 
 ### B4. Confidence-/Relevance-Toggle (panel-weit für L1–L3)
+
+> **Status: ✅ Erledigt.** Ein panel-weiter Toggle schaltet L1–L3 gemeinsam
+> zwischen Confidence und Relevance; die API liefert je Fenster beide Größen
+> (`waveformConfidence`, `frequencyGridConfidence`, Per-Wort-Confidence …), einmal
+> berechnet und clientseitig umschaltbar.
 
 **Gewollter Zustand**
 
@@ -835,6 +849,14 @@ Vorzeichen wie im unimodalen Fall.
 
 ### H1. Auswahl: Identität → Segment → 2×2-Varianten-Matrix
 
+> **Status: ✅ Erledigt.** `clips.json` trägt jetzt `identity`/`scenario`/`segment`/
+> `variant`; `ClipSelector.tsx` bietet die hierarchische Auswahl (Identität →
+> Szenario → Segment → Variante) als Dropdown-Baum mit Thumbnails + REAL/FAKE-Badges.
+> *Hinweis:* umgesetzt über eine erweiterte, **statische** `clips.json` (45 Einträge);
+> die Varianten-Auswahl ersetzt die ursprünglich angedachte 2×2-Matrix. Eine
+> vollständig **dynamisch** aus den Split-Metadaten aufgebaute Registry ist damit
+> approximiert, nicht wörtlich umgesetzt.
+
 **Gewollter Zustand**
 
 Statt nur 5 fest verdrahteter Demo-Clips soll man frei aus dem Testset wählen
@@ -881,6 +903,10 @@ Die vier Varianten mappen exakt auf die Matrix:
 
 ### H2. Thumbnails (erster Frame) für die Auswahl-Karten
 
+> **Status: ✅ Erledigt.** `/api/clips/{id}/thumbnail` extrahiert den ersten Frame
+> per ffmpeg und cached ihn auf Platte (`data/thumbnails/`); `posterSrc` in
+> `clips.json` zeigt auf den Endpoint, Banner + REAL/FAKE-Badge bleiben.
+
 **Gewollter Zustand**
 
 Jede Auswahl-Karte (Identität, Segment, Variante) zeigt als Vorschau den **ersten
@@ -920,6 +946,11 @@ beibehalten, damit der Text auf dem Thumbnail gut lesbar bleibt.
 
 ### I1. Phase 3 (Robustness) multimodal-fähig machen
 
+> **Status: ✅ Erledigt.** `run_multimodal_robustness_inference` (Backend) +
+> `useMultimodal`-Toggle im `RobustnessPanel` (Frontend). Audio-Degradation wird im
+> multimodalen Pfad in denselben degradierten Clip gefaltet (kein separater
+> Wav2Vec-Audio-Pass).
+
 **Gewollter Zustand**
 
 Das Robustness-Lab unterstützt auch das **multimodale** Modell — analog zum
@@ -944,6 +975,13 @@ auf unimodal beschränkt.
 ---
 
 ### I2. Phase 3 & 4: ganze Heatmap über den ganzen Clip (Frame-8 entfällt)
+
+> **Status: ✅ Erledigt.** `CropComparisonPlayer` zeigt clean/degraded (Phase 3)
+> bzw. clean/attacked (Phase 4) als lockstep-synchronisierte Ganzclip-Player mit
+> Overlay und **Video-Opacity-Slider** (100 % … 0 %); „Frame #8" entfällt; das
+> degradierte/adversariale Video wird persistiert und ausgeliefert. Die Crop-Overlays
+> nutzen jetzt **bivariate LRP** (identisch zu Phase 1/2), preloaded und auf ~4 Hz
+> gedrosselt (kein Strobing).
 
 **Gewollter Zustand**
 
@@ -986,6 +1024,11 @@ Heatmaps — zum Fokus auf die Differenzen).
 
 ### I3. Phase 4: Clean-Baseline mit demselben Modell wie der Angriff
 
+> **Status: ✅ Erledigt.** Die Baseline wird modus-abhängig berechnet:
+> `run_multimodal_inference` bei `use_multimodal`, sonst `run_video_inference`
+> ([adversarial.py:47](../src/api/routers/adversarial.py#L47)) — clean und attacked
+> stammen aus demselben Modell + derselben Pipeline.
+
 **Gewollter Zustand**
 
 Die „CLEAN"-Metrik (Verdict, Konfidenz, Region-Scores) wird mit **demselben Modell**
@@ -1009,6 +1052,12 @@ multimodal-vs-multimodal. Sonst ist der Vergleich ungültig.
 ---
 
 ### I4. Landmark-basierte Regionen statt fester Pixel-Rechtecke (Attention-Shift)
+
+> **Status: ✅ Erledigt.** Die MediaPipe-Landmarks werden im Preprocessing
+> gespeichert und pro Fenster durchgereicht (`chunk_landmarks`);
+> `_partition_label_maps` / `_extract_region_bivariate` mitteln die Heatmap über
+> **landmark-definierte** Regionen pro Frame (Fallback: alte Geometrie ohne
+> Landmarks). Attention-Shift ist zudem bivariat (Magnitude + Richtung).
 
 **Gewollter Zustand**
 

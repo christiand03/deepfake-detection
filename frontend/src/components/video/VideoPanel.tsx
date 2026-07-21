@@ -12,6 +12,7 @@ import { VideoAnalysisPlayer } from './VideoAnalysisPlayer'
 import { ChunkTimelines } from './ChunkTimelines'
 import { RegionFacePanel } from './RegionFacePanel'
 import { AnalysisControls } from './AnalysisControls'
+import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
 import { useAnalysis } from '../../hooks/useAnalysis'
 import { useVideoSync } from '../../hooks/useVideoSync'
 import { fetchClips } from '../../api/client'
@@ -36,6 +37,7 @@ export function VideoPanel({
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.85)
   const [modelMode, setModelMode] = useState<ModelMode>('unimodal')
   const [fusionMode, setFusionMode] = useState<FusionMode>('cross_attention')
+  const [faceMapOpen, setFaceMapOpen] = useState(false)
 
   const { state, analyze, reset } = useAnalysis()
   const { showError } = useErrorToast()
@@ -126,6 +128,8 @@ export function VideoPanel({
         <RegionFacePanel
           regions={result?.regionRelevance ?? []}
           rotated={!!result?.faceRotationWarning}
+          open={faceMapOpen}
+          onOpenChange={setFaceMapOpen}
         >
           <VideoAnalysisPlayer
             ref={videoRef}
@@ -136,6 +140,16 @@ export function VideoPanel({
             heatmapOpacity={heatmapOpacity}
           />
         </RegionFacePanel>
+
+        {/* Explanation button — top-left corner of the player (F1). Switches to the
+            region-face explanation while the face map covers the player. */}
+        <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 7 }}>
+          {faceMapOpen && (result?.regionRelevance?.length ?? 0) > 0 ? (
+            <ExplanationButton id="region-face" label="Region-Relevance erklären" size={22} />
+          ) : (
+            <ExplanationButton id="heatmap-overlay" label="Heatmap-Overlay erklären" size={22} />
+          )}
+        </div>
 
         {/* Analysis controls overlay — top-right corner of the player. */}
         <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 7 }}>
