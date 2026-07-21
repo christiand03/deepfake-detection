@@ -18,7 +18,7 @@
 
 import { useRef, useState } from 'react'
 
-import { bivariateRgba } from '../../lib/seismicColormap'
+import { bivariateRgba, relevanceToRgb } from '../../lib/seismicColormap'
 import type { RegionRelevance } from '../../types/analysis'
 import { RotationWarning } from '../shared/RotationWarning'
 
@@ -69,6 +69,19 @@ const FACE_OUTLINE =
 // so keep the hue linear (decisive leans stay coloured, only near-neutral fades)
 // and lift low alphas a touch so faint regions still read as tinted, not black.
 const FILL_OPTS = { maxAlpha: 0.92, alphaGamma: 0.6, dirGamma: 1.0, dirGain: 1.35, dirCap: 0.85 }
+
+// Solid text colour for a region's lean, using the SAME saturation gating as the
+// fill hue (FILL_OPTS) — so a near-zero (averaged-out) lean reads near-neutral
+// instead of snapping to full red/blue and overstating a value of ~0. Full opacity
+// (no magnitude alpha) for legibility as caption text.
+function leanColor(direction: number): string {
+  const colorMag = Math.min(
+    FILL_OPTS.dirCap,
+    Math.pow(Math.abs(direction), FILL_OPTS.dirGamma) * FILL_OPTS.dirGain,
+  )
+  const [r, g, b] = relevanceToRgb(Math.sign(direction) * colorMag)
+  return `rgb(${r},${g},${b})`
+}
 
 function fmt(v: number): string {
   return v.toFixed(3)
@@ -248,7 +261,7 @@ export function FaceSchematic({
               style={{
                 fontSize: 22,
                 fontWeight: 600,
-                color: top.direction >= 0 ? '#ff7070' : '#5e91ee',
+                color: leanColor(top.direction),
               }}
             >
               {top.region}

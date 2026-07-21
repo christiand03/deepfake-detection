@@ -139,9 +139,19 @@ export const regionFace: Explanation = {
       kind: 'pitfalls',
       body: (
         <Callout variant="warn" title="Whole-Clip-Aggregat">
-          Zeigt den Durchschnitt über den ganzen Clip, keinen einzelnen Moment.
-          Für zeitliche Details sind die Timelines da, für Vorher/Nachher der
-          Attention-Shift.
+          <P>
+            Zeigt den Durchschnitt über den ganzen Clip, keinen einzelnen Moment.
+            Für zeitliche Details sind die Timelines da, für Vorher/Nachher der
+            Attention-Shift.
+          </P>
+          <P>
+            Die <Term>Richtung (Lean)</Term> wird über die ganze Region und alle
+            Frames gemittelt. Eine nur lokal begrenzte Manipulation mittelt sich
+            dabei vollständig weg: Die Farbe verblasst zu neutral, obwohl der Clip
+            fake ist. Aussagekräftig bleibt dann die{' '}
+            <Term>Stärke</Term> (welche Region am meisten beachtet wurde), nicht die
+            Richtung. Ein wirklicher Fake/Real Lean würde nur bei end-to-end Video Fakes zum Vorschein kommen.
+          </P>
         </Callout>
       ),
     },
