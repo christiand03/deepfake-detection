@@ -78,13 +78,25 @@ export const regionFace: Explanation = {
     {
       kind: 'normalization',
       body: (
-        <P>
-          Die Einfärbung ist auf die stärkste Region normiert: Die am meisten
-          beachtete Region füllt voll aus, die übrigen erscheinen im Verhältnis dazu
-          blasser. „Voll gefüllt" heißt also „am stärksten in diesem Clip", nicht
-          absolut stark. Deshalb kann eine Region voll eingefärbt sein, obwohl ihr
-          Relevanzwert im Tooltip klein wirkt.
-        </P>
+        <>
+          <P>
+            Die Einfärbung ist auf die stärkste Region normiert: Die am meisten
+            beachtete Region füllt voll aus, die übrigen erscheinen im Verhältnis dazu
+            blasser. „Voll gefüllt" heißt also „am stärksten in diesem Clip", nicht
+            absolut stark. Deshalb kann eine Region voll eingefärbt sein, obwohl ihr
+            Relevanzwert im Tooltip klein wirkt.
+          </P>
+          <P>
+            Zusätzlich läuft die Füllung durch eine leichte{' '}
+            <Chip>Gamma</Chip>-Kurve: Die <Chip>Alpha</Chip>-Deckkraft folgt nicht
+            linear der Relevanz, sondern wird angehoben (
+            <Term>Alpha = Relevanz^0,6</Term>), damit schwach beachtete Regionen
+            sichtbar getönt bleiben statt ins Schwarze zu kippen. Die Farbsättigung
+            ist für die wenigen großen Regionen zusätzlich leicht verstärkt. Beides
+            ist reine Darstellungs-Balance — die Werte im Tooltip bleiben roh und
+            unverändert.
+          </P>
+        </>
       ),
     },
     {
