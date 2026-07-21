@@ -2101,7 +2101,7 @@ def _compute_word_segments(
             raw_segs: list[dict] = json.load(f)
     else:
         whisperx_device = "cuda" if torch.cuda.is_available() else "cpu"
-        wx_model = whisperx.load_model("base", device=whisperx_device, compute_type="float32")
+        wx_model = whisperx.load_model("medium", device=whisperx_device, compute_type="float32")
         result = wx_model.transcribe(waveform_np.astype(np.float32), batch_size=16, language="en")
         if not result.get("segments"):
             return []
