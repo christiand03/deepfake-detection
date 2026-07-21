@@ -57,6 +57,13 @@ export function FrequencyHeatmap({ audio, view, videoRef, duration }: FrequencyH
   const gc = audio.frequencyGridConfidence
   const gr = audio.frequencyGridRelevance
   const n = isConf ? (gc?.low.length ?? 0) : (gr?.low.magnitude.length ?? 0)
+  // Confidence is a fakeness-gated ablation grid: real windows are 0 (nothing to
+  // attribute), so an all-real clip yields an entirely transparent grid. Detect
+  // that case to show an explicit empty-state instead of a silent dark block.
+  const allRealConf =
+    isConf &&
+    gc != null &&
+    (['low', 'mid', 'high'] as const).every(k => gc[k].every(v => v === 0))
   const playRef = useRef<HTMLDivElement>(null)
 
   // rAF playhead over the cell area — aligned to the same audio timeline as L1.
@@ -151,6 +158,28 @@ export function FrequencyHeatmap({ audio, view, videoRef, duration }: FrequencyH
                   pointerEvents: 'none',
                 }}
               />
+              {allRealConf && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    textAlign: 'center',
+                    padding: '0 8px',
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    lineHeight: 1.5,
+                    letterSpacing: '0.06em',
+                    color: '#5e91ee',
+                    pointerEvents: 'none',
+                  }}
+                >
+                  All windows classified real — no fake evidence for any band to
+                  carry.
+                </div>
+              )}
             </div>
           </div>
 
