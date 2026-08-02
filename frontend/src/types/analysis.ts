@@ -107,8 +107,9 @@ export interface AudioAnalysis {
   /**
    * L3 band×time heatmaps (replace the 3-bar chart). Confidence = gated ablation
    * grid (sharp; lights up where a band carries the fake). Relevance = faint
-   * per-window gradient grid. Null for older cached results / paths that don't
-   * compute them (e.g. multimodal) — L3 then falls back to the 3-bar bands.
+   * per-window gradient grid. Both audio paths (unimodal and multimodal) compute
+   * them; null only for results cached before the grids existed — L3 then falls
+   * back to the 3-bar bands.
    */
   frequencyGridConfidence: FrequencyGridConfidence | null
   frequencyGridRelevance: FrequencyGridRelevance | null

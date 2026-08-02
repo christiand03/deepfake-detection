@@ -106,7 +106,8 @@ class AudioAnalysisSchema(BaseModel):
     frequencyBandsRelevance: FrequencyBandsRelevanceSchema | None = None
     # L3 band x time heatmaps (replace the 3-bar chart): confidence = fakeness-gated
     # band-ablation fraction per window; relevance = honest faint per-window gradient.
-    # None for older cached results / paths that don't compute them (e.g. multimodal).
+    # Both audio paths compute them (run_audio_inference and run_multimodal_inference);
+    # None only for cached results written before the grids existed.
     frequencyGridConfidence: FrequencyGridConfidenceSchema | None = None
     frequencyGridRelevance: FrequencyGridRelevanceSchema | None = None
 
