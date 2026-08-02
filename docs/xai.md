@@ -4,6 +4,12 @@ Der "Depth-over-Breadth"-Leitgedanke fußt auf den xAI-Erkenntnissen: Das Projek
 muss belegen, *warum* das Netz eine Fälschung identifiziert hat. Begriffe im
 Detail im Glossar [`explanations/xai_and_explainability.md`](explanations/xai_and_explainability.md).
 
+> **Technische Referenz (Zahlen):** Exakte Berechnungen, Normalisierungsstufen
+> und das display-seitige Tuning (Deadzone, Gamma, Gain, Cap) jeder Stufe –
+> AttnLRP-Kern, bivariate LRP und jede Frontend-Visualisierung – stehen in
+> [`xai_pipeline_reference.md`](xai_pipeline_reference.md). Dieses Dokument bleibt
+> die Hochniveau-Einordnung.
+
 ## 1. Methoden: Abkehr von Grad-CAM
 
 - **Das Problem:** Grad-CAM nutzt die topologische Struktur der finalen

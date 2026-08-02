@@ -39,7 +39,16 @@ Neu im Projekt? Lies in dieser Reihenfolge:
 | Datei | Inhalt |
 |---|---|
 | [`xai.md`](xai.md) | xAI-Methoden (Attention Rollout, AttnLRP), Video-Heatmaps, Audio-3-Layer-Timeline, Plotting-Standards |
+| [`xai_pipeline_reference.md`](xai_pipeline_reference.md) | Technische Referenz: exakte Berechnungen, Normierungsstufen & Display-Tuning jeder xAI-Stufe (Zahlen) |
+| [`relevance_regularization.md`](relevance_regularization.md) | **Lokalisierungs-Untersuchung & Plan**: warum die Heatmap flächig statt mundlokalisiert ist (Diagnose an den echten Fake-Frames), Entscheidung für Explanation-Guided-Training + Frame-Difference-Masken, Implementierung, lxt-double-backprop-Analyse, Erwartungen & Vorgehen je Ergebnis |
 | [`audit_2026-06.md`](audit_2026-06.md) | Silent-Failure-Audit: Pipeline-Fixes, Daten-Regenerierung **und geprüfte False Alarms** (diese nicht "fixen"!) |
+
+## Vollständigkeitsliste (Code-Register für den Beleg-Abgleich)
+
+| Verzeichnis | Inhalt |
+|---|---|
+| [`vollstaendigkeitsliste/`](vollstaendigkeitsliste/README.md) | **Register aller 485 Projektdateien**, bei Python/TypeScript bis auf Funktions- bzw. Komponentenebene. Beschreibt, *was* implementiert ist und *warum* — als Abgleichsgrundlage für die Belegarbeit. |
+| [`vollstaendigkeitsliste/99_abgleich_beleg.md`](vollstaendigkeitsliste/99_abgleich_beleg.md) | **Die Abgleichmatrix**: jeder implementierte Mechanismus in einer Zeile, mit erwartetem Beleg-Kapitel und Statusspalte. Einstiegspunkt für die Lückensuche. |
 
 ## Glossar
 
