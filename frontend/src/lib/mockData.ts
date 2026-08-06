@@ -14,7 +14,19 @@ import type {
   Phase4Result,
 } from '../types/analysis'
 
-/** Build a bivariate attention-shift row (I4) for the mock data. */
+/**
+ * Build a bivariate attention-shift row (I4) for the mock data.
+ *
+ * `region` MUST be one of the seven canonical face regions defined by
+ * `REGION_NAMES` in `src/data_processing/face_extractor.py`:
+ *   Forehead · Left Eye · Right Eye · Nose · Mouth · Jaw · Chin
+ *
+ * The backend never emits any other region name. In particular there is no
+ * "Background" and no "Shoulder" region: the landmark partition is masked by
+ * `FACE_OVAL_INDICES`, so everything outside the face oval belongs to no region
+ * at all. Earlier mock rows used those two invented names and they leaked into
+ * project documentation as if they were real. Do not reintroduce them.
+ */
 function bshift(
   region: string,
   magnitudeBefore: number,
@@ -447,7 +459,7 @@ export function makeMockPhase3Result(
       bshift('Left Eye', 0.41, Math.max(0.03, 0.41 - degradation * 0.3), 0.28, 0.28 - degradation * 0.3),
       bshift('Right Eye', 0.33, Math.max(0.02, 0.33 - degradation * 0.25), 0.2, 0.2 - degradation * 0.25),
       bshift('Jaw', 0.22, Math.max(0.02, 0.22 - degradation * 0.2), -0.1, -0.1 - degradation * 0.2),
-      bshift('Background', 0.04, Math.min(0.6, 0.04 + degradation * 0.3), -0.3, -0.3 + degradation * 0.6),
+      bshift('Forehead', 0.04, Math.min(0.6, 0.04 + degradation * 0.3), -0.3, -0.3 + degradation * 0.6),
     ],
     ...(audioRobustness !== undefined ? { audioRobustness } : {}),
   }
@@ -500,8 +512,8 @@ export function makeMockPhase4Result(
       bshift('Mouth', 0.84, Math.max(0.04, 0.84 - attackStrength * 0.9), 0.66, 0.66 - attackStrength * 1.2),
       bshift('Left Eye', 0.41, Math.max(0.03, 0.41 - attackStrength * 0.6), 0.3, 0.3 - attackStrength * 0.8),
       bshift('Jaw', 0.22, Math.max(0.02, 0.22 - attackStrength * 0.4), -0.12, -0.12 - attackStrength * 0.3),
-      bshift('Shoulder', 0.03, Math.min(0.94, 0.03 + attackStrength * 0.8), -0.2, -0.2 + attackStrength * 1.1),
-      bshift('Background', 0.01, Math.min(0.82, 0.01 + attackStrength * 0.6), -0.4, -0.4 + attackStrength * 0.9),
+      bshift('Nose', 0.03, Math.min(0.94, 0.03 + attackStrength * 0.8), -0.2, -0.2 + attackStrength * 1.1),
+      bshift('Forehead', 0.01, Math.min(0.82, 0.01 + attackStrength * 0.6), -0.4, -0.4 + attackStrength * 0.9),
     ],
   }
 
