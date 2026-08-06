@@ -135,9 +135,19 @@ Anheben des ehrlich schwachen Werts „the same lie the backend sum=1 normalisat
 
 Zwei weitere Punkte zu L3: Die Komponentenwahl hängt vom Ergebnis ab — liegt
 `frequencyGridConfidence` vor, rendert `FrequencyHeatmap`, sonst fällt der Container auf
-`FrequencyBandChart` zurück (ältere Caches, multimodale Ergebnisse ohne Gitter). Für
-denselben Clip können also zwei verschiedene L3-Abbildungen entstehen. Und die
-Confidence-Ansicht ist fakeness-gated: Ein durchgehend als real eingestufter Clip
+`FrequencyBandChart` zurück. Für denselben Clip können also zwei verschiedene
+L3-Abbildungen entstehen.
+
+> **Korrigiert 2026-08-06.** Als Rückfallgrund stand hier bis dahin „ältere Caches,
+> multimodale Ergebnisse ohne Gitter". Der zweite Grund trifft nicht zu: **beide**
+> Audiopfade berechnen das Gitter (`src/api/inference.py:2348` unimodal, `:2547`
+> multimodal). `frequencyGridConfidence` ist ausschließlich bei Cachedateien aus der Zeit
+> **vor** Einführung der Gitter leer. Der Kommentar, auf dem die alte Aussage beruhte,
+> wurde von `db5608f` als veraltet korrigiert. Für den Beleg heißt das: Das Fehlen des
+> L3-Gitters darf **nicht** mit dem multimodalen Modus begründet werden; den korrekten
+> Stand gibt die Matrixzeile F33 in [99](99_abgleich_beleg.md) wieder.
+
+Und die Confidence-Ansicht ist fakeness-gated: Ein durchgehend als real eingestufter Clip
 ergibt ein **vollständig transparentes** Gitter. `allRealConf` (L63) fängt das ab und
 schreibt „All windows classified real — no fake evidence for any band to carry" ins
 Bild, statt einen stummen schwarzen Block zu zeigen. Der Modulkopf hält zur
@@ -265,9 +275,24 @@ leicht verschiedenen Tönen.
 
 Die Mock-Data-URI-Generatoren **synthetisieren keine Heatmaps**: `makeSeismicDataUri`
 (L110) und seine Geschwister liefern ein 224×224-SVG mit *einer einzigen Füllfarbe* —
-eine flächig eingefärbte Kachel ohne räumliche Struktur. Die Attrappen-Regionslisten
-enthalten außerdem Namen, die das echte Backend nie liefert (`Background`, `Shoulder`),
-und nur sechs statt sieben Gesichtsregionen.
+eine flächig eingefärbte Kachel ohne räumliche Struktur. Das ist das verlässlichste
+Erkennungsmerkmal einer im Mock-Modus entstandenen Abbildung. Die Attrappen-Regionslisten
+führen außerdem nur **fünf** Regionen statt der sieben, die das Backend liefert.
+
+> **`Background` und `Shoulder` gibt es nicht — nirgends** (bereinigt 2026-08-06).
+> Die kanonische Regionsliste ist `REGION_NAMES` in
+> `src/data_processing/face_extractor.py` und lautet **Forehead, Left Eye, Right Eye,
+> Nose, Mouth, Jaw, Chin**. Einen Hintergrund- oder Schulterbereich gibt es als Region
+> nicht: `FACE_OVAL_INDICES` maskiert die Partition, alles außerhalb des Gesichtsovals
+> gehört zu **keiner** Region.
+>
+> Bis zum 2026-08-06 erfand `lib/mockData.ts` die beiden Namen `Background` und
+> `Shoulder` für seine Attrappenzeilen. Sie sind durch reale Regionsnamen ersetzt
+> (`Forehead` bzw. `Nose`/`Forehead`), und `bshift` trägt jetzt die kanonische Liste im
+> Docstring. **Die Erfindung war folgenreich:** dieselbe Fünferliste steht in
+> [`docs/archive/adversarial.md` §2.1](../archive/adversarial.md) und von dort
+> offenbar in `04Methodology.tex` — der `!`-Widerspruch **F18** in
+> [99](99_abgleich_beleg.md).
 
 ## 9. Kontexte
 

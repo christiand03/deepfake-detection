@@ -57,6 +57,26 @@ Fachdokument. Dort steht pro Funktion, was sie berechnet und warum sie existiert
 
 ---
 
+## Zitierkonvention: `Reg. G4` ist nicht `Gap G4`
+
+Zwei Nummerierungen im Projekt kollidieren. Beide bleiben, weil beide etabliert und extern
+referenziert sind — unterschieden wird deshalb über ein **Präfix**:
+
+| Schreibweise | Bedeutung | Beispiel |
+|---|---|---|
+| `Reg. G4`, `Registerzeile G4` | Zeile der Abgleichmatrix, Abschnitt G (Phase 3) | *Reg. G4* = Upscale-Sweep 640×360 → 1280×720 |
+| `Gap G4`, `Forschungslücke G4` | Forschungslücke aus `vault/Knowledge/Research Gaps.md` | *Gap G4* = Wechselwirkung adversariale Robustheit ↔ Treue |
+
+Dieselbe Regel gilt für `H2`: *Reg. H2* ist das PGD-Angriffsziel, `H2` in
+`docs/frontend_roadmap.md` ein Oberflächenkürzel (wie `I1`–`I4`, `A1`, `A2-Box`, `E1`, `E2`,
+die in Codekommentaren auftauchen).
+
+**Im Fließtext der Belegarbeit tauchen Register-IDs nie auf** — dort ist `G4` immer die
+Forschungslücke. Die Kollision existiert ausschließlich in den Arbeitskommentaren der
+`% [SKIZZE]`-Blöcke, und dort ist das Präfix verbindlich. Siehe Registerzeile **Q29**.
+
+---
+
 ## Aufbau der Einträge
 
 Jedes Fachdokument folgt derselben Gliederung:
@@ -128,6 +148,14 @@ Damit bleiben **485 Projektdateien**, die dieses Register vollständig erfasst.
 >   Kommentar korrigiert: **beide** Audiopfade berechnen die Gitter
 >   (`inference.py:2348` unimodal, `:2547` multimodal), `null` steht nur noch für Caches
 >   von vor der Einführung der Gitter.
+>
+> **Beide Textstellen sind am 2026-08-06 nachgezogen.** [12 §1.2](12_dokumentation_vault.md)
+> war bereits in [99](99_abgleich_beleg.md) als erledigt vermerkt; die Aussage in
+> [08](08_frontend.md) §4 ist korrigiert und trägt jetzt einen Kasten mit dem richtigen
+> Stand. In derselben Runde wurden zwei weitere registerinterne Widersprüche behoben: die
+> Breaking-Point-Definition in [05](05_robustheit_adversarial.md) und die Nullungsaussage
+> zu den `*_only`-Modi in [10 §4](10_konfiguration.md). Alle drei sind in
+> [99 §Ergebnis des Abgleichs](99_abgleich_beleg.md) dokumentiert.
 >
 > Bei Zahlen- oder Verhaltensangaben, die für den Beleg zählen, ist der Code gegenzulesen.
 

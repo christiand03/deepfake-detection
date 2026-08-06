@@ -74,6 +74,7 @@ desktop.ini
 .whisperx_cache/
 docs/kapitel/
 .playwright-mcp/
+.claude/agents/
 
 # ============================================================
 # Ausnahmen (Exceptions)

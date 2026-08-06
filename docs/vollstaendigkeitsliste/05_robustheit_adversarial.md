@@ -368,10 +368,25 @@ voreingestellt **offline**, Artefakte landen unter `.smoke/`.
 | **Mean Attention-Shift** | mittlere absolute Änderung der LRP-Regionswerte zwischen sauberem und angegriffenem Durchgang; multimodal zusätzlich über die Bänder `low`/`mid`/`high` | `run_adversarial_batch`, `run_multimodal_adversarial_batch` |
 | **AUC unter Degradation** | AUC-ROC je Gitterpunkt; NaN bei einklassiger Stichprobe | `_safe_auc` |
 | **ε (Perturbationsbudget)** | L∞ im **normalisierten** Pixel- bzw. z-scorierten Wellenformraum, nicht in `[0,255]` | `uap.py` Modulkopf, `adversarial.py:82` |
-| **Breaking Point** | erster Gitterpunkt, an dem das Urteil kippt | Frontend: `RobustnessPanel.tsx:188` |
+| **Breaking Point** | *Auswertungsseitig:* erster Gitterpunkt eines Sweeps, an dem das Urteil kippt — eine Größe, die aus den Sweep-Tabellen abgelesen wird. **Nicht** die Frontend-Komponente gleichen Namens, s. Kasten unten | Sweep-Tabellen aus `eval_robustness_sweep.py` |
 
 > **Zwei Fooling Rates, ein Name.** Die Sweeps bedingen auf *baselinekorrekt*, die UAP auf
 > *nicht schon in der Zielklasse*. Beide Zahlen tragen in W&B die Spaltenbezeichnung
 > `fooling_rate` bzw. `fooling_rate_fake`/`_real`, sind aber nicht ineinander
 > überführbar und dürfen im Beleg nicht in einer Tabelle nebeneinanderstehen, ohne dass
 > die Bedingung dabeisteht.
+
+> **Breaking Point: zwei verschiedene Dinge unter einem Namen** (korrigiert 2026-08-06).
+> Die Zeile oben nannte bis dahin „erster Gitterpunkt, an dem das Urteil kippt" und
+> verwies dafür auf `RobustnessPanel.tsx:188`. Das war falsch zugeordnet. Die
+> Frontend-Komponente `BreakingPoint` **führt keinen Sweep durch**: sie stuft den
+> relativen Konfidenzverlust *eines einzelnen* gefahrenen Parametersatzes ein —
+> `critical` bei über 50 %, `moderate` bei über 25 %, sonst `low`, mit eigenen Pfaden für
+> „Konfidenz steigt" und für Änderungen unter 0,05 Prozentpunkten. Ein Kipppunkt über eine
+> Parameterachse wird dort nirgends gesucht.
+>
+> Für den Beleg heißt das: Der Kipppunkt aus den **Offline-Sweep-Tabellen** ist eine
+> legitime Größe und darf so berichtet werden. Ein Screenshot der Frontend-Komponente darf
+> **nicht** als Kipppunktsuche beschriftet werden. Maßgeblich ist der Code; der Kasten in
+> [08 §Robustheitslabor](08_frontend.md) und die Matrixzeile G8 in
+> [99](99_abgleich_beleg.md) sagen dasselbe.

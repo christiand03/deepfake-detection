@@ -34,7 +34,14 @@ Die aktuelle Pipeline überträgt die Audiospur unverändert (`acodec=copy`). In
 
 #### xAI Attention-Shift unter Degradation
 
-Aktuell gibt `Phase3ResultSchema` nur `degradedHeatmapFrames` und `degradedConfidence` zurück. Erweiterung: `attentionShift`-Liste (analog zu `Phase4ResultSchema`) mit Anomalie-Region-Scores vor und nach Degradation. Dies beweist die „trügerische Merkmale"-Hypothese quantitativ: Wenn sich die Aufmerksamkeit von `Mouth` (high relevance) zu `Background` (low relevance) verschiebt, sobald Kompression das Gesicht unscharf macht, ist der Mechanismus direkt belegt.
+Aktuell gibt `Phase3ResultSchema` nur `degradedHeatmapFrames` und `degradedConfidence` zurück. Erweiterung: `attentionShift`-Liste (analog zu `Phase4ResultSchema`) mit Anomalie-Region-Scores vor und nach Degradation. Dies beweist die „trügerische Merkmale"-Hypothese quantitativ: Wenn sich die Aufmerksamkeit von `Mouth` (high relevance) zu ~~`Background`~~ (low relevance) verschiebt, sobald Kompression das Gesicht unscharf macht, ist der Mechanismus direkt belegt.
+
+> **KORREKTUR 2026-08-06:** `Background` ist keine Region — siehe den Korrekturkasten in
+> §2.1. Eine Verschiebung „auf den Hintergrund" ist mit der implementierten
+> Landmark-Partition **nicht messbar**, weil außerhalb des Gesichtsovals keine Region
+> definiert ist. Messbar ist nur eine Umverteilung *zwischen* den sieben Gesichtsregionen.
+> Diese Formulierung hat es bis in Abstract und Einleitung geschafft und ist dort
+> ebenfalls zu korrigieren.
 
 #### Upscaling-Artefakt-Simulation
 
@@ -60,7 +67,18 @@ Die folgende Angriffs-Pipeline ist vollständig implementiert:
 - **FGSM (Fast Gradient Sign Method):** Single-Step-Angriff (steps=1). Implementierung als Sonderfall von `_pgd_attack()` in `src/api/inference.py`.
 - **PGD (Projected Gradient Descent):** Multi-Step-Angriff mit konfigurierbaren Steps (1–100) und konfigurierbarem ε (L∞-Ball). SOTA für White-Box-Evaluation.
 - **Differenzkarten:** Magnifizierte Perturbations-Visualisierung (Differenz clean − perturbed, normiert).
-- **Attention-Shift-Tabelle:** Vergleich der Anomalie-Region-Scores (Mouth, Eye, Jaw, Shoulder, Background) vor und nach Angriff.
+- **Attention-Shift-Tabelle:** Vergleich der Anomalie-Region-Scores (Mouth, Eye, Jaw, ~~Shoulder, Background~~) vor und nach Angriff.
+
+  > **KORREKTUR 2026-08-06 — diese Regionsliste ist falsch und war nie implementiert.**
+  > `Shoulder` und `Background` existieren als Regionen **nicht**. Maßgeblich ist
+  > `REGION_NAMES` in `src/data_processing/face_extractor.py`: **Forehead, Left Eye,
+  > Right Eye, Nose, Mouth, Jaw, Chin** — sieben landmarkbasierte Regionen. Die
+  > Partition ist über `FACE_OVAL_INDICES` maskiert; alles außerhalb des Gesichtsovals
+  > gehört zu **keiner** Region, es gibt also keinen Hintergrundbereich als Messgröße.
+  > Diese Zeile ist vermutlich die Quelle der falschen Aufzählung in
+  > `docs/kapitel/04Methodology.tex` (Widerspruch F18 in
+  > `docs/vollstaendigkeitsliste/99_abgleich_beleg.md`). Nicht als Quelle verwenden —
+  > `docs/archive/` ist laut `CLAUDE.md` ohnehin kein aktueller Stand.
 - **FastAPI-Endpoint:** `POST /adversarial` in `src/api/routers/adversarial.py`.
 - **Frontend:** Interaktives Adversarial-Lab (`AdversarialPanel.tsx`) mit Methoden-Auswahl, ε-Slider, PGD-Steps und Frame-Triptych (Clean | Difference | Perturbed).
 

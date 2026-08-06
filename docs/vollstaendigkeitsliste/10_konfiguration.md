@@ -220,9 +220,18 @@ Die Kopfkommentare beziffern die Schieflage je Modalität: `label_video` ~94/6
 `train_multimodal_concat.yaml`, `train_multimodal_video_only.yaml`,
 `train_multimodal_audio_only.yaml` — die drei Vergleichsmodi gegen `cross_attention`.
 Jede Datei ändert genau einen Schlüssel (`model.fusion_mode`), sonst nichts; die
-Architektur bleibt also identisch. Bei `video_only`/`audio_only` wird der Pool-Vektor
-der jeweils anderen Modalität genullt, der Klassifikator bleibt unverändert — die
-Ablation misst den Beitrag des Signals, nicht den einer kleineren Architektur.
+Architektur bleibt also identisch. Bei `video_only`/`audio_only` wird der Backbone der
+verworfenen Modalität **gar nicht erst ausgeführt** — `_extract_features` liefert für sie
+`None` (`multimodal_module.py:384-391`) —, der Klassifikator bleibt unverändert. Die
+Ablation misst damit den Beitrag des Signals, nicht den einer kleineren Architektur.
+
+> **Korrigiert 2026-08-06.** Dieser Absatz beschrieb den Vorgang bis dahin als
+> „der Pool-Vektor der jeweils anderen Modalität wird genullt". Das trifft nicht zu und
+> widersprach der Matrixzeile C15 in [99](99_abgleich_beleg.md). Die Formulierung steht
+> wortgleich auch in `docs/kapitel/04Methodology.tex` und ist dort in Modus C zu
+> präzisieren — ein genullter Pool-Vektor und ein nicht ausgeführter Backbone sind
+> derselbe Klassifikatoreingang, aber nicht derselbe Rechenweg, und nur die zweite
+> Fassung trägt das Argument „Beitrag des Signals, nicht einer kleineren Architektur".
 
 ### Datensatz-Ablationen
 

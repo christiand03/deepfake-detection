@@ -9,6 +9,21 @@ hier zu Referenz- und Nachvollziehbarkeitszwecken **unverändert** erhalten.
 > `src/`-Struktur, nicht existierende `plot_style.py`), gelten die aktuellen
 > Dokumente.
 
+> 🔴 **Diese Warnung ist nachweislich zu spät gekommen** (geprüft 2026-08-06). Vier
+> Aussagen aus diesem Verzeichnis sind in die Belegarbeit gelangt und dort falsch:
+>
+> | Archivstelle | Aussage | Stand |
+> |---|---|---|
+> | `xai.md` §1 | Attention Rollout als "Lösung 1" | **nie implementiert** — Widerspruch F57, im Beleg an fünf Stellen behauptet |
+> | `xai.md` §2 | Attention "verschiebt sich präzise auf den Mund" (über 50 Epochen) | **gemessen und widerlegt**; Training läuft über 30 Epochen |
+> | `xai.md` §3 | Relevanz je Wort "aufsummiert" | Code **mittelt** vorzeichenbehaftet — Widerspruch F14, korrigiert |
+> | `adversarial.md` §2.1 | Regionen "Mouth, Eye, Jaw, Shoulder, Background" | `Shoulder`/`Background` **existieren nicht** — Widerspruch F18 |
+>
+> Alle vier Stellen tragen inzwischen einen Korrekturkasten. **Wer hier etwas
+> nachschlägt, prüft es vorher gegen den Code oder gegen
+> `docs/vollstaendigkeitsliste/`.** Die Dateien bleiben zur Nachvollziehbarkeit stehen;
+> ihre inhaltlichen Aussagen sind ohne Gegenprobe wertlos.
+
 | Archiv-Datei | Ersetzt durch | Anmerkung |
 |---|---|---|
 | `project.md` | [`../project.md`](../project.md) | Status auf Juni 2026 aktualisiert; Phase-3/4-Roadmap integriert |
