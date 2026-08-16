@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # Python
 # ============================================================
 __pycache__/
@@ -101,3 +101,11 @@ vault/.trash/
 # Claude KB binding layer: machine-specific absolute paths.
 # Each teammate binds their own clone (see vault/README.md).
 .claude/project-memory/
+
+# Scratch- und Laufzeit-Artefakte.
+# checkpoints/ und temp/ waren untracked, aber NICHT ignoriert: ein git add . hätte
+# ~1 GB Modellgewichte eingecheckt. *.ckpt und *.h5 greifen zwar bereits, decken aber
+# nicht die Verzeichnisse selbst und nicht die Logs/CSVs darin ab.
+# Die Ergebnis-JSONs liegen bewusst versioniert unter docs/results/.
+checkpoints/
+temp/

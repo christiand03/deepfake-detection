@@ -29,17 +29,41 @@ model_checkpoint:
   filename: "epoch_{epoch:03d}-step_{step:06d}-val_loss_{val/loss:.4f}"
   monitor: "val/loss"
   mode: "min"
-  save_top_k: 2
+  # ALLE Checkpoints behalten, nicht die besten k.
+  #
+  # Am 2026-08-17 verifiziert: save_top_k=2 speichert bei einem *steigenden* val/loss
+  # die beiden FRÜHESTEN Validierungen — danach feuert kein Speicher-Ereignis mehr,
+  # und last.ckpt friert mit ein (es ist bitweise eine Kopie des letzten Speicherstands,
+  # kein eigenständiger Schreibvorgang am Trainingsende). Bei den λ>0-Läufen steigt
+  # val/loss zwangsläufig, weil genau das der gemessene Trade-off ist. Ergebnis:
+  # λ=0.02 und λ=0.1 hatten nur Checkpoints bei Batch 3.000 von 6.000, während die
+  # Kontrolle (fallender val/loss) bis 6.000 durchspeicherte — die Arme waren damit
+  # NICHT schrittgleich, obwohl alle 6.000 Batches trainiert hatten.
+  #
+  # -1 = alles behalten. Bei 4 Validierungen pro Lauf und ~1 GB je Checkpoint sind das
+  # ~4 GB pro Lauf; das ist der Preis dafür, dass ein Vergleich überhaupt zulässig ist.
+  # Wer Platz sparen muss, nutzt every_n_train_steps statt eines metrik-abhängigen
+  # Kriteriums — aber NIE save_top_k, wenn die überwachte Metrik steigen darf.
+  save_top_k: -1
   save_last: True
   auto_insert_metric_name: False
 
 early_stopping:
-  # Auf val/loss umgestellt, damit Checkpointing und Early Stopping dieselbe Größe
-  # betrachten. patience 5 bei 2 Validierungen pro Epoche und 3 Epochen (= 6 Checks)
-  # bedeutet praktisch: greift nur bei anhaltender Verschlechterung.
+  # Praktisch deaktiviert — und das ist Absicht.
+  #
+  # Bei den Lokalisierungs-Läufen ist ein steigender val/loss das ERWARTETE Ergebnis:
+  # genau dieser Anstieg IST der gemessene Trade-off zwischen Lokalisierung und
+  # Klassifikationsgüte. Early Stopping auf val/loss würde also den Lauf abbrechen,
+  # der das Ergebnis gerade produziert — dieselbe Fehlerklasse wie beim
+  # RelevanceCollapseGuard, der am 2026-08-16 mit einer Referenz aus dem
+  # Sanity-Check bei einem Drittel der Strecke abgebrochen hat.
+  #
+  # patience muss daher grösser sein als die Zahl der Validierungen im Lauf
+  # (tests/test_checkpoint_config.py prüft das). 1000 heisst: greift nie, bleibt
+  # aber als Callback vorhanden, falls ein Lauf wirklich divergiert (check_finite).
   monitor: "val/loss"
   mode: "min"
-  patience: 5
+  patience: 1000
 
 model_summary:
   max_depth: -1

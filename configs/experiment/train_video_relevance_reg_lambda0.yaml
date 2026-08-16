@@ -24,7 +24,9 @@ defaults:
   - override /model: videomae
   - override /logger: wandb
   - override /trainer: gpu
-  - override /callbacks: default
+  # model_checkpoint_loss statt default: val/auc_video sättigt bei 1.000 und
+  # save_top_k=2 speichert bei steigendem val/loss nur die frühesten Checkpoints.
+  - override /callbacks: model_checkpoint_loss
 
 ckpt_export_name: videomae_relevance_reg_lambda0
 
