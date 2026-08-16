@@ -10,8 +10,21 @@
 > ist das Ziel*, *was muss implementiert werden*, *was erwarten wir*, *was tun wir
 > abhängig vom Ergebnis.*
 >
-> Stand: 2026-07-22. Hochniveau-xAI-Einordnung: [`xai.md`](xai.md); exakte
+> Stand: 2026-08-16. Hochniveau-xAI-Einordnung: [`xai.md`](xai.md); exakte
 > Berechnungen/Normierungen: [`xai_pipeline_reference.md`](xai_pipeline_reference.md).
+
+> **STATUS: DURCHGEFÜHRT UND GEMESSEN.** Der ursprüngliche Plan (Abschnitte 1–8) ist
+> umgesetzt. Die Ergebnisse stehen in **Abschnitt 13**. Zwei Aussagen des ursprünglichen
+> Befunds haben der Messung auf 624 Clips **nicht standgehalten** und sind an Ort und
+> Stelle korrigiert (Abschnitte 4.2, 4.5, 5) — die alten Zahlen bleiben sichtbar, damit
+> die Korrektur nachvollziehbar ist und nicht wie eine nachträgliche Glättung wirkt.
+>
+> Kurzfassung für die Eilige:
+> * Die Regularisierung **funktioniert**: Lokalisierung 1,87 → 4,69 (×2,51 gegenüber
+>   der Kontrolle), Konfidenzintervalle überlappen nicht.
+> * Der Trade-off ist real und hat einen klaren Knick bei **λ = 0,02**.
+> * Der ursprüngliche Diagnose-Befund aus §4 beruhte auf **einem** Clip und
+>   verallgemeinert in dieser Form nicht.
 
 ---
 
@@ -29,6 +42,7 @@
 10. [Was wir anhand der Ergebnisse tun](#10-was-wir-anhand-der-ergebnisse-tun)
 11. [Datei- & Funktions-Index](#11-datei--funktions-index)
 12. [Offene Punkte / TODO](#12-offene-punkte--todo)
+13. [**Ergebnisse (2026-08-16)**](#13-ergebnisse-2026-08-16)
 
 ---
 
@@ -128,6 +142,42 @@ mean |Fake-Relevanz| pro Region über den **ganzen Clip**):
 Der Mund ist **Rang 4**, statistisch gleichauf mit Jaw/Nose/Right Eye. Die
 Relevanz ist **flächig verteilt**, nicht mundzentriert.
 
+> **KORREKTUR (2026-08-16).** Diese Tabelle ist so, wie sie hier steht, **nicht
+> interpretierbar** — und die Schlussfolgerung daraus hält der Messung nicht stand.
+>
+> **Problem 1: keine Flächennormierung.** Ein Roh-Anteil sagt nichts, solange die
+> Fläche der Region unbekannt ist. Über 60 Chunks gemessen (Landmark-Voronoi-Partition,
+> Anteil an der Gesichtsoval-Fläche): Forehead 23,8 %, Jaw 23,2 %, Nose 14,6 %,
+> Mouth 13,5 %, Chin 8,5 %, Left Eye 8,3 %, Right Eye 8,1 %. Damit ist „Jaw 19,5 %"
+> gegenüber 23,2 % Fläche eine **Unter**gewichtung, keine Dominanz — das Gegenteil
+> dessen, was die Rangliste nahelegt.
+>
+> **Problem 2: n = 1.** Auf 893 Chunks aus 624 Clips nachgerechnet ergibt sich ein
+> deutlich anderes Bild (Anreicherung = Relevanzanteil ÷ Flächenanteil, 1,00× =
+> genau der Flächenanteil):
+>
+> | Region | Fläche | Relevanz | **Anreicherung** | Clip 1 (n=1) |
+> |---|---|---|---|---|
+> | Nose | 14,6 % | 36,7 % | **2,51×** | 1,18× |
+> | Forehead | 23,8 % | 24,0 % | 1,01× | 0,55× |
+> | Right Eye | 8,1 % | 6,9 % | 0,86× | 2,17× |
+> | **Mouth** | 13,5 % | 11,4 % | **0,84×** | 1,24× |
+> | Left Eye | 8,3 % | 6,9 % | 0,83× | 0,44× |
+> | Chin | 8,5 % | 4,0 % | 0,48× | 1,44× |
+> | Jaw | 23,2 % | 10,1 % | 0,44× | 0,84× |
+>
+> Clip 1 war **nicht repräsentativ**: Mouth 1,24× dort gegen 0,84× im Mittel,
+> Right Eye 2,17× gegen 0,86×. Der n=1-Vorbehalt aus §9 war berechtigt; die
+> konkreten Zahlen dieser Tabelle gehören **nicht** in die Belegarbeit.
+>
+> **Was stattdessen gilt:** Die Relevanz ist nicht „flächig gleichverteilt", sondern
+> hat einen klaren Schwerpunkt auf **Nase/Gesichtsmitte** (2,51×), während der Mund
+> leicht **unter** seinem Flächenanteil liegt. Zusätzlich liegen **33,4 % der
+> gesamten Relevanz ausserhalb des Gesichtsovals** — das ist die quantitative Form
+> der Betreuer-Beobachtung, die Heatmap „explodiere" über das ganze Bild.
+>
+> Reproduzierbar über `python -m scripts.eval_localization --per-region`.
+
 ### 4.3 Frame-Level Region-Relevanz (neues Skript)
 
 Der Cache speichert **keine** rohen Per-Frame-Arrays (nur die gerenderten
@@ -203,6 +253,38 @@ der bekannten Manipulation liegt **nicht** auf der manipulierten Region – es l
 verteilte/globale Artefakte (Blending-Nähte, Farb-/Licht-Mismatch, temporale
 Inkonsistenz), nicht die lokale Lippen-Manipulation. Die Visualisierung ist also
 **korrekt**; sie zeigt ehrlich, was das Modell tut.
+
+> **KORREKTUR (2026-08-16).** Auf 911 Chunks aus 624 Clips gemessen ist dieser
+> Kernbefund **zu grob**. Er stimmt für die Relevanz*masse* und ist falsch für die
+> Relevanz*spitze* — und diese Unterscheidung ist der eigentliche Befund.
+>
+> Gegen die Pixel-Maske der tatsächlichen Manipulation (Chance-Niveau = 1,88 % der
+> Bildfläche):
+>
+> | | Wert | Chance | Vielfaches |
+> |---|---|---|---|
+> | Relevanz**masse** in der Maske (RMA) | 0,0318 | 0,0188 | **1,7×** |
+> | Relevanz**spitze** in der Maske (Pointing Game) | 0,299 | 0,0188 | **15,8×** |
+>
+> Die stärkste Stelle der Heatmap liegt in **30 % der Fälle** innerhalb einer Maske,
+> die nur 1,9 % des Bildes bedeckt. Das Modell **weiss also durchaus, wo die
+> Manipulation ist**. Was fehlt, ist nicht der Ort, sondern die Konzentration: nur
+> 3,2 % der Gesamtmasse liegen dort, der Rest verteilt sich über Gesicht und
+> Hintergrund.
+>
+> **Die Kritik des Betreuers ist damit im Ergebnis richtig und in der Begründung
+> falsch.** Die Heatmap explodiert tatsächlich über das ganze Gesicht — aber nicht,
+> weil das Modell die Manipulation übersieht und stattdessen verteilte Artefakte
+> liest, sondern weil eine korrekt platzierte Spitze einen schweren Schwanz trägt.
+>
+> Für die Regularisierung ist das die **günstigere** Ausgangslage: Der Loss muss eine
+> bereits richtige Spitze schärfen, statt Relevanz von einem falschen an einen
+> richtigen Ort zu verschieben. Das erklärt auch, warum der Eingriff so gut
+> funktioniert (§13).
+>
+> Formulierungsempfehlung für die Belegarbeit: **„lokalisiert stark in der Spitze,
+> schwach in der Masse"** statt „lokalisiert nicht". Die zweite Aussage ist nach
+> dieser Messung nicht mehr haltbar.
 
 Das ist selbst ein **starkes, ehrliches xAI-Resultat** (genau die
 Faithfulness-Lücke, die AttnLRP aufdecken soll) – wertvoller als eine geschönte
@@ -390,6 +472,24 @@ beibringen, wo nichts gefälscht wurde. Chunk-Labels sind segment-genau → pass
 
 ## 9. Erwartungen
 
+> **Rückblick (2026-08-16).** Die Erwartungen unten sind so stehen geblieben, wie sie
+> vor dem Lauf formuliert waren. Bilanz gegen die tatsächlichen Ergebnisse (§13):
+>
+> | Erwartung | Eingetroffen? |
+> |---|---|
+> | Double-Backprop läuft ohne Crash, Gewicht-Gradienten non-zero | **ja** — Gradient erreicht `encoder.layer.0`, Äquivalenz zu `compute_attnlrp` exakt (0,00e+00) |
+> | Hauptunsicherheit ist Speicher/Zeit | **ja** — 7,57 GB bei bs 1; bs 2 läuft OOM, `loc_max_samples: 1` ist harte Grenze |
+> | Relevanz wandert messbar Richtung Maske | **ja** — 1,87 → 4,69 |
+> | möglicherweise auf Kosten der Accuracy | **ja, und zwar systematisch** — die Kurve in §13.4 ist das eigentliche Ergebnis |
+> | n = 1 vor Verallgemeinerung prüfen | **notwendig gewesen** — Clip 1 war nicht repräsentativ (§4.2) |
+>
+> **Nicht** erwartet und daher hervorzuheben: AttnLRP ist im Double-Backprop
+> *schneller und speicherärmer* als IxG (0,85 s / 7,57 GB gegen 1,33 s / 7,81 GB),
+> weil die LRP-Regeln den Rückwärtsgraphen abschneiden (`stop_gradient` auf der
+> LayerNorm-Varianz, Identitätsregel für GELU). §8 Schritt 4 behandelt IxG als
+> billigeren Fallback — das ist **umgekehrt**. IxG bleibt eine Fidelity-Variante,
+> ist aber kein Performance-Fallback.
+
 - **Smoke-Test:** AttnLRP-double-backprop läuft ohne Crash; Gewicht-Gradienten
   non-zero (die linearen/Attention/Patch-Embed-Pfade tragen das Signal, auch wenn
   GELU/LayerNorm-Faktoren einfrieren). Hauptunsicherheit = Speicher/Zeit unter
@@ -404,6 +504,18 @@ beibringen, wo nichts gefälscht wurde. Chunk-Labels sind segment-genau → pass
 ---
 
 ## 10. Was wir anhand der Ergebnisse tun
+
+> **Eingetreten ist der erste Fall — mit Einschränkung (2026-08-16).**
+> „Relevanz lokalisiert + Accuracy gehalten" trifft für **λ = 0,02** weitgehend zu:
+> Lokalisierung ×1,83 gegenüber der Kontrolle, `val/auc_video` 0,9854 statt 1,0000.
+> Gehalten ist nicht dasselbe wie unverändert — die Accuracy sinkt messbar, nur eben
+> wenig. Für λ = 0,1 gilt der zweite Fall („Accuracy fällt"), und die dort verlangte
+> **Trade-off-Kurve ist in §13.4 geliefert**.
+>
+> Der dritte Fall („Relevanz lokalisiert nicht") ist **nicht** eingetreten.
+>
+> Der Hinweis unten, den Scope dem Betreuer vorzulegen, bleibt gültig — jetzt aber mit
+> Messgrundlage statt mit einer Kostenschätzung.
 
 - **Relevanz lokalisiert + Accuracy gehalten** → Erfolg; Kern-Ergebnis der Arbeit
   (Explanation-Guided-Training bewegt die AttnLRP-Heatmap auf die Manipulation).
@@ -439,18 +551,169 @@ beibringen, wo nichts gefälscht wurde. Chunk-Labels sind segment-genau → pass
 | Manipulations-Metadaten (Ground-Truth-Segmente) | `data/train_metadata/.../21Uxsk56VDQ/00001/fake_video_fake_audio.json` |
 | Region-Namen | `src/data_processing/face_extractor.py` (`REGION_NAMES`: Forehead, Left/Right Eye, Nose, Mouth, Jaw, Chin) |
 
+**Neu entstanden (2026-08-16):**
+
+| Thema | Ort |
+|---|---|
+| Masken-Konstruktion (Diff, Blur, Threshold, Gesichtsoval, 14×14-Pooling) | `src/data_processing/manipulation_mask.py` |
+| Masken-Bau + G0-Diagnose + Overlays | `scripts/build_manipulation_masks.py` |
+| Lokalisierungs-Metriken & skaleninvarianter Loss | `src/utils/localization.py` |
+| Auswertung auf dem Test-Split (RMA, Pointing Game, IoU, `--per-region`) | `scripts/eval_localization.py` |
+| Reversibler lxt-Patch + differenzierbare Relevanz | `src/utils/attnlrp.py` (`videomae_attnlrp_patched`, `compute_relevance_differentiable`) |
+| Gate-G2-Smoke-Test (Äquivalenz, VRAM, Schrittzeit, CE-Fidelity) | `scripts/smoke_relevance_backprop.py` |
+| Trainings-Zweig (manuelle Optimierung, λ-Warmup) | `src/models/VideoMAE_module.py` (`_localization_loss`, `_regularized_training_step`) |
+| Kollaps-Wächter | `src/utils/callbacks.py` (`RelevanceCollapseGuard`) |
+| Auxiliary Localization Head (implementiert, noch nicht trainiert) | `src/models/localization_head.py` |
+| Sweep-Configs (Basis + drei λ-Arme) | `configs/experiment/sweep_relevance_*.yaml` |
+| Checkpointing auf `val/loss` statt gesättigtem `val/auc_video` | `configs/callbacks/model_checkpoint_loss.yaml` |
+| Sweep-Treiber + Auswertung | `scripts/run_lambda_sweep.ps1` |
+| Laufüberwachung (Stall, Guard, eingefrorene Checkpoints, Spill) | `scripts/check_sweep_health.py` |
+| Masken-Speicher | `data/processed/{train,val,test}_masks.npz` |
+| Ergebnis-JSONs | `temp/loc_baseline.json`, `temp/loc_sweep_lambda{0,002,01}.json` |
+
 ---
 
 ## 12. Offene Punkte / TODO
 
-- [ ] Diagnose-Skript (Per-Frame-Region-Relevanz) unter permanentem Pfad neu
-      anlegen (war im flüchtigen Scratchpad).
-- [ ] Masken-Generator: `|fake − real|`-Threshold aus `data/normalized/`,
-      Per-Frame + Gating gegen `visual_fake_segments`; Schwelle empirisch fixieren.
-- [ ] Trainings-Relevanzfunktion mit `autograd.grad(create_graph=True)` (IxG +
-      AttnLRP-Variante).
-- [ ] Dual-Smoke-Test (non-zero Grads, Speicher, Zeit) – Go/No-Go & Signalwahl.
-- [ ] Loss + Config (Hydra): `λ`, LR, Freeze/LLRD, `warmstart_ckpt`,
-      Frame-Gating; **kein** Hardcoding von Hyperparametern (Hydra-YAML).
-- [ ] Voller Warm-Start-Lauf; `val/auc` als Guardrail loggen.
-- [ ] Verallgemeinerung: Frame-Fenster-vs-Rest-Test über weitere Fake-Clips.
+- [x] Diagnose-Skript (Per-Frame-Region-Relevanz) unter permanentem Pfad neu
+      anlegen → `scripts/eval_localization.py --per-region`.
+- [x] Masken-Generator: `|fake − real|`-Threshold aus `data/normalized/`,
+      Per-Frame + Gating gegen `visual_fake_segments`; Schwelle empirisch fixiert
+      → `src/data_processing/manipulation_mask.py`, `scripts/build_manipulation_masks.py`.
+- [x] Trainings-Relevanzfunktion mit `autograd.grad(create_graph=True)`
+      → `compute_relevance_differentiable` + `videomae_attnlrp_patched`.
+- [x] Dual-Smoke-Test (Gate G2) → `scripts/smoke_relevance_backprop.py`.
+- [x] Loss + Config (Hydra) → `src/utils/localization.py`,
+      `configs/experiment/sweep_relevance_*.yaml`.
+- [x] Warm-Start-Läufe (λ-Sweep statt eines Einzellaufs, s. §13).
+- [x] Verallgemeinerung über weitere Fake-Clips → 624 Clips statt einem.
+
+**Offen:**
+
+- [ ] Auxiliary Localization Head (`src/models/localization_head.py`,
+      `experiment=train_video_loc_head`) ist implementiert und getestet, aber **noch
+      nicht trainiert**. Erster Ordnung, passt in 8 GB, liefert eine direkte
+      Lokalisierungs-Ausgabe fürs Frontend — der billigste noch offene Zugewinn.
+- [ ] λ zwischen 0,02 und 0,1 verfeinern, falls der Knick genauer lokalisiert werden
+      soll (§13.4). Aktuell drei Stützstellen.
+- [ ] Trainingsdauer als zweite Achse: Beide λ>0-Arme verschlechtern sich
+      **monoton** über 6.000 Batches, ohne Plateau. Die Schrittzahl ist damit selbst
+      ein Punkt auf der Kurve und keine neutrale Einstellung.
+- [ ] `val/auc_video` als Checkpoint-Monitor projektweit ersetzen: Der Wert sättigt
+      bei exakt 1.000, wodurch `save_top_k` nie wieder auslöst und der Endzustand
+      eines Laufs verloren geht (hier zweimal passiert, s. §13.5).
+
+---
+
+## 13. Ergebnisse (2026-08-16)
+
+### 13.1 Aufbau
+
+Vier Messpunkte, alle vom **selben** Phase-2-Checkpoint warm-gestartet, alle über
+**6.000 Batches**, alle aus `last.ckpt` (dem tatsächlichen Endzustand) bewertet.
+Bewertung mit `scripts/eval_localization.py` auf **911 Chunks aus 624 Test-Clips** —
+derselbe Datensatz für jeden Arm, damit der Vergleich trägt.
+
+Die Arme unterscheiden sich **ausschliesslich** in `loc_lambda`; das wurde durch
+Auflösen aller drei Hydra-Configs und Diff über jeden Schlüssel geprüft.
+
+Ground-Truth-Masken: 5.807 (train) / 889 (val) / 911 (test), Gate G0 bestanden mit
+86,6 % Abdeckung und einem Median-`in_segment_frac` von **1,000**. Die Masken legen
+**58 % ihrer Energie auf den Mund** — gegenüber 11,4 %, die das unbehandelte Modell
+dorthin gibt (§4.2). Genau diese Lücke ist das Trainingssignal.
+
+### 13.2 Die Trade-off-Kurve
+
+| Arm | `ratio_over_chance` | Pointing Game | `val/auc_video` | `val/loss` |
+|---|---|---|---|---|
+| Baseline (Phase 2) | 1,921 [1,84; 2,00] | 0,299 | 1,0000 | — |
+| **λ = 0,0** (Kontrolle) | **1,867** [1,79; 1,95] | 0,279 | 1,0000 | 0,0119 |
+| **λ = 0,02** | **3,410** [3,24; 3,58] | 0,496 | 0,9854 | 0,0582 |
+| **λ = 0,1** | **4,689** [4,45; 4,95] | 0,599 | 0,9444 | 0,1752 |
+
+`ratio_over_chance` = Anteil der Relevanzmasse in der Maske, geteilt durch den
+Flächenanteil der Maske. 1,0 = die Relevanz ignoriert die Maske vollständig.
+95-%-Bootstrap-Konfidenzintervalle über Clips.
+
+**Beide λ>0-Arme haben Konfidenzintervalle, die die Kontrolle nicht überlappen.**
+Der Effekt ist statistisch belastbar.
+
+### 13.3 Der Kontroll-Lauf — und was er widerlegt
+
+Der wichtigste Einzelwert der Tabelle ist **1,867**: die Kontrolle liegt mit
+demselben Trainingsbudget, aber ohne Strafterm, **nicht über** der Baseline (1,921),
+sondern minimal darunter — die Intervalle überlappen.
+
+Weitertrainieren allein bringt **keinen** Lokalisierungsgewinn.
+
+Das hat zwei Konsequenzen:
+
+1. **Der gesamte Gewinn der λ>0-Arme ist dem Strafterm zuzurechnen**, ohne Abschlag
+   für „hat halt länger trainiert". Genau diese Frage stellt ein Betreuer zuerst.
+2. Es **bestätigt die Behauptung aus §6.1**, mehr Training desselben Ziels schärfe
+   verteilte Merkmale statt zu lokalisieren. Diese Aussage war im ursprünglichen
+   Dokument nur *behauptet*; jetzt ist sie gemessen.
+
+> **Methodischer Hinweis, der in die Belegarbeit gehört.** Während des Trainings
+> geloggte Per-Step-Werte deuteten auf einen Kontrollgewinn von +12…17 % hin. Auf
+> der 624-Clip-Metrik ist er **null**. Grund: Der Per-Step-Wert erklärt genau *ein*
+> Sample pro Schritt (`loc_max_samples: 1`, harte Speichergrenze aus Gate G2) und hat
+> eine Standardabweichung von ~1,5 bei einem Mittelwert von ~2,2. Diese Reihe ist zur
+> Trenderkennung **unbrauchbar**; belastbar ist allein die Auswertung auf dem
+> Test-Split.
+
+### 13.4 Der Knick liegt bei λ = 0,02
+
+| λ | Gewinn ggü. Kontrolle | AUC-Kosten | Gewinn je AUC-Punkt |
+|---|---|---|---|
+| 0,02 | +1,54 (×1,83) | −0,0146 | **106** |
+| 0,1 | +2,82 (×2,51) | −0,0556 | 51 |
+
+**λ = 0,02 ist rund doppelt so effizient**: 55 % des Lokalisierungsgewinns von
+λ = 0,1 für 26 % der Genauigkeitskosten. Die abnehmenden Erträge setzen scharf ein.
+
+Als Betriebspunkt ist damit **λ = 0,02** zu empfehlen; λ = 0,1 dokumentiert das obere
+Ende der Kurve und ist für ein System, das weiterhin klassifizieren soll, zu teuer.
+
+Der anschaulichste Einzelwert ist das **Pointing Game: 0,279 → 0,599**. Die stärkste
+Stelle der Heatmap liegt bei λ = 0,1 in **60 % der Fälle** innerhalb einer Maske, die
+1,9 % des Bildes bedeckt — das 32-fache des Zufallsniveaus, gegenüber dem 15-fachen
+vorher.
+
+### 13.5 Was schiefging (und warum es hier steht)
+
+Vier Fehler haben Rechenzeit gekostet und wären im Ergebnis unsichtbar geblieben.
+Sie sind dokumentiert, weil drei davon generische Fallen sind, keine Einzelfälle:
+
+1. **`val/auc_video` als Checkpoint-Monitor.** Sättigt bei exakt 1.000, danach ist
+   kein Wert mehr *strikt* besser, `save_top_k` löst nie wieder aus — der Endzustand
+   zweier Läufe war unwiederbringlich weg. Behoben durch `val/loss` als Monitor.
+2. **`RelevanceCollapseGuard` mit Referenz aus dem Sanity-Check.** Lightning
+   validiert vor dem Training mit `val/loss = 0.0`; die Schwelle wurde damit
+   `3,0 × 0 = 0` und der Guard brach beim ersten echten Check ab. Behoben (Sanity-Check
+   wird übersprungen, nicht-positive Referenzen werden verworfen), 8 Tests.
+3. **Validierung ohne `limit_val_batches`.** Der volle Val-Split kostet unter
+   eager-Attention ~2,4 h pro Check; bei 12 Checks wären das 29 h Validierung gegen
+   2,4 h Training gewesen.
+4. **Präfix-Kollision im Auswerte-Skript.** `sweep_relevance_lambda0` ist ein Präfix
+   von `…lambda01` und `…lambda002`; die Kontrolle wurde dadurch gegen den
+   λ = 0,1-Checkpoint ausgewertet. Aufgefallen nur daran, dass zwei Arme **exakt
+   identische** Werte lieferten.
+
+Positiv: Der λ = 0,1-Lauf reproduzierte `val/loss` bei Schritt 2.999 auf neun
+signifikante Stellen (0,164307) gegenüber einem früheren Lauf mit derselben Config —
+die Pipeline ist deterministisch.
+
+### 13.6 Einordnung für die Diskussion
+
+Die in §6.3 benannte Spannung bleibt bestehen und ist jetzt quantifiziert: Der Loss
+**schreibt** dem Modell vor, wo es hinschauen soll, und es folgt — messbar, mit einem
+klaren Preis in Klassifikationsgüte. Die Erklärung ist danach zu einem Teil
+*konstruiert* und nicht mehr rein *entdeckt*.
+
+Was dagegen für die Ehrlichkeit des Ergebnisses spricht: Der Loss ist
+**skaleninvariant** formuliert (`−log(Masse innen / Masse gesamt)`), die degenerierte
+Lösung „Relevanz überall gegen null" hat darin **exakt null Gradient**. Und
+`loc/mass_total` fiel über die Läufe nur um 23 %, während das Verhältnis sich
+verdreifachte — der Gewinn ist also echte räumliche Umverteilung und kein
+Verschwinden der Relevanz.
