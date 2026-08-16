@@ -19,13 +19,14 @@ Usage pattern in a LightningModule::
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from jaxtyping import Float
 
@@ -90,6 +91,114 @@ def patch_videomae_for_attnlrp(net: nn.Module) -> None:
         _mod.eager_attention_forward = wrap_attention_forward(_mod.eager_attention_forward)
         _mod._lxt_patched = True
     monkey_patch(net, patch_map=build_common_patch_map())
+
+
+@contextlib.contextmanager
+def videomae_attnlrp_patched(net: nn.Module) -> Iterator[None]:
+    """Apply the VideoMAE AttnLRP patches for the duration of the block, then restore them.
+
+    :func:`patch_videomae_for_attnlrp` is permanent and, because ``lxt``'s ``patch_method``
+    does ``setattr`` on the **class** rather than the instance, process-global: it replaces
+    ``nn.LayerNorm.forward``, ``nn.GELU.forward``, ``GELUActivation.forward`` and
+    ``nn.Dropout.forward`` for every module in the process, plus the module-level
+    ``eager_attention_forward``.
+
+    That is harmless for ``explain()``, which only ever runs under ``no_grad``-style
+    inference. It is **not** harmless during training. The patches change the *backward*
+    of those layers, not just the forward: LayerNorm's variance path is cut via
+    ``stop_gradient``, GELU's derivative becomes ``GELU(x)/x``, and attention divides the
+    query/key gradients by 4 and the value gradient by 2 in every one of the 12 blocks.
+    A cross-entropy loss backpropagated while patched therefore yields an LRP
+    pseudo-gradient rather than the true ``dCE/dtheta``, so explanation-guided training
+    that simply patched once at startup would silently be optimising something else.
+
+    This restores every mutated attribute so the classification loss trains through the
+    unmodified graph and only the relevance branch sees the LRP rules.
+
+    Note ``_lxt_patched`` must be reset along with ``eager_attention_forward``: leaving it
+    ``True`` while restoring the original function would make the *next* patch skip the
+    attention wrap, silently degrading AttnLRP to plain Input x Gradient.
+
+    Args:
+        net: The ``VideoMAEForVideoClassification`` instance to instrument.
+    """
+    import transformers.models.videomae.modeling_videomae as _mod
+    from transformers.activations import GELUActivation
+
+    patched_classes = (nn.GELU, GELUActivation, nn.LayerNorm, nn.Dropout)
+    saved_forwards = {cls: cls.forward for cls in patched_classes}
+    # non_linear_forward is installed with keep_original=True, which adds this attribute.
+    saved_originals = {cls: cls.__dict__.get("original_forward") for cls in (nn.GELU, GELUActivation)}
+    saved_attention = _mod.eager_attention_forward
+    saved_flag = getattr(_mod, "_lxt_patched", False)
+
+    try:
+        patch_videomae_for_attnlrp(net)
+        yield
+    finally:
+        for cls, forward in saved_forwards.items():
+            cls.forward = forward
+        for cls, original in saved_originals.items():
+            if original is None:
+                # The attribute did not exist before the patch, so remove it rather than
+                # leaving a stale forward behind for the next patch to find.
+                with contextlib.suppress(AttributeError):
+                    delattr(cls, "original_forward")
+            else:
+                cls.original_forward = original
+        _mod.eager_attention_forward = saved_attention
+        _mod._lxt_patched = saved_flag
+
+
+def compute_relevance_differentiable(
+    net: nn.Module,
+    input_tensor: torch.Tensor,
+    forward_fn: Callable[[torch.Tensor], torch.Tensor],
+    target_class: int = 1,
+    *,
+    create_graph: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Input x Gradient relevance that a loss can be back-propagated through.
+
+    :func:`compute_attnlrp` cannot be used as a training signal. It calls
+    ``net.zero_grad()`` (which would wipe the accumulated classification gradients) and
+    ``target_logits.backward()`` (which populates every parameter's ``.grad`` with the
+    explanation gradient), then reads ``x.grad`` — a leaf buffer with no ``grad_fn``. A
+    loss built on that has **zero** gradient w.r.t. the weights, so the training step
+    would run, converge, and change nothing.
+
+    This uses ``torch.autograd.grad(..., create_graph=True)`` instead, so the returned
+    relevance carries a live ``grad_fn`` and second-order gradients reach the weights. It
+    never touches ``.grad`` buffers, mirroring the isolation in
+    :func:`src.utils.adversarial.untargeted_pgd`.
+
+    Wrap the call in :func:`videomae_attnlrp_patched` for true AttnLRP rules; without it
+    this is plain Input x Gradient, which is the documented fallback signal.
+
+    Args:
+        net:          Model whose weights the relevance should be differentiable w.r.t.
+        input_tensor: Input to attribute over; does not need ``requires_grad``.
+        forward_fn:   Maps the input to class logits ``(B, num_classes)``.
+        target_class: Logit index to explain (``1`` = FAKE).
+        create_graph: Keep the graph for second-order backprop. Pass ``False`` for a
+                      cheap first-order readout, e.g. the lambda=0 control run or the
+                      equivalence check against :func:`compute_attnlrp`.
+
+    Returns:
+        ``(relevance, logits)`` where ``relevance`` has the shape of *input_tensor*.
+    """
+    del net  # kept for signature symmetry with compute_attnlrp
+    x = input_tensor if input_tensor.requires_grad else input_tensor.clone().requires_grad_(True)
+    logits = forward_fn(x)
+    target_logits = logits[:, target_class].sum()
+
+    (gradient,) = torch.autograd.grad(
+        target_logits,
+        x,
+        create_graph=create_graph,
+        retain_graph=create_graph,
+    )
+    return x * gradient, logits
 
 
 def patch_wav2vec2_for_attnlrp(net: nn.Module) -> None:

@@ -649,6 +649,54 @@ class FaceExtractor:
 
     # ── Public ────────────────────────────────────────────────────────────────
 
+    def landmarks_in_frame_space(self, frames: np.ndarray) -> np.ndarray | None:
+        """Detect FaceMesh landmarks on **already-cropped** frames, in their own space.
+
+        :meth:`__call__` computes a new crop box and returns landmarks relative to that
+        crop.  When the frames are already the 224 face crops (e.g. read back from the
+        HDF5 ``video`` dataset, or reconstructed from the stored crop box), re-cropping
+        would move the coordinate frame.  This method leaves the frames alone and simply
+        scales the normalised landmarks by the input size, so the result is directly
+        comparable to the HDF5 ``landmarks`` dataset.
+
+        The intended use is regenerating landmarks for datasets preprocessed before
+        ``landmarks`` was added to the HDF5 writer.
+
+        Args:
+            frames: ``(N, H, W, 3)`` uint8 RGB array, already cropped to the face.
+
+        Returns:
+            ``(N, NUM_LANDMARKS, 2)`` int16 array of ``[x, y]`` points in the input
+            frames' own pixel space, or ``None`` if any frame had no detectable face
+            (matching :meth:`__call__`'s all-or-nothing chunk semantics).
+
+        Raises:
+            ValueError: If ``frames`` has the wrong shape or dtype.
+        """
+        if frames.ndim != 4 or frames.shape[3] != 3:  # noqa: PLR2004
+            msg = f"frames must have shape (N, H, W, 3), got {frames.shape}"
+            raise ValueError(msg)
+        if frames.dtype != np.uint8:
+            msg = f"frames must be uint8, got {frames.dtype}"
+            raise ValueError(msg)
+
+        img_h, img_w = frames.shape[1], frames.shape[2]
+        out = np.zeros((frames.shape[0], NUM_LANDMARKS, 2), dtype=np.int16)
+        for i, frame in enumerate(frames):
+            detected = self._detect_bbox(frame)
+            if detected is None:
+                return None
+            _bbox, landmarks = detected
+            # MediaPipe normalises to the input frame, so the projection is just a
+            # scale. Done inline rather than via _landmarks_to_crop, which scales both
+            # axes by target_size and would therefore skew non-square inputs.
+            n = min(NUM_LANDMARKS, len(landmarks))
+            for j in range(n):
+                lm = landmarks[j]
+                out[i, j, 0] = int(np.clip(round(lm.x * img_w), -32768, 32767))
+                out[i, j, 1] = int(np.clip(round(lm.y * img_h), -32768, 32767))
+        return out
+
     def __call__(self, frames: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int, int, int], np.ndarray] | None:
         """Crop and resize faces from a chunk of video frames.
 
