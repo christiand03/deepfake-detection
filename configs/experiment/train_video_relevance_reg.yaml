@@ -1,0 +1,106 @@
+# @package _global_
+
+# Relevanz-Regularisierung — Explanation-Guided Training (Run 1).
+# Bestraft AttnLRP-Relevanz AUSSERHALB der Manipulationsmaske, warm-gestartet vom
+# Phase-2-Checkpoint. Ziel: die Heatmap auf die tatsächlich gefälschte Region
+# konzentrieren, ohne die Klassifikationsgüte zu zerstören.
+# Hintergrund und Messgrundlage: docs/relevance_regularization.md
+#
+# VOR diesem Lauf gehört der Kontroll-Lauf (loc_lambda=0):
+#   python src/train.py experiment=train_video_relevance_reg_lambda0
+# Ohne ihn ist eine Veränderung der Lokalisierung nicht zuordenbar — zwischen
+# Baseline und diesem Lauf ändern sich fünf Dinge gleichzeitig (Warm-Start, LR,
+# eager statt sdpa, Augmentation aus, der Loss selbst).
+#
+# Run: experiment=train_video_relevance_reg
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+  - override /callbacks: default
+
+ckpt_export_name: videomae_relevance_reg
+
+warmstart_ckpt: ${paths.export_dir}/videomae_phase2.ckpt
+
+data:
+  # Gate G2: bs 2 läuft auf der 8-GB-GPU im Double-Backprop OOM. Der
+  # Lokalisierungs-Zweig erklärt ohnehin nur loc_max_samples Samples pro Step.
+  batch_size: 2
+  # Augmentation aus: Für einen 1-3-Epochen-Nudge von einem konvergierten Checkpoint
+  # ist ihr Grenznutzen ~0, und sie eliminiert eine ganze Klasse stiller
+  # Fehlausrichtungs-Bugs zwischen Frames und Maske. Der Replay-Pfad existiert
+  # (mask_allow_scale_crop), wird hier aber nicht gebraucht.
+  augment: false
+  mask_dir: ${paths.data_dir}/processed
+  mask_allow_scale_crop: false
+  # Nur ~5 % der Chunks tragen eine Maske. Ohne Hochgewichtung feuert der
+  # Lokalisierungs-Loss auf etwa einem von zwanzig Samples.
+  mask_oversample: true
+  balanced_sampling: false  # mask_oversample balanciert implizit mit (Masken = Fakes)
+
+model:
+  freeze_backbone: false
+  # PFLICHT: Unter sdpa ruft HF eager_attention_forward nie auf, der lxt-Attention-Wrap
+  # ist dann ein stiller No-Op und man trainiert IxG im Glauben, es sei AttnLRP.
+  attn_implementation: eager
+  llrd_decay: 0.75
+  grad_clip_val: 1.0
+  loc_enabled: true
+  # Aus dem in G2 gemessenen Gradienten-Norm-Verhältnis zu setzen, NICHT durch
+  # Angleichen der Loss-Beträge: bei val-AUC 1.000 ist ‖∇CE‖ ≈ 0, "kleines λ" ist
+  # deshalb keine Schutzmaßnahme.
+  loc_lambda: 0.1
+  loc_signal: attnlrp   # gemessen schneller UND kleiner als ixg (0,85 s/7,57 GB vs 1,33 s/7,81 GB)
+  loc_mode: neg_log_ratio
+  loc_max_samples: 1    # harte Grenze aus G2, kein konservativer Default
+  loc_warmup_steps: 200
+  # Akkumulation läuft im Modul, nicht im Trainer: Lightning lehnt
+  # Trainer(accumulate_grad_batches>1) unter manueller Optimierung ab
+  # ("Automatic gradient accumulation is not supported for manual optimization").
+  loc_accumulate_grad_batches: 3   # effektiv 6 (2 × 3), wie Phase 2
+  optimizer:
+    lr: 5e-6            # niedriger als Phase 2 (1e-5) — ein Nudge, kein Neubau
+
+trainer:
+  # Lightning verbietet trainer-seitiges Clipping UND trainer-seitige Akkumulation
+  # unter manueller Optimierung; beides übernimmt das Modul
+  # (model.grad_clip_val, model.loc_accumulate_grad_batches).
+  gradient_clip_val: null
+  accumulate_grad_batches: 1
+  max_epochs: 3
+  # Eine volle Epoche wären 116.170/2 = 58.085 Batches; bei gemessenen ~0,85 s/Step
+  # (Gate G2) sind das 13,7 h pro Epoche, also 41 h für drei — nicht praktikabel.
+  # 6000 Batches entsprechen bei ~50 % Maskenanteil (mask_oversample) etwa einem
+  # Durchlauf durch die 5.807 maskierten Chunks pro Epoche, und genau die sind das,
+  # woraus der Lokalisierungs-Loss überhaupt lernt. Ergibt ~1,4 h/Epoche, ~4,1 h gesamt.
+  # Der Klassifikationszweig sieht dabei weiterhin jeden Batch, nur eben eine
+  # Stichprobe statt der vollen Epoche — für einen Nudge von einem konvergierten
+  # Checkpoint ist das ausreichend.
+  limit_train_batches: 6000
+  # val/auc hat bei 1.000 keinen Spielraum und bleibt lange nach dem Kollaps der
+  # Entscheidungsmarge stehen. val/loss ist der eigentliche Kanarienvogel und
+  # braucht Sub-Epochen-Auflösung.
+  val_check_interval: 0.5
+  # UNBEDINGT begrenzen. Der volle Val-Split sind 17.219 Samples = 8.609 Batches bei
+  # bs 2, und unter eager-Attention (Pflicht für AttnLRP, ~2,8× langsamer als sdpa)
+  # dauert ein voller Durchlauf ~2,4 h. Mit val_check_interval 0.25 wären das
+  # 12 Validierungen × 2,4 h ≈ 29 h — die Validierung würde 92 % des Laufs
+  # ausmachen. Der Kanarienvogel braucht ein HÄUFIGES Signal, kein erschöpfendes:
+  # 750 Batches = 1500 Samples reichen für eine stabile val/loss-Schätzung
+  # (~8 min pro Check, ~1,6 h über den ganzen Lauf).
+  # Für die endgültigen Kennzahlen zählt ohnehin scripts/eval_localization.py auf
+  # dem Test-Split, nicht diese Zwischen-Validierung.
+  limit_val_batches: 750
+
+callbacks:
+  relevance_guard:
+    _target_: src.utils.callbacks.RelevanceCollapseGuard
+    collapse_ratio: 0.1
+    val_loss_ceiling_ratio: 3.0
+    min_steps: 100
+
+tags: ["videomae", "video", "xai", "relevance-regularization"]
+

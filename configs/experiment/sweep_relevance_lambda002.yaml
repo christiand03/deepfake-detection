@@ -1,0 +1,38 @@
+# @package _global_
+
+# λ-Sweep, Punkt 2 von 3: SCHWACHER Strafterm (loc_lambda = 0.02).
+#
+# λ = 0.1 kostete im Lauf vom 2026-08-16 spürbar Klassifikationsgüte
+# (val/auc_video 1.000 → 0.944 nach 6.000 Batches, weiter fallend). Dieser Punkt
+# prüft, ob ein Fünftel des Strafterms den Grossteil des Lokalisierungsgewinns
+# behält und dabei die Accuracy hält — das ist die eigentlich interessante Frage
+# für die Trade-off-Kurve.
+#
+# Erwartung, ausdrücklich als Erwartung und nicht als Ergebnis notiert: Der
+# Gradienten-Vergleich aus Run 1 (total/ce ≈ 1,16×) zeigt, dass der Strafterm die
+# Cross-Entropy nicht überwältigt hat. Ein Fünftel davon sollte den CE-Gradienten
+# klar dominieren lassen und die Accuracy schonen. Ob dabei genug Lokalisierung
+# übrig bleibt, ist offen — genau deshalb wird es gemessen.
+#
+# Run: experiment=sweep_relevance_lambda002
+
+defaults:
+  - sweep_relevance_base
+  - override /callbacks: model_checkpoint_loss
+
+ckpt_export_name: sweep_relevance_lambda002
+
+model:
+  loc_lambda: 0.02
+
+callbacks:
+  relevance_guard:
+    _target_: src.utils.callbacks.RelevanceCollapseGuard
+    collapse_ratio: 0.1
+    # Der Guard ignoriert jetzt Lightnings Sanity-Check-Validierung und weigert sich,
+    # einen nicht-positiven Wert als Referenz zu nehmen. Ohne diese beiden Korrekturen
+    # setzte er die Referenz auf 0.0000 und brach den Lauf bei Batch 5.999 ab.
+    val_loss_ceiling_ratio: 5.0
+    min_steps: 500
+
+tags: ["videomae", "video", "xai", "lambda-sweep", "weak"]

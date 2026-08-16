@@ -1,0 +1,67 @@
+# @package _global_
+
+# Auxiliary Localization Head — direkte Lösung des Label-Granularitäts-Problems.
+#
+# docs/relevance_regularization.md §6.1 benennt die Ursache korrekt: Das Modell wird auf
+# Chunk-Labels trainiert, erfährt also nie, WELCHE Pixel manipuliert wurden, und darf
+# "FAKE" aus beliebigen korrelierenden Merkmalen ableiten. Das Dokument behebt das
+# indirekt über einen Strafterm auf die Erklärung. Dieser Lauf behebt es direkt: ein
+# kleiner Kopf sagt die Maske aus den Encoder-Tokens vorher, mit gewöhnlichem
+# überwachtem Loss.
+#
+# Gegenüber der Regularisierung:
+#   - erster Ordnung (kein create_graph, kein lxt-Patch) -> passt bequem in 8 GB,
+#     läuft unter automatischer Optimierung, kostet einen normalen Backward;
+#   - liefert eine echte Lokalisierungs-Ausgabe fürs Frontend statt einer
+#     umgedeuteten Attribution;
+#   - entspricht der üblichen Formulierung der Literatur (Segmentierung), und
+#     AV-Deepfake1M ist selbst ein Lokalisierungs-Benchmark.
+#
+# Bewertet wird mit derselben Metrik wie die anderen Arme
+# (scripts/eval_localization.py), damit die Ergebnisse vergleichbar bleiben.
+#
+# Run: experiment=train_video_loc_head
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+
+ckpt_export_name: videomae_loc_head
+
+warmstart_ckpt: ${paths.export_dir}/videomae_phase2.ckpt
+
+data:
+  # Erster Ordnung, kein Double-Backprop -> die Phase-2-Batchgröße passt wieder.
+  batch_size: 6
+  augment: false          # wie bei der Regularisierung: keine Masken-Fehlausrichtung riskieren
+  mask_dir: ${paths.data_dir}/processed
+  mask_allow_scale_crop: false
+  mask_oversample: true   # nur ~5 % der Chunks tragen eine Maske
+  balanced_sampling: false
+
+model:
+  freeze_backbone: false
+  llrd_decay: 0.75
+  aux_loc_enabled: true
+  # Gewicht des Masken-Loss gegen die Cross-Entropy. 1.0 als Startpunkt; falls die
+  # Klassifikation leidet, herunterregeln — der Trade-off ist selbst ein Ergebnis.
+  aux_loc_lambda: 1.0
+  aux_loc_dropout: 0.0
+  optimizer:
+    lr: 1e-5              # wie Phase 2
+
+trainer:
+  max_epochs: 3
+  # Wie bei der Regularisierung: eine volle Epoche ist unnötig teuer, und der
+  # Masken-Loss lernt ohnehin nur aus den 5.807 maskierten Chunks. Bei bs 6 und
+  # ~50 % Maskenanteil ist ein Durchlauf durch die maskierten Chunks ~2000 Batches.
+  limit_train_batches: 2000
+  val_check_interval: 0.5
+  # Wie bei den Regularisierungs-Läufen begrenzen: der volle Val-Split ist bei
+  # bs 6 rund 2.870 Batches und würde die Laufzeit dominieren. 250 Batches
+  # = 1.500 Samples, dieselbe Stichprobengröße wie dort.
+  limit_val_batches: 250
+
+tags: ["videomae", "video", "xai", "localization-head", "auxiliary"]

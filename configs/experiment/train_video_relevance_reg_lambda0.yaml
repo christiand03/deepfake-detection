@@ -1,0 +1,77 @@
+# @package _global_
+
+# Relevanz-Regularisierung — KONTROLL-LAUF (Run 0, loc_lambda = 0).
+# Identisch zu train_video_relevance_reg, nur ohne Strafterm. Der Lokalisierungs-Zweig
+# läuft weiter und loggt seine Metriken, kann die Gewichte aber nicht erreichen
+# (create_graph ist an λ>0 gekoppelt) — der Gewichtsverlauf entspricht also einem
+# reinen CE-Finetuning.
+#
+# Warum dieser Lauf nicht optional ist:
+#   1. Zuordenbarkeit. Zwischen Baseline und Run 1 ändern sich fünf Dinge gleichzeitig
+#      (Warm-Start, LR, eager statt sdpa, Augmentation aus, der Loss). Ohne Kontrolle
+#      ist "die Lokalisierung hat sich verbessert" nicht vom Effekt des Weitertrainierens
+#      zu trennen — genau die Frage, die ein Betreuer zu Recht stellt.
+#   2. Er misst die in docs/relevance_regularization.md §6.1 nur BEHAUPTETE Aussage,
+#      mehr Training desselben Ziels schärfe verteilte Merkmale statt zu lokalisieren.
+#      Das zu messen ist selbst ein berichtenswertes Ergebnis.
+#   3. Er ist der billigste Lauf: ohne Double-Backprop kostet er ein normales
+#      CE-Finetuning und liefert trotzdem die Lokalisierungs-Kurve.
+#
+# Run: experiment=train_video_relevance_reg_lambda0
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+  - override /callbacks: default
+
+ckpt_export_name: videomae_relevance_reg_lambda0
+
+warmstart_ckpt: ${paths.export_dir}/videomae_phase2.ckpt
+
+data:
+  batch_size: 2
+  augment: false
+  mask_dir: ${paths.data_dir}/processed
+  mask_allow_scale_crop: false
+  mask_oversample: true
+  balanced_sampling: false
+
+model:
+  freeze_backbone: false
+  attn_implementation: eager
+  llrd_decay: 0.75
+  grad_clip_val: 1.0
+  loc_enabled: true
+  loc_lambda: 0.0       # <- der einzige Unterschied zu Run 1
+  loc_signal: attnlrp
+  loc_mode: neg_log_ratio
+  loc_max_samples: 1
+  loc_warmup_steps: 200
+  # Akkumulation läuft im Modul, nicht im Trainer: Lightning lehnt
+  # Trainer(accumulate_grad_batches>1) unter manueller Optimierung ab.
+  loc_accumulate_grad_batches: 3   # effektiv 6 (2 × 3), wie Phase 2
+  optimizer:
+    lr: 5e-6
+
+trainer:
+  gradient_clip_val: null
+  accumulate_grad_batches: 1   # muss 1 bleiben — s. model.loc_accumulate_grad_batches
+  max_epochs: 3
+  # MUSS mit train_video_relevance_reg.yaml übereinstimmen: Der Kontroll-Lauf ist nur
+  # dann eine Kontrolle, wenn er dieselbe Anzahl Optimizer-Schritte über dieselbe
+  # Datenmenge macht. Eine andere Epochenlänge hier würde genau die Konfundierung
+  # wieder einführen, die dieser Lauf ausschließen soll.
+  limit_train_batches: 6000
+  val_check_interval: 0.5
+  # Muss mit Run 1 übereinstimmen — siehe dort für die Begründung (voller Val-Split
+  # unter eager kostet ~2,4 h pro Check, 12 Checks wären ~29 h). Eine andere
+  # Validierungsmenge hier würde ausserdem die val/loss-Kurven unvergleichbar machen.
+  limit_val_batches: 750
+
+# Kein RelevanceCollapseGuard: ohne Strafterm gibt es keinen Kollaps abzufangen,
+# und der Guard würde nur eine Abbruchbedingung einführen, die Run 1 nicht teilt.
+
+tags: ["videomae", "video", "xai", "relevance-regularization", "control"]
+

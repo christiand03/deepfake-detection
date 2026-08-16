@@ -1,0 +1,36 @@
+# @package _global_
+
+# λ-Sweep, Punkt 3 von 3: STARKER Strafterm (loc_lambda = 0.1).
+#
+# Wiederholung des Werts aus dem abgebrochenen Lauf vom 2026-08-16, diesmal bis zum
+# Ende und mit funktionierendem Checkpointing. Der damalige Teillauf erreichte bei
+# Batch 3.000 auf der 624-Clip-Metrik ratio_over_chance 4,69 gegenüber 1,92 der
+# Baseline, bei val/auc_video 0,989.
+#
+# Dieser Punkt liefert das obere Ende der Trade-off-Kurve: maximaler
+# Lokalisierungsgewinn zu maximalen Accuracy-Kosten. Er ist bewusst identisch zum
+# vorherigen Lauf parametrisiert, damit sich das damalige Teilergebnis als
+# Konsistenzprüfung gegenlesen lässt.
+#
+# Run: experiment=sweep_relevance_lambda01
+
+defaults:
+  - sweep_relevance_base
+  - override /callbacks: model_checkpoint_loss
+
+ckpt_export_name: sweep_relevance_lambda01
+
+model:
+  loc_lambda: 0.1
+
+callbacks:
+  relevance_guard:
+    _target_: src.utils.callbacks.RelevanceCollapseGuard
+    collapse_ratio: 0.1
+    # 5.0 statt 3.0: Bei λ = 0.1 IST ein deutlicher val/loss-Anstieg das erwartete
+    # Ergebnis (0,012 → 0,175 im vorherigen Lauf) und kein Fehler. Der Guard soll
+    # hier einen Kollaps abfangen, nicht den gemessenen Trade-off abwürgen.
+    val_loss_ceiling_ratio: 5.0
+    min_steps: 500
+
+tags: ["videomae", "video", "xai", "lambda-sweep", "strong"]

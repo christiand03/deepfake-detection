@@ -26,3 +26,20 @@ prefetch_factor: 4
 # Unverändertes AUROC ⇒ Modell ignoriert zeitliche Ordnung. NIE fürs Training aktivieren.
 frame_perturbation: null
 frame_perturbation_seed: 42
+# ── Manipulations-Masken (Relevanz-Regularisierung) ──────────────────────────
+# Verzeichnis mit {split}_masks.npz aus scripts/build_manipulation_masks.py.
+# null (Default) = Masken komplett aus; alle Phase-1-4-Konfigurationen bleiben
+# unverändert. Gesetzt liefert jedes Item zusätzlich loc_mask (16,14,14),
+# loc_frame_gate (16,) und has_loc_mask () — nullgefüllt für Chunks ohne Maske,
+# damit die Batch-Form konstant bleibt und der Default-Collate weiter greift.
+mask_dir: null
+# Ob maskierte Chunks zusätzlich zum Flip auch den Random-Resized-Crop bekommen.
+# Aus: Die Crop-Seite liegt bei 12,6–14,0 Zellen des 14×14-Gitters, das Nachspielen
+# kostet also bis zu eine ganze Zelle (~7 % des Bildes) — mehr als eine typische
+# Mundmaske groß ist. Der Flip ist bei jeder Auflösung exakt und wird immer
+# nachgespielt (sonst lernt das Modell die Manipulation auf der falschen Gesichtshälfte).
+mask_allow_scale_crop: false
+# Maskierte Chunks im Trainings-Sampler hochgewichten (~6 % → ~50 % pro Batch).
+# Ohne das feuert der Lokalisierungs-Loss auf etwa einem von zwanzig Samples und
+# sein Gradient verschwindet neben dem Klassifikationsterm.
+mask_oversample: false

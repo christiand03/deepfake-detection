@@ -1,0 +1,63 @@
+# @package _global_
+
+# Gemeinsame Basis für den λ-Sweep der Relevanz-Regularisierung.
+# Nicht direkt starten — siehe sweep_relevance_lambda{0,002,01}.yaml.
+#
+# Zweck des Sweeps: §10 von docs/relevance_regularization.md verlangt eine
+# Trade-off-Kurve (Lokalisierung ↑ vs. Accuracy ↓), kein Einzelergebnis. Drei kurze
+# Läufe bei identischer Schrittzahl liefern drei vergleichbare Punkte; zwei lange
+# Läufe hätten bei doppelter Rechenzeit nur einen geliefert.
+#
+# Warum 6.000 Batches statt 18.000: Der abgebrochene Lauf vom 2026-08-16 erreichte
+# den vollen Effekt (6,478 vs. 2,194 der Kontrolle) bereits bei Batch 6.000, während
+# die Kontrolle über die vollen 18.000 Batches nur von 2,19 auf 2,31 driftete. Die
+# restlichen zwei Drittel kosten Rechenzeit und liefern kaum Lokalisierung, dafür
+# aber weiteren Accuracy-Verlust.
+# Vorbehalt: Diese Einschätzung stützt sich auf den einen Messpunkt bei Batch 6.000,
+# also genau die Grenze, an der der Lauf abbrach — "gesättigt" und "steigt noch"
+# lassen sich damit nicht sauber trennen.
+#
+# Alle drei Läufe warm-starten vom SELBEN Phase-2-Checkpoint und teilen jede
+# Einstellung ausser loc_lambda. Nur so misst der Vergleich den Strafterm und nicht
+# die Unterschiede der Läufe.
+
+defaults:
+  - override /data: deepfake_video
+  - override /model: videomae
+  - override /logger: wandb
+  - override /trainer: gpu
+  # Checkpointing auf val/loss: val/auc_video sättigt bei 1.000 und fror am
+  # 2026-08-16 beide Checkpoints bei Batch 6.000 ein.
+  - override /callbacks: model_checkpoint_loss
+
+warmstart_ckpt: ${paths.export_dir}/videomae_phase2.ckpt
+
+data:
+  batch_size: 2               # Gate G2: bs 2 im Double-Backprop läuft OOM
+  augment: false              # keine Frame/Masken-Fehlausrichtung riskieren
+  mask_dir: ${paths.data_dir}/processed
+  mask_allow_scale_crop: false
+  mask_oversample: true       # nur ~5 % der Chunks tragen eine Maske
+  balanced_sampling: false
+
+model:
+  freeze_backbone: false
+  attn_implementation: eager  # PFLICHT — unter sdpa ist der lxt-Attention-Wrap ein No-Op
+  llrd_decay: 0.75
+  grad_clip_val: 1.0
+  loc_enabled: true
+  loc_signal: attnlrp
+  loc_mode: neg_log_ratio
+  loc_max_samples: 1          # harte Grenze aus G2
+  loc_warmup_steps: 200
+  loc_accumulate_grad_batches: 3
+  optimizer:
+    lr: 5e-6
+
+trainer:
+  gradient_clip_val: null     # Modul clippt selbst (manuelle Optimierung)
+  accumulate_grad_batches: 1  # Akkumulation im Modul, s. loc_accumulate_grad_batches
+  max_epochs: 1
+  limit_train_batches: 6000
+  val_check_interval: 0.25    # 4 Checks über den Lauf statt 2 — bei nur einer Epoche
+  limit_val_batches: 750      # voller Val-Split unter eager kostet ~2,4 h pro Check

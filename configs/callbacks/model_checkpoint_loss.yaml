@@ -1,0 +1,45 @@
+# Checkpointing auf val/loss statt val/auc_video.
+#
+# Warum eine eigene Variante: Der Standard (callbacks/default.yaml) überwacht
+# val/auc_video. Sobald ein Modell dort exakt 1.000 erreicht — was die
+# warm-gestarteten Relevanz-Läufe sofort tun — ist kein späterer Wert mehr *strikt*
+# besser, save_top_k=1 löst also nie wieder ein Speicher-Ereignis aus. Beobachtet am
+# 2026-08-16: Run 0 lief 18.000 Batches durch, aber sowohl der Best- als auch der
+# last.ckpt froren bei Batch 6.000 ein, und der Endzustand war unwiederbringlich weg.
+# Genau das erzwang den kompletten Neulauf.
+#
+# val/loss sättigt nicht und bewegt sich weiter, sobald der Lokalisierungs-Strafterm
+# die Klassifikation verschiebt — es ist damit sowohl der bessere Kanarienvogel
+# (siehe docs/relevance_regularization.md §7.6) als auch das brauchbarere
+# Checkpoint-Kriterium.
+#
+# every_n_train_steps sichert zusätzlich unabhängig vom Monitor: selbst wenn die
+# Metrik sich nie verbessert, existiert am Ende ein Checkpoint des tatsächlichen
+# Endzustands. Ohne das ist ein Lauf, dessen Metrik früh einfriert, nicht auswertbar.
+
+defaults:
+  - model_checkpoint
+  - early_stopping
+  - model_summary
+  - rich_progress_bar
+  - _self_
+
+model_checkpoint:
+  dirpath: ${paths.output_dir}/checkpoints
+  filename: "epoch_{epoch:03d}-step_{step:06d}-val_loss_{val/loss:.4f}"
+  monitor: "val/loss"
+  mode: "min"
+  save_top_k: 2
+  save_last: True
+  auto_insert_metric_name: False
+
+early_stopping:
+  # Auf val/loss umgestellt, damit Checkpointing und Early Stopping dieselbe Größe
+  # betrachten. patience 5 bei 2 Validierungen pro Epoche und 3 Epochen (= 6 Checks)
+  # bedeutet praktisch: greift nur bei anhaltender Verschlechterung.
+  monitor: "val/loss"
+  mode: "min"
+  patience: 5
+
+model_summary:
+  max_depth: -1

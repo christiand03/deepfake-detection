@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import h5py
@@ -75,6 +76,149 @@ def normalize_audio(audio_np: np.ndarray, augment_fn=None) -> torch.Tensor:
     return (t - t.mean()) / torch.sqrt(t.var() + 1e-7)
 
 
+@dataclass(frozen=True)
+class VideoAugmentParams:
+    """The random draws of one chunk's augmentation, made explicit so a mask can follow.
+
+    :func:`augment_video_frames` samples these internally, which is fine as long as the
+    frames are the only thing being transformed.  Explanation-guided training also
+    carries a per-frame manipulation mask, and the mask has to undergo the *same*
+    geometric transform: a flipped frame paired with an unflipped mask would teach the
+    model that the mouth is on the wrong side of the face, and nothing would fail — the
+    loss would simply optimise a wrong target.
+
+    Separating the draw from the application lets both tensors share one sample.
+    """
+
+    flip: bool
+    brightness: float
+    contrast: float
+    saturation: float
+    crop_top: int
+    crop_left: int
+    crop_side: int  # equal to min(h, w) means "no crop"
+
+
+def sample_video_augment_params(
+    height: int,
+    width: int,
+    *,
+    allow_scale_crop: bool = True,
+) -> VideoAugmentParams:
+    """Draw one chunk's augmentation parameters.
+
+    The draw order is load-bearing: it must stay flip -> jitter -> crop side -> top ->
+    left so that a seeded run reproduces exactly what :func:`augment_video_frames`
+    produced before this refactor.
+
+    Args:
+        allow_scale_crop: When ``False``, skip the random-resized-crop (the returned
+            ``crop_side`` equals ``min(height, width)``).  Used for masked chunks: the
+            crop side lands between 12.6 and 14.0 cells on the 14x14 mask grid, so
+            replaying it there costs up to a whole cell — around 7 % of the frame, which
+            is larger than a typical mouth mask.  The flip is exact at any resolution and
+            is kept.
+    """
+    smallest = min(height, width)
+
+    flip = bool(torch.rand(()) < 0.5)
+    brightness, contrast, saturation = (0.8 + 0.4 * torch.rand(3)).tolist()
+
+    side = int(torch.empty(()).uniform_(0.9, 1.0).item() * smallest)
+    if not allow_scale_crop:
+        side = smallest
+    top = int(torch.randint(0, height - side + 1, ()).item()) if side < smallest else 0
+    left = int(torch.randint(0, width - side + 1, ()).item()) if side < smallest else 0
+
+    return VideoAugmentParams(
+        flip=flip,
+        brightness=brightness,
+        contrast=contrast,
+        saturation=saturation,
+        crop_top=top,
+        crop_left=left,
+        crop_side=side,
+    )
+
+
+def apply_geometric_augment(
+    x: torch.Tensor,
+    params: VideoAugmentParams,
+    *,
+    reference_size: int,
+    mode: str = "nearest",
+) -> torch.Tensor:
+    """Apply only the geometry-changing parts of an augmentation.
+
+    This is what a manipulation mask needs: the photometric jitter is irrelevant to a
+    coverage mask, but the flip and the crop move where the signal is.
+
+    Args:
+        x:              ``(T, C, H, W)`` tensor, square in the spatial dims.
+        params:         Draws from :func:`sample_video_augment_params`.
+        reference_size: The spatial size the params were drawn at (224 for frames). The
+                        crop box is stored in that space, so it must be rescaled before
+                        being applied to a coarser grid — indexing a 14x14 mask with a
+                        224-space box would silently slice nothing or raise.
+        mode:           Interpolation for the crop resize. Defaults to ``"nearest"`` so
+                        mask coverage is not smeared across neighbouring cells.
+
+    Raises:
+        ValueError: If ``x`` is not spatially square, which the crop maths assumes.
+    """
+    if params.flip:
+        x = x.flip(-1)
+
+    _t, _c, h, w = x.shape
+    if h != w:
+        msg = f"apply_geometric_augment expects square spatial dims, got {h}x{w}"
+        raise ValueError(msg)
+    if params.crop_side >= reference_size:
+        return x
+
+    scale = h / reference_size
+    side = max(1, int(round(params.crop_side * scale)))
+    if side >= h:
+        return x
+    top = min(int(round(params.crop_top * scale)), h - side)
+    left = min(int(round(params.crop_left * scale)), w - side)
+
+    cropped = x[..., top : top + side, left : left + side]
+    kwargs = {"align_corners": False} if mode in {"bilinear", "bicubic"} else {}
+    return torch.nn.functional.interpolate(cropped, size=(h, w), mode=mode, **kwargs)
+
+
+def apply_video_augment(frames: torch.Tensor, params: VideoAugmentParams) -> torch.Tensor:
+    """Apply a sampled augmentation to one video chunk in ``[0, 1]`` space.
+
+    Args:
+        frames: ``(T, C, H, W)`` float32 tensor in ``[0, 1]``.
+        params: The draws from :func:`sample_video_augment_params`.
+
+    Returns:
+        Augmented tensor of the same shape, clamped to ``[0, 1]``.
+    """
+    if params.flip:
+        frames = frames.flip(-1)
+
+    frames = frames * params.brightness
+    mean = frames.mean(dim=(-3, -2, -1), keepdim=True)
+    frames = (frames - mean) * params.contrast + mean
+    grey = (frames * torch.tensor([0.299, 0.587, 0.114]).view(1, 3, 1, 1)).sum(dim=1, keepdim=True)
+    frames = frames * params.saturation + grey * (1.0 - params.saturation)
+
+    _t, _c, h, w = frames.shape
+    if params.crop_side < min(h, w):
+        cropped = frames[
+            ...,
+            params.crop_top : params.crop_top + params.crop_side,
+            params.crop_left : params.crop_left + params.crop_side,
+        ]
+        frames = torch.nn.functional.interpolate(cropped, size=(h, w), mode="bilinear", align_corners=False)
+
+    return frames.clamp_(0.0, 1.0)
+
+
 def augment_video_frames(frames: torch.Tensor) -> torch.Tensor:
     """Random train-time augmentation for one video chunk in ``[0, 1]`` space.
 
@@ -83,35 +227,17 @@ def augment_video_frames(frames: torch.Tensor) -> torch.Tensor:
     break identity/recording shortcuts (the dominant Phase 2 overfitting mode),
     not to distort the forgery artifacts themselves.
 
+    Thin wrapper over :func:`sample_video_augment_params` + :func:`apply_video_augment`;
+    behaviour is unchanged, the split exists so masks can share the same draw.
+
     Args:
         frames: ``(T, C, H, W)`` float32 tensor in ``[0, 1]``.
 
     Returns:
         Augmented tensor of the same shape, clamped to ``[0, 1]``.
     """
-    t, _c, h, w = frames.shape
-
-    # Horizontal flip (p = 0.5).
-    if torch.rand(()) < 0.5:
-        frames = frames.flip(-1)
-
-    # Brightness / contrast / saturation jitter, factors in [0.8, 1.2].
-    brightness, contrast, saturation = 0.8 + 0.4 * torch.rand(3)
-    frames = frames * brightness
-    mean = frames.mean(dim=(-3, -2, -1), keepdim=True)
-    frames = (frames - mean) * contrast + mean
-    grey = (frames * torch.tensor([0.299, 0.587, 0.114]).view(1, 3, 1, 1)).sum(dim=1, keepdim=True)
-    frames = frames * saturation + grey * (1.0 - saturation)
-
-    # Random resized crop, side scale in [0.9, 1.0] (≈ area 0.81–1.0), same window for all frames.
-    side = int(torch.empty(()).uniform_(0.9, 1.0).item() * min(h, w))
-    if side < min(h, w):
-        top = int(torch.randint(0, h - side + 1, ()).item())
-        left = int(torch.randint(0, w - side + 1, ()).item())
-        cropped = frames[..., top : top + side, left : left + side]
-        frames = torch.nn.functional.interpolate(cropped, size=(h, w), mode="bilinear", align_corners=False)
-
-    return frames.clamp_(0.0, 1.0)
+    _t, _c, h, w = frames.shape
+    return apply_video_augment(frames, sample_video_augment_params(h, w))
 
 
 def _jpeg_compress_frames(frames: torch.Tensor, quality: int) -> torch.Tensor:

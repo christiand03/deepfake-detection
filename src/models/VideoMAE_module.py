@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import contextlib
+import logging
 from typing import Any, Literal
 
 import torch
 from transformers import VideoMAEForVideoClassification
 
 from .base_module import BaseDeepfakeModule
+
+log = logging.getLogger(__name__)
 
 _VIDEOMAE_LRP_PATCHED: bool = False
 
@@ -31,11 +35,68 @@ class VideoMAEModule(BaseDeepfakeModule):
         adv_train: bool = False,
         adv_epsilon: float = 0.03,
         adv_steps: int = 7,
+        loc_enabled: bool = False,
+        loc_lambda: float = 0.0,
+        loc_signal: str = "attnlrp",
+        loc_mode: str = "neg_log_ratio",
+        loc_max_samples: int = 1,
+        loc_warmup_steps: int = 200,
+        loc_target_class: int = 1,
+        loc_freeze_blocks: int = 0,
+        grad_clip_val: float = 1.0,
+        loc_accumulate_grad_batches: int = 1,
+        aux_loc_enabled: bool = False,
+        aux_loc_lambda: float = 1.0,
+        aux_loc_dropout: float = 0.0,
     ):
+        """Explanation-guided regularization hyperparameters (all default to off).
+
+        Args:
+            loc_enabled: Switch on the localization branch. This also switches the module
+                to **manual optimization**, so it is deliberately a separate flag from
+                ``loc_lambda``: with it false the step is byte-identical to Phase 1-4.
+            loc_lambda: Weight of the localization penalty. ``0`` with ``loc_enabled``
+                true is the **control run** — the relevance is computed with
+                ``create_graph=False`` and logged, but cannot reach the weights, so the
+                trajectory matches a plain CE finetune while still producing the
+                localization trace to compare against.
+            loc_signal: ``"attnlrp"`` (true LRP rules, under a scoped patch) or ``"ixg"``
+                (plain Input x Gradient). Measured on the dev GPU, attnlrp is both
+                *faster* and *smaller* than ixg (0.85 s / 7.57 GB vs 1.33 s / 7.81 GB)
+                because the LRP rules truncate the backward graph, so ixg is a fidelity
+                variant to report rather than a performance fallback.
+            loc_mode: Penalty shape, see :func:`src.utils.localization.localization_loss`.
+            loc_max_samples: Masked samples per step to explain. **1 is a hard
+                constraint, not a default**: batch 2 out-of-memories on the 8 GB dev GPU
+                (gate G2).
+            loc_warmup_steps: Linear ramp on lambda. The model starts at val AUC 1.000
+                where the CE gradient is near zero, so an un-ramped penalty is the entire
+                signal from step one.
+            loc_target_class: Logit to explain (1 = FAKE).
+            loc_freeze_blocks: Freeze the first k encoder blocks, bounding how far the
+                second-order graph reaches. The memory fallback rung if a batch will not fit.
+            grad_clip_val: Clipping applied by the module. Lightning forbids
+                ``trainer.gradient_clip_val`` under manual optimization, so the
+                experiment config must set that to null and this takes over.
+            loc_accumulate_grad_batches: Gradient accumulation for the manual path.
+                Lightning likewise refuses ``Trainer(accumulate_grad_batches=k)`` under
+                manual optimization ("Automatic gradient accumulation is not supported"),
+                so the trainer must be left at 1 and the factor given here instead.
+            aux_loc_enabled: Attach the auxiliary localization head, which predicts the
+                manipulation mask from the encoder tokens. Independent of ``loc_enabled``
+                — first-order, so it composes with automatic optimization — and the two
+                may be combined or run separately.
+            aux_loc_lambda: Weight of the auxiliary mask loss against cross-entropy.
+            aux_loc_dropout: Dropout inside the head.
+        """
         super().__init__()
 
         if adv_train and adv_steps < 1:
             raise ValueError(f"adv_steps must be >= 1 when adv_train is True, got {adv_steps}.")
+        if loc_signal not in {"attnlrp", "ixg"}:
+            raise ValueError(f"loc_signal must be 'attnlrp' or 'ixg', got {loc_signal!r}.")
+        if loc_enabled and loc_max_samples < 1:
+            raise ValueError(f"loc_max_samples must be >= 1, got {loc_max_samples}.")
 
         # Plain list so checkpoints stay loadable with weights_only=True.
         class_weights = self._plain_class_weights(class_weights)
@@ -71,6 +132,38 @@ class VideoMAEModule(BaseDeepfakeModule):
         # query/value projections; base weights stay frozen via PEFT.
         self._wrap_lora(self.net, "videomae", ("query", "value"), prefix="net.videomae")
 
+        # Auxiliary localization head (Stage 4). Registered before the manual-optimization
+        # switch so its parameters are part of the optimizer's param groups.
+        self._last_aux_diagnostics: dict[str, torch.Tensor] = {}
+        if self.hparams.aux_loc_enabled:
+            from src.models.localization_head import LocalizationHead
+
+            self.localization_head = LocalizationHead(
+                hidden_size=self.net.config.hidden_size, dropout=self.hparams.aux_loc_dropout
+            )
+            log.info(
+                "Auxiliary localization head enabled (%d params, lambda=%.3g)",
+                sum(p.numel() for p in self.localization_head.parameters()),
+                self.hparams.aux_loc_lambda,
+            )
+
+        # Manual optimization only when the localization branch is on. Under automatic
+        # optimization the summed loss keeps the CE graph alive while the double-backprop
+        # graph peaks, so the two peaks ADD -- which does not survive 8 GB. Stepping
+        # manually frees the CE graph first, making the peaks sequential.
+        if self.hparams.loc_enabled:
+            self.automatic_optimization = False
+            self._freeze_lower_blocks(self.hparams.loc_freeze_blocks)
+
+    def _freeze_lower_blocks(self, n_blocks: int) -> None:
+        """Freeze the first *n_blocks* encoder blocks (memory fallback rung)."""
+        if n_blocks <= 0:
+            return
+        for block in self.net.videomae.encoder.layer[:n_blocks]:
+            for param in block.parameters():
+                param.requires_grad = False
+        log.info("Froze the first %d encoder blocks to bound the second-order graph", n_blocks)
+
     def _backbone_modules(self):
         # The pretrained encoder; self.net.fc_norm + self.net.classifier are the head.
         return [self.net.videomae]
@@ -89,12 +182,44 @@ class VideoMAEModule(BaseDeepfakeModule):
 
         # Loss computed here (not via HF's internal CE) so class_weights apply —
         # with segment-accurate chunk labels the fake class is rare (~7 %).
-        outputs = self.net(pixel_values=pixel_values)
+        # Hidden states are requested only when the auxiliary head needs them, so the
+        # aux loss rides on the SAME forward pass rather than costing a second one.
+        want_hidden = self.hparams.aux_loc_enabled
+        outputs = self.net(pixel_values=pixel_values, output_hidden_states=want_hidden)
         logits = outputs.logits
         loss = self._classification_loss(logits, labels)
         preds = torch.argmax(logits, dim=1)
 
+        if want_hidden:
+            aux_loss, aux_diagnostics = self._aux_localization_loss(batch, outputs.hidden_states[-1])
+            if aux_loss is not None:
+                loss = loss + float(self.hparams.aux_loc_lambda) * aux_loss
+                self._last_aux_diagnostics = {"aux/loss": aux_loss.detach(), **aux_diagnostics}
+
         return loss, preds, labels, logits
+
+    def _aux_localization_loss(self, batch: Any, tokens: torch.Tensor):
+        """Supervised mask prediction from the encoder tokens.
+
+        The direct answer to the label-granularity problem in
+        ``docs/relevance_regularization.md`` §6.1: instead of penalising where the
+        *explanation* lands, tell the encoder where the manipulation is. First-order
+        only — no double-backprop, no lxt patching — so it composes with ordinary
+        automatic optimization and costs a normal backward.
+
+        Returns ``(None, {})`` when the batch carries no masked sample, which is the
+        common case at ~5 % mask coverage.
+        """
+        from src.models.localization_head import localization_head_loss
+
+        if "loc_mask" not in batch:
+            return None, {}
+        present = batch["has_loc_mask"] > 0
+        if not bool(present.any()):
+            return None, {}
+
+        logits = self.localization_head(tokens[present])
+        return localization_head_loss(logits, batch["loc_mask"][present], batch["loc_frame_gate"][present])
 
     def _pgd_perturb(self, pixel_values: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """Generate untargeted PGD adversarial frames for *pixel_values*.
@@ -141,7 +266,115 @@ class VideoMAEModule(BaseDeepfakeModule):
         mixed[:n_adv] = adv
         return {"pixel_values": mixed, "labels": labels}
 
-    def training_step(self, batch: Any, batch_idx: int):
+    # ── Explanation-guided regularization ─────────────────────────────────────
+
+    def _current_loc_lambda(self) -> float:
+        """Linearly ramped lambda.
+
+        The model warm-starts from val AUC 1.000, where the CE gradient is already near
+        zero. An un-ramped penalty would therefore be the entire training signal from
+        step one and jolt a converged model; the ramp lets it take over gradually.
+        """
+        target = float(self.hparams.loc_lambda)
+        warmup = int(self.hparams.loc_warmup_steps)
+        if warmup <= 0:
+            return target
+        return target * min(1.0, (self.global_step + 1) / warmup)
+
+    def _relevance_grid(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """Differentiable relevance on the 14x14 token grid.
+
+        Applies the same post-processing as :meth:`explain` (channel-sum then 16x16
+        patch-pool) but stops before its bilinear upsample to 224, which is a fixed
+        linear operator carrying no extra information at 256x the cost. This is the grid
+        the mask and ``scripts/eval_localization.py`` both work on, so the training
+        signal and the reported metric are the same object.
+        """
+        from einops import rearrange, reduce
+
+        from src.utils.attnlrp import compute_relevance_differentiable, videomae_attnlrp_patched
+
+        # lambda=0 is the control arm: emit the trace without a path to the weights.
+        create_graph = self._current_loc_lambda() > 0.0
+
+        patch_ctx = (
+            videomae_attnlrp_patched(self.net) if self.hparams.loc_signal == "attnlrp" else contextlib.nullcontext()
+        )
+        with patch_ctx:
+            relevance, _logits = compute_relevance_differentiable(
+                self.net,
+                pixel_values,
+                lambda x: self.net(pixel_values=x).logits,
+                target_class=int(self.hparams.loc_target_class),
+                create_graph=create_graph,
+            )
+
+        pooled = reduce(relevance, "b t c h w -> b t h w", "sum")
+        b, t = pooled.shape[0], pooled.shape[1]
+        flat = rearrange(pooled, "b t h w -> (b t) 1 h w")
+        flat = torch.nn.functional.avg_pool2d(flat, kernel_size=16, stride=16)
+        return rearrange(flat, "(b t) 1 h w -> b t h w", b=b, t=t)
+
+    def _localization_loss(self, batch: Any) -> tuple[torch.Tensor | None, dict]:
+        """Localization penalty over the masked sub-batch, or ``(None, {})`` if empty.
+
+        Runs in eval mode: that matches ``explain()`` semantics exactly and, as a side
+        effect, disables HF gradient checkpointing (which only applies when training),
+        keeping the second-order pass off the recompute path. Autocast is disabled
+        because double-backward through autocast's weight cache is a known source of
+        dtype errors, and bf16's 8 mantissa bits would quantise a relevance of order
+        1e-5 into noise.
+        """
+        from src.utils.localization import localization_loss
+
+        if "loc_mask" not in batch:
+            return None, {}
+        present = batch["has_loc_mask"] > 0
+        if not bool(present.any()):
+            return None, {}
+
+        index = torch.nonzero(present, as_tuple=False).flatten()[: int(self.hparams.loc_max_samples)]
+        pixel_values = batch["pixel_values"][index]
+        mask = batch["loc_mask"][index]
+        gate = batch["loc_frame_gate"][index]
+
+        was_training = self.training
+        self.eval()
+        try:
+            with torch.autocast(device_type=pixel_values.device.type, enabled=False):
+                relevance = self._relevance_grid(pixel_values)
+                loss, diagnostics = localization_loss(
+                    relevance.float(), mask.float(), gate.float(), mode=self.hparams.loc_mode
+                )
+        finally:
+            # Restore via the module so BaseDeepfakeModule.train() re-applies the
+            # frozen-backbone eval invariant.
+            self.train(was_training)
+        return loss, diagnostics
+
+    def _log_loc_diagnostics(self, loss: torch.Tensor, diagnostics: dict, lam: float) -> None:
+        """Log the anti-gaming telemetry.
+
+        ``loc/mass_total`` collapsing toward zero while ``loc/ratio`` rises is the
+        signature of the degenerate solution the ratio loss is designed to exclude;
+        :class:`~src.utils.callbacks.RelevanceCollapseGuard` aborts on it.
+        """
+        self.log("loc/loss", loss, on_step=True, on_epoch=False)
+        self.log("loc/lambda", lam, on_step=True, on_epoch=False)
+        for key in ("mass_inside", "mass_total", "ratio", "ratio_over_chance", "ratio_normalized"):
+            if key in diagnostics:
+                self.log(f"loc/{key}", diagnostics[key].float().mean(), on_step=True, on_epoch=True)
+
+    def _grad_norm(self) -> float:
+        total = 0.0
+        for param in self.parameters():
+            if param.grad is not None:
+                total += float(param.grad.detach().pow(2).sum())
+        return total**0.5
+
+    # ── Steps ─────────────────────────────────────────────────────────────────
+
+    def _classification_step(self, batch: Any):
         step = None
         if self.hparams.adv_train:
             # Mixup is skipped on adversarial batches to keep PGD semantics clean.
@@ -152,14 +385,98 @@ class VideoMAEModule(BaseDeepfakeModule):
             )
         if step is None:
             step = self.model_step(batch)
-        loss, preds, labels, _ = step
+        return step
+
+    def _log_classification(self, loss, preds, labels) -> None:
         self.train_loss(loss)
         self.train_acc(preds, labels)
         self.train_f1(preds, labels)
         self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train/f1", self.train_f1, on_step=False, on_epoch=True, prog_bar=True)
-        return loss
+        # aux/aux_iou is the head's own localization quality -- the number that says
+        # whether this arm is working, independent of the classification metrics.
+        for key, value in self._last_aux_diagnostics.items():
+            self.log(key, value.float(), on_step=False, on_epoch=True)
+        self._last_aux_diagnostics = {}
+
+    def training_step(self, batch: Any, batch_idx: int):
+        if not self.hparams.loc_enabled:
+            loss, preds, labels, _ = self._classification_step(batch)
+            self._log_classification(loss, preds, labels)
+            return loss
+        return self._regularized_training_step(batch, batch_idx)
+
+    def _regularized_training_step(self, batch: Any, batch_idx: int):
+        """Manual-optimization step: CE first, then the localization branch.
+
+        The ordering is what makes this fit: ``manual_backward(ce)`` frees the CE
+        activation graph before the double-backprop graph is built, so the two memory
+        peaks are sequential rather than additive.
+        """
+        optimizer = self.optimizers()
+        # Read from hparams, not trainer: Lightning refuses to let the trainer accumulate
+        # under manual optimization, so trainer.accumulate_grad_batches is pinned at 1.
+        accumulate = max(1, int(self.hparams.loc_accumulate_grad_batches))
+        is_last_micro_batch = (batch_idx + 1) % accumulate == 0
+
+        # CE runs on the FULL batch. Restricting it to masked samples would change the
+        # classification distribution and confound any localization result.
+        ce_loss, preds, labels, _logits = self._classification_step(batch)
+        self.manual_backward(ce_loss / accumulate)
+        self._log_classification(ce_loss, preds, labels)
+        ce_grad_norm = self._grad_norm()
+
+        lam = self._current_loc_lambda()
+        loc_loss, diagnostics = self._localization_loss(batch)
+        if loc_loss is not None:
+            self._log_loc_diagnostics(loc_loss, diagnostics, lam)
+            if lam > 0:
+                self.manual_backward(lam * loc_loss / accumulate)
+        self.log("grad/ce_norm", ce_grad_norm, on_step=True, on_epoch=False)
+        self.log("grad/total_norm", self._grad_norm(), on_step=True, on_epoch=False)
+
+        if is_last_micro_batch:
+            self.clip_gradients(
+                optimizer,
+                gradient_clip_val=float(self.hparams.grad_clip_val),
+                gradient_clip_algorithm="norm",
+            )
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            self._step_schedulers()
+        return ce_loss
+
+    def _step_schedulers(self) -> None:
+        """Advance only the step-interval schedulers.
+
+        Under manual optimization Lightning stops driving the scheduler, so the module
+        must — but it must also respect the configured interval. ``configure_optimizers``
+        picks ``"step"`` for warmup/cosine (which needs ``num_training_steps``) and
+        ``"epoch"`` otherwise; stepping an epoch-interval scheduler once per batch would
+        burn its whole schedule in the first epoch.
+        """
+        configs = getattr(self.trainer, "lr_scheduler_configs", None)
+        if not configs:
+            return
+        for config in configs:
+            if getattr(config, "interval", "epoch") != "step":
+                continue
+            scheduler = config.scheduler
+            if not isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step()
+
+    def on_train_epoch_end(self) -> None:
+        """Advance epoch-interval schedulers, which Lightning also stops driving."""
+        super().on_train_epoch_end()
+        if not self.hparams.loc_enabled:
+            return
+        for config in getattr(self.trainer, "lr_scheduler_configs", None) or []:
+            scheduler = config.scheduler
+            if getattr(config, "interval", "epoch") == "epoch" and not isinstance(
+                scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau
+            ):
+                scheduler.step()
 
     def validation_step(self, batch: Any, batch_idx: int):
         loss, preds, labels, logits = self.model_step(batch)

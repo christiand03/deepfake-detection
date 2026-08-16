@@ -1,0 +1,27 @@
+# @package _global_
+
+# λ-Sweep, Punkt 1 von 3: KONTROLLE (loc_lambda = 0).
+#
+# Der Lokalisierungs-Zweig läuft und loggt, kann die Gewichte aber nicht erreichen
+# (create_graph ist an λ>0 gekoppelt). Der Gewichtsverlauf entspricht damit einem
+# reinen CE-Finetuning, und die Lokalisierungs-Kurve zeigt, wie viel sich allein
+# durch Weitertrainieren verschiebt.
+#
+# Der vorherige Kontroll-Lauf hat das bereits belegt: über 18.000 Batches stieg
+# ratio_over_chance von 2,15 auf 2,52 (+17 %) ganz ohne Strafterm. Ohne diesen
+# Bezugspunkt wäre jede Verbesserung in den λ>0-Läufen nicht zuordenbar.
+#
+# Run: experiment=sweep_relevance_lambda0
+
+defaults:
+  - sweep_relevance_base
+
+ckpt_export_name: sweep_relevance_lambda0
+
+model:
+  loc_lambda: 0.0
+
+# Kein RelevanceCollapseGuard: ohne Strafterm gibt es keinen Kollaps abzufangen, und
+# eine Abbruchbedingung, die die anderen Arme nicht teilen, würde den Vergleich brechen.
+
+tags: ["videomae", "video", "xai", "lambda-sweep", "control"]
