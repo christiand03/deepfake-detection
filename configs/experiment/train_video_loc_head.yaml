@@ -27,6 +27,10 @@ defaults:
   - override /model: videomae
   - override /logger: wandb
   - override /trainer: gpu
+  # Checkpointing auf val/loss statt val/auc_video: Letzteres sättigt bei exakt
+  # 1.000, danach ist kein Wert mehr strikt besser und save_top_k löst nie wieder
+  # aus — bei den Relevanz-Läufen ging so zweimal der Endzustand verloren.
+  - override /callbacks: model_checkpoint_loss
 
 ckpt_export_name: videomae_loc_head
 

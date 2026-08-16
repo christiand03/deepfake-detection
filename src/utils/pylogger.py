@@ -24,15 +24,23 @@ class RankedLogger(logging.LoggerAdapter):
         super().__init__(logger=logger, extra=extra)
         self.rank_zero_only = rank_zero_only
 
-    def log(self, level: int, msg: str, rank: int | None = None, *args, **kwargs) -> None:
+    def log(self, level: int, msg: str, *args, rank: int | None = None, **kwargs) -> None:
         """Delegate a log call to the underlying logger, after prefixing its message with the rank
         of the process it's being logged from. If `'rank'` is provided, then the log will only
         occur on that rank/process.
 
+        ``rank`` is keyword-only, and must stay that way. It previously sat between ``msg`` and
+        ``*args``, so the standard lazy-formatting call ``log.info("loaded %s", path)`` bound
+        ``path`` to ``rank`` and left ``*args`` empty. That had two silent effects: placeholders
+        rendered literally (or raised ``TypeError: %d format: a real number is required``), and
+        because line ~48 then compares a garbage ``rank`` against the current rank, the message
+        was dropped entirely whenever they differed. 64 call sites in this project pass
+        format arguments this way.
+
         :param level: The level to log at. Look at `logging.__init__.py` for more information.
         :param msg: The message to log.
-        :param rank: The rank to log at.
         :param args: Additional args to pass to the underlying logging function.
+        :param rank: The rank to log at (keyword-only).
         :param kwargs: Any additional keyword args to pass to the underlying logging function.
         """
         if self.isEnabledFor(level):
