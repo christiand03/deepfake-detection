@@ -20,11 +20,16 @@
 > die Korrektur nachvollziehbar ist und nicht wie eine nachträgliche Glättung wirkt.
 >
 > Kurzfassung für die Eilige:
-> * Die Regularisierung **funktioniert**: Lokalisierung 1,87 → 4,69 (×2,51 gegenüber
+> * Die Regularisierung **funktioniert**: Lokalisierung 1,87 → 11,42 (×6,12 gegenüber
 >   der Kontrolle), Konfidenzintervalle überlappen nicht.
-> * Der Trade-off ist real und hat einen klaren Knick bei **λ = 0,02**.
+> * Die Heatmap zeigt bei λ = 0,02 in **77 % der Fälle** auf die manipulierte Stelle,
+>   gegenüber 28 % beim unbehandelten Modell (Pointing Game, Zufallsniveau 1,9 %).
+> * Der Trade-off ist real und hat einen klaren Knick bei **λ = 0,02** — dem
+>   empfohlenen Betriebspunkt.
 > * Der ursprüngliche Diagnose-Befund aus §4 beruhte auf **einem** Clip und
 >   verallgemeinert in dieser Form nicht.
+> * Der Aux-Head funktioniert, ist aber der schwächste Arm (×1,18) — mit einem eigenen
+>   methodischen Befund, s. §13.6.
 
 ---
 
@@ -505,9 +510,9 @@ beibringen, wo nichts gefälscht wurde. Chunk-Labels sind segment-genau → pass
 
 ## 10. Was wir anhand der Ergebnisse tun
 
-> **Eingetreten ist der erste Fall — mit Einschränkung (2026-08-16).**
+> **Eingetreten ist der erste Fall — mit Einschränkung (Stand 2026-08-17).**
 > „Relevanz lokalisiert + Accuracy gehalten" trifft für **λ = 0,02** weitgehend zu:
-> Lokalisierung ×1,83 gegenüber der Kontrolle, `val/auc_video` 0,9854 statt 1,0000.
+> Lokalisierung ×4,40 gegenüber der Kontrolle, `val/auc_video` 0,9854 statt 1,0000.
 > Gehalten ist nicht dasselbe wie unverändert — die Accuracy sinkt messbar, nur eben
 > wenig. Für λ = 0,1 gilt der zweite Fall („Accuracy fällt"), und die dort verlangte
 > **Trade-off-Kurve ist in §13.4 geliefert**.
@@ -590,18 +595,21 @@ beibringen, wo nichts gefälscht wurde. Chunk-Labels sind segment-genau → pass
 
 **Offen:**
 
-- [ ] Auxiliary Localization Head (`src/models/localization_head.py`,
-      `experiment=train_video_loc_head`) ist implementiert und getestet, aber **noch
-      nicht trainiert**. Erster Ordnung, passt in 8 GB, liefert eine direkte
-      Lokalisierungs-Ausgabe fürs Frontend — der billigste noch offene Zugewinn.
+- [x] Auxiliary Localization Head trainiert und ausgewertet → §13.6.
+- [x] `val/auc_video` als Checkpoint-Monitor ersetzt (`model_checkpoint_loss.yaml`,
+      `save_top_k: -1`), abgesichert durch `tests/test_checkpoint_config.py`.
+- [ ] **Trainingsdauer als zweite Achse.** Der Wiederholungslauf hat gezeigt, dass die
+      Lokalisierung zwischen Batch 3.000 und 6.000 noch einmal **um mehr als das
+      Doppelte** zunimmt (λ=0,02: 3,41 → 8,21). Sie war bei 6.000 immer noch nicht
+      gesättigt, die Accuracy fiel weiter. Wo die Kurve wirklich ausläuft, ist offen —
+      und damit auch, ob λ=0,02 bei längerem Training noch der beste Betriebspunkt ist.
+      Ein Lauf über 12.000–18.000 Batches bei λ=0,02 wäre der nächste erkenntnisreiche
+      Schritt (~8–12 h).
 - [ ] λ zwischen 0,02 und 0,1 verfeinern, falls der Knick genauer lokalisiert werden
       soll (§13.4). Aktuell drei Stützstellen.
-- [ ] Trainingsdauer als zweite Achse: Beide λ>0-Arme verschlechtern sich
-      **monoton** über 6.000 Batches, ohne Plateau. Die Schrittzahl ist damit selbst
-      ein Punkt auf der Kurve und keine neutrale Einstellung.
-- [ ] `val/auc_video` als Checkpoint-Monitor projektweit ersetzen: Der Wert sättigt
-      bei exakt 1.000, wodurch `save_top_k` nie wieder auslöst und der Endzustand
-      eines Laufs verloren geht (hier zweimal passiert, s. §13.5).
+- [ ] `val/auc_video` auch in den übrigen Projekt-Configs (Phase 1–4) ersetzen. Dort
+      ist es bislang nicht aufgefallen, weil die Metrik nicht sättigte — die
+      Fehlerklasse besteht aber weiter.
 
 ---
 
@@ -613,34 +621,36 @@ Fünf Messpunkte, alle vom **selben** Phase-2-Checkpoint warm-gestartet, alle ü
 **6.000 Batches trainiert**. Bewertung mit `scripts/eval_localization.py` auf
 **911 Chunks aus 624 Test-Clips** — derselbe Datensatz für jeden Arm.
 
-> **WICHTIGE EINSCHRÄNKUNG (2026-08-17).** Alle Arme wurden 6.000 Batches *trainiert*,
-> aber nicht alle wurden bei 6.000 Batches *bewertet*:
+Alle Arme sind bei **Batch 6.000** ausgewertet — verifiziert über den in jedem
+Checkpoint gespeicherten `global_step`, nicht über Dateinamen oder Änderungsdatum.
+
+> **Historie, weil sie die Zahlen erklärt (2026-08-17).** Die erste Fassung dieses
+> Abschnitts nannte Zahlen, die **nicht** schrittgleich waren: λ=0,02 und λ=0,1 waren
+> bei Batch 3.000 ausgewertet, Kontrolle und Aux-Head bei 6.000. Ursache, dreifach
+> verifiziert: `save_top_k=2` mit `mode=min` behält bei einem *steigenden* `val/loss`
+> die beiden **frühesten** Validierungen; danach feuert kein Speicher-Ereignis mehr,
+> und `last.ckpt` friert mit ein (es ist bitweise eine Kopie des letzten
+> Speicherstands, kein eigener Schreibvorgang am Trainingsende). Bei den λ>0-Armen
+> steigt `val/loss` zwangsläufig — genau das ist der gemessene Trade-off.
 >
-> | Arm | ausgewerteter Checkpoint |
-> |---|---|
-> | Kontrolle λ=0 | Batch 6.000 |
-> | λ=0,02 | **Batch 3.000** |
-> | λ=0,1 | **Batch 3.000** |
-> | Aux-Head | Batch 6.000 |
+> Die beiden λ-Arme wurden daraufhin über Nacht wiederholt (`save_top_k: -1`, ~7,3 h).
+> Der Unterschied ist erheblich und geht **zugunsten** des Verfahrens:
 >
-> Ursache, dreifach verifiziert: `save_top_k=2` mit `mode=min` behält bei einem
-> *steigenden* `val/loss` die beiden **frühesten** Validierungen; danach feuert kein
-> Speicher-Ereignis mehr. `last.ckpt` ist kein eigenständiger Schreibvorgang am
-> Trainingsende, sondern bitweise eine Kopie des letzten Speicherstands — friert also
-> mit ein. Bei den λ>0-Armen steigt `val/loss` zwangsläufig, weil genau das der
-> gemessene Trade-off ist; Kontrolle und Aux-Head entkamen nur, weil ihr `val/loss` fiel.
+> | Arm | bei Batch 3.000 | bei Batch 6.000 |
+> |---|---|---|
+> | Kontrolle λ=0 | 1,867 | **1,867** (unverändert — war schon korrekt) |
+> | λ=0,02 | 3,410 | **8,210** |
+> | λ=0,1 | 4,689 | **11,418** |
 >
-> **Wirkung auf die Aussagen:** Richtung und Signifikanz bleiben — beide λ-Arme
-> schlagen die Kontrolle mit getrennten Konfidenzintervallen, und zwar mit der
-> **halben** Trainingsmenge. Der Effekt ist damit eher *unter*- als überschätzt.
-> Betroffen ist die **Form der Kurve** in §13.4: Der Lokalisierungswert stammt aus
-> Batch 3.000, der daneben genannte Accuracy-Wert aus Batch 6.000. Beide Zahlen
-> gehören zum selben Punkt, wenn die Kurve exakt sein soll.
+> Die unveränderte Kontrolle ist die Kontrollprobe dafür, dass der Wiederholungslauf
+> nichts verändert hat, was er nicht verändern sollte.
 >
-> Behoben für künftige Läufe: `save_top_k: -1` in
-> `configs/callbacks/model_checkpoint_loss.yaml`, abgesichert durch
-> `tests/test_checkpoint_config.py`. Eine Wiederholung der beiden λ-Arme (~8 h) würde
-> die Kurve exakt machen; die qualitative Aussage ändert sich dadurch nicht.
+> **Lehre für die Arbeit:** Die Lokalisierung war bei Batch 3.000 noch keineswegs
+> gesättigt — sie hatte sich bis Batch 6.000 mehr als verdoppelt. Die ursprüngliche
+> Annahme, der Effekt sättige früh (Begründung für das 6.000-Batch-Budget), ist damit
+> **widerlegt**. Siehe §13.5 zu den Folgen.
+>
+> Abgesichert gegen Wiederholung durch `tests/test_checkpoint_config.py`.
 
 Die Arme unterscheiden sich **ausschliesslich** in `loc_lambda`; das wurde durch
 Auflösen aller drei Hydra-Configs und Diff über jeden Schlüssel geprüft.
@@ -656,8 +666,8 @@ dorthin gibt (§4.2). Genau diese Lücke ist das Trainingssignal.
 |---|---|---|---|---|
 | Baseline (Phase 2) | 1,921 [1,84; 2,00] | 0,299 | 1,0000 | — |
 | **λ = 0,0** (Kontrolle) | **1,867** [1,79; 1,95] | 0,279 | 1,0000 | 0,0119 |
-| **λ = 0,02** | **3,410** [3,24; 3,58] | 0,496 | 0,9854 | 0,0582 |
-| **λ = 0,1** | **4,689** [4,45; 4,95] | 0,599 | 0,9444 | 0,1752 |
+| **λ = 0,02** | **8,210** [7,73; 8,71] | 0,769 | 0,9854 | 0,0582 |
+| **λ = 0,1** | **11,418** [10,75; 12,12] | 0,810 | 0,9444 | 0,1752 |
 
 `ratio_over_chance` = Anteil der Relevanzmasse in der Maske, geteilt durch den
 Flächenanteil der Maske. 1,0 = die Relevanz ignoriert die Maske vollständig.
@@ -694,19 +704,32 @@ Das hat zwei Konsequenzen:
 
 | λ | Gewinn ggü. Kontrolle | AUC-Kosten | Gewinn je AUC-Punkt |
 |---|---|---|---|
-| 0,02 | +1,54 (×1,83) | −0,0146 | **106** |
-| 0,1 | +2,82 (×2,51) | −0,0556 | 51 |
+| 0,02 | +6,34 (×4,40) | −0,0146 | **434** |
+| 0,1 | +9,55 (×6,12) | −0,0556 | 172 |
 
-**λ = 0,02 ist rund doppelt so effizient**: 55 % des Lokalisierungsgewinns von
-λ = 0,1 für 26 % der Genauigkeitskosten. Die abnehmenden Erträge setzen scharf ein.
+**λ = 0,02 ist rund 2,5-mal so effizient**: 66 % des Lokalisierungsgewinns von λ = 0,1
+für 26 % der Genauigkeitskosten. Die abnehmenden Erträge setzen scharf ein.
 
 Als Betriebspunkt ist damit **λ = 0,02** zu empfehlen; λ = 0,1 dokumentiert das obere
 Ende der Kurve und ist für ein System, das weiterhin klassifizieren soll, zu teuer.
 
-Der anschaulichste Einzelwert ist das **Pointing Game: 0,279 → 0,599**. Die stärkste
-Stelle der Heatmap liegt bei λ = 0,1 in **60 % der Fälle** innerhalb einer Maske, die
-1,9 % des Bildes bedeckt — das 32-fache des Zufallsniveaus, gegenüber dem 15-fachen
-vorher.
+Der anschaulichste Einzelwert ist das **Pointing Game: 0,279 → 0,769**. Die stärkste
+Stelle der Heatmap liegt bei λ = 0,02 in **77 % der Fälle** innerhalb einer Maske, die
+nur 1,9 % des Bildes bedeckt — das **41-fache** des Zufallsniveaus, gegenüber dem
+15-fachen des unbehandelten Modells. Anders gesagt: Für den Betrachter zeigt die
+Heatmap in drei von vier Fällen genau auf die manipulierte Stelle, statt in einem von
+vieren.
+
+> **Wichtige Einschränkung: die Kurve ist bei Batch 6.000 abgeschnitten, nicht
+> ausgelaufen.** Beide λ-Arme verbesserten sich am Laufende noch in der Lokalisierung
+> *und* verschlechterten sich noch in der Accuracy — kein Plateau in Sicht. Das
+> 6.000-Batch-Budget ist damit **selbst ein Punkt auf der Kurve** und keine neutrale
+> Einstellung. Ein längerer Lauf landet auf beiden Achsen weiter aussen; ob λ = 0,02
+> dort immer noch der effizienteste Punkt ist, ist **nicht gemessen**.
+>
+> Die Trainingsdauer ist also eine zweite, hier nicht ausgereizte Achse. Für die
+> Belegarbeit ist die Kurve als „bei gleichem Budget von 6.000 Batches" zu lesen, nicht
+> als Endzustand.
 
 ### 13.5 Was schiefging (und warum es hier steht)
 
@@ -746,11 +769,12 @@ Loss — erster Ordnung, ohne lxt-Patch, ohne Double-Backprop.
 |---|---|---|---|---|
 | Kontrolle λ=0 | 1,867 | — | 0,279 | 1,0000 |
 | **Aux-Head** | **2,200** [2,11; 2,30] | **×1,18** | 0,359 | 0,9953 |
-| λ=0,02 | 3,410 | ×1,83 | 0,496 | 0,9854 |
-| λ=0,1 | 4,689 | ×2,51 | 0,599 | 0,9444 |
+| λ=0,02 | 8,210 | ×4,40 | 0,769 | 0,9854 |
+| λ=0,1 | 11,418 | ×6,12 | 0,810 | 0,9444 |
 
-Der Effekt ist real (Konfidenzintervall von der Kontrolle getrennt), aber **der
-schwächste der drei Eingriffe** — knapp ein Viertel dessen, was λ=0,1 erreicht.
+Der Effekt ist real (Konfidenzintervall von der Kontrolle getrennt), aber **mit Abstand
+der schwächste der drei Eingriffe** — rund ein Fünftel dessen, was λ=0,02 erreicht, und
+ein Sechstel von λ=0,1.
 
 **Was die Trainingskurven zeigen, und warum das täuscht.** Beim Aux-Head verbessern sich
 beide Ziele *gemeinsam*: `val/loss` fällt (0,322 → 0,190), `val/auc_video` steigt
@@ -760,13 +784,18 @@ aus — auf der gemeinsamen Metrik liefert es aber deutlich weniger. Gesunde Kur
 nicht das Ergebnis.
 
 **Der eigentlich interessante Befund für eine xAI-Arbeit:** Die Features des Encoders auf
-die Maske zu supervidieren bewegt die AttnLRP-Relevanz **deutlich weniger** als die
-Erklärung direkt zu bestrafen. Der Kopf erreicht `aux_iou` 0,069, das Encoder-Signal
-enthält die Information über den Manipulationsort also nachweislich — die Attribution
-folgt ihr trotzdem kaum. Die Heatmap ist damit **kein einfacher Abgriff der
-Feature-Qualität**; wo das Modell hinschaut und was seine Erklärung anzeigt, sind
-teilweise entkoppelt. Das ist ein Ergebnis über die Methode AttnLRP, nicht nur über
-dieses Modell.
+die Maske zu supervidieren bewegt die AttnLRP-Relevanz **um ein Vielfaches weniger** als
+die Erklärung direkt zu bestrafen — Faktor 1,18 gegen 4,40 bei λ=0,02, und das bei
+vergleichbaren Accuracy-Kosten (−0,005 gegen −0,015 AUC). Der Kopf erreicht `aux_iou`
+0,069, das Encoder-Signal enthält die Information über den Manipulationsort also
+nachweislich — die Attribution folgt ihr trotzdem kaum.
+
+Die Heatmap ist damit **kein einfacher Abgriff der Feature-Qualität**; wo das Modell
+hinschaut und was seine Erklärung anzeigt, sind teilweise entkoppelt. Für eine Arbeit,
+die sich mit „wir zeigen *warum*" begründet, ist das ein Ergebnis über die Methode
+AttnLRP selbst, nicht nur über dieses Modell: Eine Erklärung lässt sich offenbar
+wirksamer durch einen Prior *auf die Erklärung* verschieben als durch bessere
+Repräsentationen — was die Spannung aus §6.3 eher verschärft als entschärft.
 
 Vorbehalte: `aux_iou` stieg am Laufende noch (0,069 ist eine **untere** Schranke, der
 Kopf ist untertrainiert); `val/loss` ist hier nicht mit den λ-Armen vergleichbar, weil er

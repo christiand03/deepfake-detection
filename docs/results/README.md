@@ -8,22 +8,25 @@ nachvollziehen lassen, ist nur halb belegt.
 Erzeugt mit `scripts/eval_localization.py`, jeweils auf **911 Chunks aus 624 Test-Clips**
 (`data/processed/test.h5` + `test_masks.npz`).
 
-| Datei | Checkpoint | trainierte Batches | ausgewertet bei |
-|---|---|---|---|
-| `loc_baseline.json` | `checkpoints/videomae_phase2.ckpt` | — | — |
-| `loc_baseline_regions.json` | wie oben, mit `--per-region` | — | — |
-| `loc_lambda0_control.json` | Sweep-Arm λ=0 | 6.000 | **6.000** |
-| `loc_lambda002.json` | Sweep-Arm λ=0,02 | 6.000 | **3.000** |
-| `loc_lambda01.json` | Sweep-Arm λ=0,1 | 6.000 | **3.000** |
-| `loc_aux_head.json` | `experiment=train_video_loc_head` | 6.000 | **6.000** |
+| Datei | Checkpoint | trainierte Batches | ausgewertet bei | `ratio_over_chance` |
+|---|---|---|---|---|
+| `loc_baseline.json` | `checkpoints/videomae_phase2.ckpt` | — | — | 1,921 |
+| `loc_baseline_regions.json` | wie oben, mit `--per-region` | — | — | — |
+| `loc_lambda0_control.json` | Sweep-Arm λ=0 | 6.000 | **6.000** | 1,867 |
+| `loc_lambda002.json` | Sweep-Arm λ=0,02 | 6.000 | **6.000** | 8,210 |
+| `loc_lambda01.json` | Sweep-Arm λ=0,1 | 6.000 | **6.000** | 11,418 |
+| `loc_aux_head.json` | `experiment=train_video_loc_head` | 6.000 | **6.000** | 2,200 |
 
-> **Die beiden λ-Arme sind bei Batch 3.000 ausgewertet, nicht bei 6.000.** Ursache und
-> Tragweite stehen in §13.1 des Hauptdokuments: `save_top_k` hörte auf zu speichern,
-> sobald `val/loss` stieg, und `last.ckpt` ist bitweise eine Kopie des letzten
-> Speicherstands. Die Aussagen bleiben gültig (die λ-Arme schlagen die Kontrolle mit der
-> halben Trainingsmenge), aber die Kurvenform in §13.4 mischt Lokalisierung aus Batch
-> 3.000 mit Accuracy aus Batch 6.000. Behoben für künftige Läufe durch
-> `save_top_k: -1`, abgesichert von `tests/test_checkpoint_config.py`.
+Alle Arme sind schrittgleich bei Batch 6.000 ausgewertet; geprüft über den in jedem
+Checkpoint gespeicherten `global_step`, nicht über Dateinamen oder Änderungsdatum.
+
+> **Frühere Fassung war nicht schrittgleich.** Bis zum 2026-08-17 enthielten
+> `loc_lambda002.json` und `loc_lambda01.json` Werte aus Batch **3.000** (3,410 bzw.
+> 4,689), weil `save_top_k=2` bei steigendem `val/loss` nur die frühesten Checkpoints
+> behielt und `last.ckpt` bitweise eine Kopie des letzten Speicherstands ist. Beide
+> Arme wurden mit `save_top_k: -1` wiederholt; die Kontrolle blieb dabei exakt
+> unverändert (1,867), was als Kontrollprobe für den Wiederholungslauf dient.
+> Details: §13.1 des Hauptdokuments.
 
 ## Format
 
