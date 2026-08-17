@@ -29,7 +29,7 @@
 > * Der ursprüngliche Diagnose-Befund aus §4 beruhte auf **einem** Clip und
 >   verallgemeinert in dieser Form nicht.
 > * Der Aux-Head funktioniert, ist aber der schwächste Arm (×1,18) — mit einem eigenen
->   methodischen Befund, s. §13.6.
+>   methodischen Befund, s. §13.7.
 
 ---
 
@@ -595,18 +595,23 @@ beibringen, wo nichts gefälscht wurde. Chunk-Labels sind segment-genau → pass
 
 **Offen:**
 
-- [x] Auxiliary Localization Head trainiert und ausgewertet → §13.6.
+- [x] Auxiliary Localization Head trainiert und ausgewertet → §13.7.
 - [x] `val/auc_video` als Checkpoint-Monitor ersetzt (`model_checkpoint_loss.yaml`,
       `save_top_k: -1`), abgesichert durch `tests/test_checkpoint_config.py`.
-- [ ] **Trainingsdauer als zweite Achse.** Der Wiederholungslauf hat gezeigt, dass die
-      Lokalisierung zwischen Batch 3.000 und 6.000 noch einmal **um mehr als das
-      Doppelte** zunimmt (λ=0,02: 3,41 → 8,21). Sie war bei 6.000 immer noch nicht
-      gesättigt, die Accuracy fiel weiter. Wo die Kurve wirklich ausläuft, ist offen —
-      und damit auch, ob λ=0,02 bei längerem Training noch der beste Betriebspunkt ist.
-      Ein Lauf über 12.000–18.000 Batches bei λ=0,02 wäre der nächste erkenntnisreiche
-      Schritt (~8–12 h).
+- [x] **Trainingsdauer als zweite Achse — vermessen** (§13.5). Über 12 Checkpoints
+      ausgewertet, ohne erneutes Training, weil `save_top_k: -1` alle erhält. Ergebnis:
+      die Lokalisierung ist bei Batch 6.000 nicht nur ungesättigt, ihre Zuwachsrate
+      **steigt** noch (λ=0,02: +0,774 → +1,800 je 1.000 Batches). Die Kontrolle ist
+      dagegen exakt flach (−0,000/1k).
+- [ ] **Offen bleibt der optimale Haltepunkt.** Der marginale Wechselkurs
+      (Lokalisierung je AUC-Punkt) fällt im letzten Abschnitt von ~570 auf 311, d. h.
+      die Effizienz hat ihr Maximum vor Batch 6.000 überschritten, während die absolute
+      Lokalisierung weiter steigt. Welcher der beiden Grössen man folgt, ist eine
+      Entscheidung und keine Messung. Ein Lauf über 12.000–18.000 Batches bei λ=0,02
+      (~8–12 h) würde zeigen, ob der Kurs weiter fällt oder sich stabilisiert.
 - [ ] λ zwischen 0,02 und 0,1 verfeinern, falls der Knick genauer lokalisiert werden
-      soll (§13.4). Aktuell drei Stützstellen.
+      soll (§13.4). Aktuell drei Stützstellen entlang λ (die Achse Trainingsdauer hat
+      inzwischen vier).
 - [ ] `val/auc_video` auch in den übrigen Projekt-Configs (Phase 1–4) ersetzen. Dort
       ist es bislang nicht aufgefallen, weil die Metrik nicht sättigte — die
       Fehlerklasse besteht aber weiter.
@@ -648,7 +653,7 @@ Checkpoint gespeicherten `global_step`, nicht über Dateinamen oder Änderungsda
 > **Lehre für die Arbeit:** Die Lokalisierung war bei Batch 3.000 noch keineswegs
 > gesättigt — sie hatte sich bis Batch 6.000 mehr als verdoppelt. Die ursprüngliche
 > Annahme, der Effekt sättige früh (Begründung für das 6.000-Batch-Budget), ist damit
-> **widerlegt**. Siehe §13.5 zu den Folgen.
+> **widerlegt**. Siehe §13.6 zu den Folgen.
 >
 > Abgesichert gegen Wiederholung durch `tests/test_checkpoint_config.py`.
 
@@ -720,18 +725,95 @@ nur 1,9 % des Bildes bedeckt — das **41-fache** des Zufallsniveaus, gegenüber
 Heatmap in drei von vier Fällen genau auf die manipulierte Stelle, statt in einem von
 vieren.
 
-> **Wichtige Einschränkung: die Kurve ist bei Batch 6.000 abgeschnitten, nicht
-> ausgelaufen.** Beide λ-Arme verbesserten sich am Laufende noch in der Lokalisierung
-> *und* verschlechterten sich noch in der Accuracy — kein Plateau in Sicht. Das
-> 6.000-Batch-Budget ist damit **selbst ein Punkt auf der Kurve** und keine neutrale
-> Einstellung. Ein längerer Lauf landet auf beiden Achsen weiter aussen; ob λ = 0,02
-> dort immer noch der effizienteste Punkt ist, ist **nicht gemessen**.
+> **Diese Kurve gilt bei festem Budget von 6.000 Batches.** λ ist damit nur die erste von
+> zwei Achsen; die zweite — die Trainingsdauer — ist in §13.5 nachträglich vermessen
+> worden und zeigt, dass 6.000 Batches kein neutraler Endpunkt sind.
 >
-> Die Trainingsdauer ist also eine zweite, hier nicht ausgereizte Achse. Für die
-> Belegarbeit ist die Kurve als „bei gleichem Budget von 6.000 Batches" zu lesen, nicht
-> als Endzustand.
+> Zur Lesart der Spalte „Gewinn je AUC-Punkt": Die 434 bzw. 172 sind **kumulative**
+> Werte über den gesamten Lauf, gemessen gegen die Kontrolle. Die Wechselkurse in §13.5
+> sind dagegen **marginal** (je Trainingsabschnitt). Beide Grössen beantworten
+> verschiedene Fragen — „was hat der Lauf insgesamt gekostet" gegenüber „was kostet die
+> nächste Verbesserung" — und sind nicht gegeneinander zu verrechnen.
 
-### 13.5 Was schiefging (und warum es hier steht)
+### 13.5 Die zweite Achse: Lokalisierung über die Trainingsdauer
+
+Weil `save_top_k: -1` jeden Validierungs-Checkpoint erhält, liess sich die Kurve über die
+Trainingsdauer **ohne erneutes Training** vermessen — 12 Checkpoints, alle auf denselben
+624 Test-Clips ausgewertet (`scripts/eval_training_curve.ps1`,
+`scripts/build_training_curve.py`, Rohdaten in `docs/results/training_curve.csv`).
+
+| Batch | λ=0 | λ=0,02 | λ=0,1 | Aux-Head |
+|---|---|---|---|---|
+| 1.500 | — | 2,248 | 2,522 | — |
+| 3.000 | — | 3,410 | 4,689 | — |
+| 4.500 | 1,867 | 5,509 | 8,092 | — |
+| 5.000 | — | — | — | 2,113 |
+| 6.000 | 1,867 | **8,210** | **11,418** | 2,200 |
+
+**Die Kurve ist nicht abgeflacht — sie wird steiler.** Zuwachs je 1.000 Batches:
+
+| Abschnitt | λ=0,02 | λ=0,1 |
+|---|---|---|
+| 1.500 → 3.000 | +0,774 | +1,445 |
+| 3.000 → 4.500 | +1,399 | +2,269 |
+| 4.500 → 6.000 | **+1,800** | +2,217 |
+
+Bei λ=0,02 hat sich die Zuwachsrate über den Lauf **mehr als verdoppelt**; bei λ=0,1
+steigt sie und hält dann. Kein Arm zeigt die Abflachung, die ein Plateau erfordert.
+
+Damit ist die frühere Formulierung („die Kurve ist abgeschnitten, nicht ausgelaufen")
+nicht nur bestätigt, sondern verschärft: Die Lokalisierung verbesserte sich am **Ende**
+des Trainings *schneller* als am Anfang. Das 6.000-Batch-Budget liegt nicht in der Nähe
+einer interessanten Grenze — es war eine willkürlich gewählte Stelle auf einer noch
+steigenden Kurve.
+
+**Die Kontrolle ist dagegen exakt flach:**
+
+| Batch | λ=0 |
+|---|---|
+| 4.500 | 1,867 |
+| 6.000 | 1,867 (−0,000 je 1.000 Batches) |
+
+Auf drei Nachkommastellen unverändert. Zusammen mit dem Vergleich zur Baseline
+(1,921 → 1,867 über die vollen 6.000 Batches, überlappende Konfidenzintervalle) heisst
+das: **Weitertrainieren allein bewegt die Lokalisierung nicht.** Der gesamte Gewinn der
+λ-Arme ist dem Strafterm zuzurechnen, ohne Abschlag.
+
+> Genauigkeitshinweis: Für die Kontrolle liegen nur **zwei** Messpunkte vor (4.500 und
+> 6.000), weil ihr Lauf noch vor der `save_top_k: -1`-Korrektur entstand und nur zwei
+> Checkpoints speicherte. Die Flachheit ist damit für das letzte Viertel direkt gemessen
+> und für den Gesamtverlauf über den Baseline-Vergleich belegt — nicht über vier
+> Stützstellen wie bei den λ-Armen.
+
+**Die Accuracy beschleunigt jedoch ebenfalls — nach unten.** Bei λ=0,02 fällt
+`val/auc_video` 0,9998 → 0,9978 → 0,9941 → 0,9854, also je Abschnitt −0,0020, −0,0037,
+−0,0087. Der Verlust verdoppelt sich im letzten Abschnitt. Rechnet man beide Achsen
+gegeneinander auf, ergibt sich der **marginale Wechselkurs** — gewonnene
+Lokalisierungspunkte je verlorenem AUC-Punkt:
+
+| Abschnitt | Δ Lokalisierung | Δ AUC | Lokalisierung je AUC-Punkt |
+|---|---|---|---|
+| 1.500 → 3.000 | +1,162 | −0,0020 | 578 |
+| 3.000 → 4.500 | +2,099 | −0,0037 | 567 |
+| 4.500 → 6.000 | +2,701 | −0,0087 | **311** |
+
+Der Kurs bleibt über die ersten beiden Abschnitte praktisch konstant und **halbiert sich
+dann nahezu**. Längeres Training liefert also weiterhin absolut mehr Lokalisierung, aber
+zu einem zunehmend schlechteren Preis. Das ist die eigentlich entscheidungsrelevante
+Grösse: Wer nach Lokalisierung je Accuracy-Punkt optimiert, hat den günstigsten Bereich
+bei Batch 6.000 bereits verlassen — auch wenn die Lokalisierungskurve selbst noch steigt.
+
+Diese beiden Beobachtungen widersprechen sich nicht. Die Lokalisierung ist bei 6.000
+Batches nicht gesättigt (sie steigt schneller denn je), aber die *Effizienz* des
+Verfahrens hat ihren Scheitelpunkt überschritten. Ein längerer Lauf ist damit als
+Experiment weiterhin informativ — als Betriebsempfehlung aber nicht automatisch besser.
+
+**Folge für die Arbeit:** λ und Trainingsdauer sind zwei Achsen, und nur die erste wurde
+ausgereizt. Die Kurve in §13.4 ist als Momentaufnahme bei gleichem Budget zu lesen, nicht
+als Endzustand. Wo die Lokalisierung tatsächlich ausläuft — und ob λ=0,02 dort weiterhin
+der effizienteste Punkt ist — ist **nicht gemessen** (s. §12).
+
+### 13.6 Was schiefging (und warum es hier steht)
 
 Vier Fehler haben Rechenzeit gekostet und wären im Ergebnis unsichtbar geblieben.
 Sie sind dokumentiert, weil drei davon generische Fallen sind, keine Einzelfälle:
@@ -755,7 +837,7 @@ Positiv: Der λ = 0,1-Lauf reproduzierte `val/loss` bei Schritt 2.999 auf neun
 signifikante Stellen (0,164307) gegenüber einem früheren Lauf mit derselben Config —
 die Pipeline ist deterministisch.
 
-### 13.6 Auxiliary Localization Head — der direkte Weg
+### 13.7 Auxiliary Localization Head — der direkte Weg
 
 §6.1 benennt die Ursache korrekt: Das Modell wird auf Chunk-Labels trainiert und erfährt
 nie, *welche Pixel* manipuliert wurden. Die Regularisierung behebt das indirekt, über
@@ -804,7 +886,7 @@ mit Abstand billigste Option.
 
 Reproduzieren: `python src/train.py experiment=train_video_loc_head`.
 
-### 13.7 Einordnung für die Diskussion
+### 13.8 Einordnung für die Diskussion
 
 Die in §6.3 benannte Spannung bleibt bestehen und ist jetzt quantifiziert: Der Loss
 **schreibt** dem Modell vor, wo es hinschauen soll, und es folgt — messbar, mit einem

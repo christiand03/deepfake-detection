@@ -28,6 +28,33 @@ Checkpoint gespeicherten `global_step`, nicht über Dateinamen oder Änderungsda
 > unverändert (1,867), was als Kontrollprobe für den Wiederholungslauf dient.
 > Details: §13.1 des Hauptdokuments.
 
+## `training_curve.csv` — Lokalisierung über die Trainingsdauer
+
+Dieselbe Auswertung, angewandt auf **alle** Zwischen-Checkpoints statt nur auf den
+letzten: 12 Messpunkte (λ=0 bei 4.500/6.000, λ=0,02 und λ=0,1 je bei
+1.500/3.000/4.500/6.000, Aux-Head bei 5.000/6.000). Eine Zeile je Checkpoint, mit
+Bootstrap-Intervallen für jede Metrik sowie `val_loss` / `val_auc_video` aus der
+zugehörigen `metrics.csv`.
+
+Möglich ohne erneutes Training, weil `save_top_k: -1` jeden Validierungs-Checkpoint
+erhält. Ausgewertet in §13.5; die Kernaussage ist, dass die Lokalisierung bei Batch 6.000
+noch **beschleunigt** (λ=0,02: +0,774 → +1,800 je 1.000 Batches), die Kontrolle dagegen
+exakt flach bleibt (−0,000/1k).
+
+```bash
+powershell -File scripts/eval_training_curve.ps1   # ~30 min, 12 Checkpoints
+python -m scripts.build_training_curve             # -> docs/results/training_curve.csv
+```
+
+`build_training_curve.py` gibt zusätzlich eine Plateau-Diagnose auf stdout aus: die
+Zuwachsrate je 1.000 Batches pro Abschnitt. Eine Rate, die nicht gegen null fällt,
+bedeutet, dass der Lauf abgeschnitten und nicht ausgelaufen ist.
+
+> Die Lauf-Verzeichnisse sind in beiden Skripten **fest eingetragen**, nicht gesucht.
+> Grund: die Experimentnamen sind Präfixe voneinander (`…lambda0` liegt in
+> `…lambda01`), und eine Teilstring-Suche hatte genau deshalb schon einmal den falschen
+> Lauf getroffen.
+
 ## Format
 
 Jede Datei enthält pro Metrik den Mittelwert über Clips und ein 95-%-Bootstrap-Intervall:
