@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
@@ -17,10 +16,13 @@ from src.api.clip_registry import (
     get_clip_video_path,
     load_clips,
 )
+from src.api.executor import inference_executor
 from src.api.inference import (
     ModelNotReadyError,
     run_audio_inference,
     run_multimodal_inference,
+    run_video_heatmap,
+    run_video_heatmap_h5,
     run_video_inference,
     run_video_inference_h5,
 )
@@ -28,14 +30,12 @@ from src.api.schemas import (
     AnalysisResultSchema,
     AudioAnalysisSchema,
     CropBoxSchema,
+    HeatmapResultSchema,
 )
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/analyze", tags=["analyze"])
-
-# Shared thread-pool so GPU inference runs off the event loop
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference")
 
 # ── Cache key ─────────────────────────────────────────────────────────────────
 
@@ -161,6 +161,65 @@ def _run_analysis(
     return result
 
 
+def _run_heatmap(clip_id: str, method: str) -> HeatmapResultSchema:
+    """Overlay-only worker for the heatmap-method switch (docs/chefer_ablation.md §5).
+
+    Cached under its own key, so it never touches the analysis cache and the two never
+    invalidate each other.
+    """
+    cache_key = f"{clip_id}__heatmap_{method}"
+    cached = load_cached(cache_key, HeatmapResultSchema)
+    if cached is not None:
+        log.debug("Cache hit for %s", cache_key)
+        return cached
+
+    h5_meta = get_clip_h5_metadata(clip_id)
+    if h5_meta is not None:
+        if not h5_meta.video_path.exists():
+            raise FileNotFoundError(
+                f"Normalized video missing for clip '{clip_id}': {h5_meta.video_path}. "
+                "Run preprocessing to materialise it under data/normalized/."
+            )
+        frames = run_video_heatmap_h5(h5_meta, get_clip_h5_chunks(clip_id), method)
+    else:
+        clip_path = get_clip_video_path(clip_id)
+        if clip_path is None:
+            raise ValueError(f"Clip '{clip_id}' not found in registry.")
+        if not clip_path.exists():
+            raise FileNotFoundError(f"Video file missing: {clip_path}")
+        frames = run_video_heatmap(clip_path, method)
+
+    result = HeatmapResultSchema(clipId=clip_id, method=method, heatmapFrames=frames)
+    save_cache(cache_key, result)
+    return result
+
+
+@router.post("/{clip_id}/heatmap", response_model=HeatmapResultSchema)
+async def analyze_clip_heatmap(
+    clip_id: str,
+    method: Literal["lrp_magnitude", "chefer"] = "chefer",
+) -> HeatmapResultSchema:
+    """Recompute ONLY the player overlay with an alternative explanation method.
+
+    ``lrp_magnitude`` renders the bivariate magnitude channel with the direction axis
+    dropped; ``chefer`` runs the LRP-independent Chefer et al. (ICCV 2021) rollout.
+
+    The response carries nothing but the frames on purpose: verdict, confidence and
+    relevance timelines, region scores and the whole of Phase 3/4 keep running on
+    bivariate AttnLRP no matter which method is requested here. See
+    ``docs/chefer_ablation.md`` §5 and §11.1.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(inference_executor, _run_heatmap, clip_id, method)
+    except ModelNotReadyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Heatmap computation failed: {exc}") from exc
+
+
 @router.post("/{clip_id}", response_model=AnalysisResultSchema)
 async def analyze_clip(
     clip_id: str,
@@ -180,7 +239,7 @@ async def analyze_clip(
     """
     loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(_executor, _run_analysis, clip_id, use_multimodal, fusion_mode)
+        return await loop.run_in_executor(inference_executor, _run_analysis, clip_id, use_multimodal, fusion_mode)
     except ModelNotReadyError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (ValueError, FileNotFoundError) as exc:

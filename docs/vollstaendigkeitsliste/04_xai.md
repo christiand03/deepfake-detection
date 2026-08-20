@@ -242,3 +242,45 @@ Inkonsistenz. Die erklärten Gewichte sind exakt die trainierten.
 | Der Eager-Wächter selbst wirft bei SDPA | `test_attn_implementation.py::test_require_eager_attention_guard` |
 | `explain()` verweigert SDPA-Modelle | `test_attn_implementation.py::test_explain_refuses_sdpa_model` |
 | Laufzeit-Audio nutzt tatsächlich den Dual-Seed | `test_api_inference.py::test_run_audio_inference_uses_dual_seed_per_class` |
+
+---
+
+## Chefer-Ablation — die LRP-unabhängige Zweitmethode **[K]**
+
+Ergänzt seit 2026-08-20. Vollständige Begründung: [`../chefer_ablation.md`](../chefer_ablation.md).
+
+```
+src/utils/chefer.py                    Rollout-Regel, modellagnostisch (wie attnlrp.py)
+        ↑ genutzt von
+VideoMAEModule.explain_chefer()        Token→Frame-Abbildung, laeuft un-gepatcht
+        ↑ genutzt von
+scripts/eval_localization.py           --relevance chefer  (Messung)
+src/api/inference.py                   _compute_heatmaps_chefer  (Frontend-Overlay)
+```
+
+**Warum eine zweite Methode.** Der bivariate AttnLRP-Pfad ist genau die Größe, auf die
+das Relevance-Regularization-Training optimiert. Eine Verbesserung dort ist deshalb
+nicht selbsttragend. Chefer (ICCV 2021) teilt keine Berechnung mit diesem Loss und
+liefert die methodenunabhängige Gegenprobe.
+
+**Zwei benannte Abweichungen vom Paper**, beide architektonisch erzwungen:
+`readout="mean"` statt CLS-Zeile (VideoMAE hat kein CLS-Token, der Kopf mittelt), und
+acht statt sechzehn Zeitpositionen (`tubelet_size=2`). Zusätzlich wird die
+Identitäts-Initialisierung vor der Ablesung abgezogen (`R − I`) — ohne das legt sie
+einen `1/n`-Sockel unter jedes Token und die Metrik läuft konstruktionsbedingt gegen
+Zufallsniveau.
+
+**Patch-Scope.** `explain()` patcht `lxt` prozessglobal und dauerhaft; die Patches
+verändern das *Backward*. Chefer läuft deshalb in
+`src.utils.attnlrp.lxt_patches_disabled`, sonst wäre `∂logit/∂attention` ein
+LRP-Pseudogradient. Alle API-Router teilen sich seit 2026-08-20 **einen** Executor
+(`src/api/executor.py`), damit das Ent-Patchen nicht mit einem parallelen
+Relevanzlauf kollidiert.
+
+**Ergebnis (vorläufig, demo-Split, 17 Clips).** `ratio_over_chance` steigt nach der
+Regularisierung bei beiden Methoden signifikant (AttnLRP +6,30, Chefer +0,848, beide
+p = 0,0003). Chefers Karte ist dabei deutlich flacher: Formfaktor `p99/p50` von 2,5
+gegenüber 13,4 bei der LRP-Magnitude — beide identisch normiert.
+
+**Tests:** `tests/test_chefer.py` (16), `tests/test_lxt_patch_neutralize.py` (12),
+`tests/test_api_heatmap.py` (14). Smoke: `scripts/smoke_chefer.py`.

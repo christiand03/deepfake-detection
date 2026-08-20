@@ -292,7 +292,69 @@ export const heatmapOverlay: Explanation = {
             stufenlos ein/aus — zum Vergleich mit dem rohen Bild.
           </li>
           <li>Beim Abspielen/Scrubben wechselt die Heatmap frameweise mit.</li>
+          <li>
+            <Chip color="#f59e0b">Heatmap-Methode</Chip> schaltet zwischen drei
+            Darstellungen um — <strong>ausschließlich für dieses Overlay</strong>.
+            Verdict, Confidence- und Relevance-Timeline, Region-Scores und Phase 3/4
+            laufen unverändert auf Bivariate-LRP weiter, auch wenn hier umgestellt ist.
+          </li>
         </UL>
+      ),
+    },
+    {
+      kind: 'method',
+      title: 'Die drei Heatmap-Methoden (Ablation)',
+      body: (
+        <>
+          <KeyValueList
+            items={[
+              {
+                k: 'Bivariate LRP',
+                v: (
+                  <>
+                    Der Default. <Term>Magnitude</Term> (Deckkraft) und{' '}
+                    <Term color="#ff7070">Direction</Term> (rot/blau) zugleich — zwei
+                    Achsen, wie oben beschrieben.
+                  </>
+                ),
+              },
+              {
+                k: 'LRP — nur Magnitude',
+                v: (
+                  <>
+                    Dieselbe AttnLRP-Rechnung, aber die Richtungsachse wird verworfen.
+                    Eine sequenzielle Colormap statt rot/blau, weil eine reine
+                    Magnitude-Karte kein Vorzeichen hat.
+                  </>
+                ),
+              },
+              {
+                k: 'Chefer et al.',
+                v: (
+                  <>
+                    <Term color="#f59e0b">Andere Methode</Term>, nicht nur andere
+                    Darstellung: gradienten-gewichtetes Attention-Rollout (ICCV 2021),
+                    das keine Zeile Code mit unserem LRP-Pfad teilt. Bauartbedingt
+                    nicht-negativ und breiter gestreut.
+                  </>
+                ),
+              },
+            ]}
+          />
+          <Callout>
+            Warum drei Stufen und nicht zwei: Der Schritt 1 → 2 zeigt, was das Weglassen
+            der Richtungsachse ausmacht, der Schritt 2 → 3 den Unterschied der Methode.
+            Ein Zweifach-Schalter würde beides gleichzeitig ändern — man könnte dann
+            nicht sagen, woher ein sichtbarer Unterschied kommt.
+          </Callout>
+          <P>
+            Gemessen gegen die Ground-Truth-Manipulationsmasken zeigen beide Methoden
+            dieselbe Verbesserung der Lokalisierung nach dem
+            Relevance-Regularization-Training. Da Chefer nicht die Größe ist, auf die
+            trainiert wurde, ist das der Teil der Verbesserung, der über die optimierte
+            Metrik hinaus generalisiert.
+          </P>
+        </>
       ),
     },
     {

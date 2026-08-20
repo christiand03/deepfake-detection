@@ -42,6 +42,11 @@ Usage::
     # compare a regularized checkpoint against the same chunks
     python -m scripts.eval_localization --ckpt checkpoints/videomae_relevance_reg.ckpt \\
         --split test --resume-csv temp/loc_reg.csv
+
+    # Chefer ablation arm — the LRP-independent method on the SAME chunks and metrics
+    # (docs/chefer_ablation.md). Run it for both checkpoints to get the 2x2 of §9.
+    python -m scripts.eval_localization --ckpt checkpoints/videomae_phase2.ckpt \\
+        --split test --relevance chefer --resume-csv temp/loc_chefer_baseline.csv
 """
 
 from __future__ import annotations
@@ -159,20 +164,27 @@ def load_mask_store(processed_dir: Path, split: str) -> tuple[np.ndarray, np.nda
 
 
 def relevance_map_224(model: VideoMAEModule, pixel_values: torch.Tensor, mode: str) -> torch.Tensor:
-    """Raw un-normalized AttnLRP relevance at 224 resolution.
+    """Raw un-normalized relevance at 224 resolution, for the requested method.
 
-    Split out from :func:`pool_to_grid` so one AttnLRP pass feeds both the grid metrics
-    and the ``--per-region`` attribution. Explaining a chunk is by far the most expensive
-    step in the sweep, and it must not be run twice for the same chunk.
+    Split out from :func:`pool_to_grid` so one explanation pass feeds both the grid
+    metrics and the ``--per-region`` attribution. Explaining a chunk is by far the most
+    expensive step in the sweep, and it must not be run twice for the same chunk.
+
+    Every mode goes through this one function on purpose: the chunk selection, the mask
+    pooling, the frame gating and all five metrics stay byte-identical across methods, so
+    a difference in the reported numbers is a difference in the METHOD and not in the
+    measurement. A separate script per method would put that guarantee at risk.
 
     Args:
         mode: ``"fake"`` for the single-target FAKE relevance (matches the legacy
-              ``signed_np`` channel and doc §4's region attribution), or ``"bivariate"``
-              for the engagement magnitude ``|R_fake| + |R_real|`` that the UI renders.
+              ``signed_np`` channel and doc §4's region attribution); ``"bivariate"``
+              for the engagement magnitude ``|R_fake| + |R_real|`` that the UI renders;
+              or ``"chefer"`` for the LRP-independent Chefer et al. (ICCV 2021) rollout
+              (``docs/chefer_ablation.md``).
 
     Returns:
         ``(B, T, IMG_SIZE, IMG_SIZE)``, signed for ``fake`` and non-negative for
-        ``bivariate``.
+        ``bivariate`` and ``chefer``.
     """
     if mode == "bivariate":
         rel_fake, rel_real, _target = model.explain(pixel_values, per_class=True)
@@ -180,6 +192,12 @@ def relevance_map_224(model: VideoMAEModule, pixel_values: torch.Tensor, mode: s
     if mode == "fake":
         # explain() returns (heatmap, resolved_target_class) on this path.
         heatmap, _target = model.explain(pixel_values, target_class=1, normalize=False)
+        return heatmap
+    if mode == "chefer":
+        # Runs un-patched (explain_chefer wraps itself in lxt_patches_disabled), so a
+        # sweep may mix this mode with the AttnLRP ones in one process without the
+        # LRP backward rules contaminating the attention gradients.
+        heatmap, _target = model.explain_chefer(pixel_values, target_class=1)
         return heatmap
     msg = f"unknown relevance mode {mode!r}"
     raise ValueError(msg)
@@ -406,10 +424,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ckpt", type=Path, required=True, help="VideoMAEModule checkpoint")
     parser.add_argument("--processed-dir", type=Path, default=Path("data/processed"))
-    parser.add_argument("--split", default="test", choices=["train", "val", "test"])
+    parser.add_argument("--split", default="test", choices=["train", "val", "test", "demo"])
     parser.add_argument("--max-chunks", type=int, default=None)
     parser.add_argument("--max-clips", type=int, default=None, help="Cap distinct clips (>=30 for a baseline)")
-    parser.add_argument("--relevance", default="fake", choices=["fake", "bivariate"])
+    parser.add_argument(
+        "--relevance",
+        default="fake",
+        choices=["fake", "bivariate", "chefer"],
+        help="Explanation method. 'chefer' is the LRP-independent ablation arm "
+        "(docs/chefer_ablation.md) — same chunks, same metrics, different method.",
+    )
     parser.add_argument("--top-frac", type=float, default=0.10, help="Top-fraction cut for the IoU")
     parser.add_argument("--per-region", action="store_true", help="Also record the §4.3 region breakdown")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

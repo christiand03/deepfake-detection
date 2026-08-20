@@ -432,3 +432,34 @@ Phase-3/4-Spieler unter `data/phase_media/` (überschreibbar via `PHASE_MEDIA_DI
 WhisperX-Transkriptcache unter `.whisperx_cache/`. Beide überdauern den Prozess; der Sauber-Clip
 wird je Clip-Stamm genau einmal kodiert und danach für alle Parametersätze und beide Phasen
 wiederverwendet.
+
+---
+
+## Magnitude-Rendering und der Chefer-Pfad **[K]**
+
+Ergänzt 2026-08-20 (`src/api/inference.py`).
+
+| Funktion | Aufgabe |
+|---|---|
+| `_compute_heatmaps_chefer` | Fensterlauf wie `_compute_heatmaps_chunked`, gleiche 16-Frame-Fenster, gleiche clip-globale `_percentile_normalize` |
+| `_render_magnitude_frames` | Upprojektion + einachsiges Rendering, geteilt von beiden Magnitude-Stufen |
+| `_heatmap_frames_only` | schlanker Pfad: nur `heatmapFrames`, kein Verdict, keine Regionen |
+| `run_video_heatmap_h5` / `run_video_heatmap` | Registry- bzw. Face-Detection-Einstieg |
+
+**Renderer `magnitude_global=True`** (neuer Zweig in `_array_to_data_uri`). Bewusst
+**nicht** `magnitude_alpha`, das pro Bild auf den eigenen Spitzenwert normiert und damit
+jeden Frame gleich deckend macht — das zerstört die zeitliche Lokalisierung, die der
+bivariate Pfad sorgfältig erhält.
+
+**Farbwahl: Grau-zu-Weiß, nicht bunt.** In der bivariaten Kodierung rendert ein Pixel
+ohne Richtungsneigung near-white; eine reine Magnitude-Karte hat nirgends eine Neigung,
+also ist neutral ihre konsequente Darstellung. Stufe 2 des Schalters ist damit auch
+optisch exakt „dieselbe Karte, Richtungsachse entfernt". Zwei farbige Verläufe wurden
+zuvor verworfen, beide an der Messung: volles `inferno` erreichte 25/255 mittlere
+Helligkeit sichtbarer Pixel (unsichtbar auf dunklem Video), ein gefenstertes Amber
+brauchte ein steiles Alpha-Gamma, das schwache Frames ganz verschwinden ließ.
+
+**Normalisierung ist zwischen den Methoden identisch** (`_percentile_normalize`,
+`pct=99`, clip-global, beide klippen exakt 1,00 %). Der sichtbare Unterschied kommt aus
+der Form der Karten, nicht aus der Behandlung — Details in
+[`../chefer_ablation.md`](../chefer_ablation.md) §9.2.

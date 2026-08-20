@@ -280,6 +280,28 @@ export interface AnalysisResult {
   fusionMode?: 'cross_attention' | 'concat' | null
 }
 
+/**
+ * Which explanation method renders the PLAYER OVERLAY (docs/chefer_ablation.md §5).
+ *
+ * Scope: this swaps the video overlay and nothing else. Verdict, confidence and
+ * relevance timelines, region scores and Phase 3/4 always stay on bivariate AttnLRP —
+ * the alternative methods come from a separate endpoint that returns only frames, so
+ * they structurally cannot influence anything else.
+ *
+ *  - `bivariate`     magnitude + direction, the red/blue default view
+ *  - `lrp_magnitude` the SAME LRP pass, direction axis dropped (isolates the encoding
+ *                    change from the method change in a three-way comparison)
+ *  - `chefer`        Chefer et al., ICCV 2021 — LRP-independent, non-negative
+ */
+export type HeatmapMethod = 'bivariate' | 'lrp_magnitude' | 'chefer'
+
+/** Overlay-only response of `POST /analyze/{clip}/heatmap`. */
+export interface HeatmapResult {
+  clipId: string
+  method: Exclude<HeatmapMethod, 'bivariate'>
+  heatmapFrames: string[]
+}
+
 export type FusionMode = 'cross_attention' | 'concat'
 export type ModelMode = 'unimodal' | 'multimodal'
 

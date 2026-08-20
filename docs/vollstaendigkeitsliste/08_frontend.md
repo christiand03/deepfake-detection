@@ -431,3 +431,34 @@ verwenden.
    `differenceFrames` existieren im Schema, werden aber von keiner Komponente
    dargestellt; `FrameTimeline.tsx` ist gar nicht erst verdrahtet. Wer vom Schema auf
    die Oberfläche schließt, beschreibt Ansichten, die es nicht gibt.
+
+---
+
+## Heatmap-Methodenschalter **[K]**
+
+Ergänzt 2026-08-20.
+
+| Datei | Rolle |
+|---|---|
+| `src/hooks/useHeatmapMethod.ts` | Methodenwahl, Lazy-Fetch, Session-Cache je (Clip, Methode) |
+| `src/api/client.ts` → `fetchHeatmap` | ruft `POST /analyze/{clip}/heatmap` |
+| `src/components/video/AnalysisControls.tsx` | dreistufiger `SegmentedToggle` (vertikal), Bildunterschrift, Spinner |
+| `src/components/video/VideoPanel.tsx` | schaltet **nur** die Prop `heatmapFrames` um; Badge am Player |
+| `src/explanations/content/heatmapOverlay.tsx` | Abschnitt „Die drei Heatmap-Methoden" |
+
+**Warum ein eigener Hook statt eines Flags in `useAnalysis`.** Die Methodenwahl darf das
+Analyseergebnis nie invalidieren oder umformen. Getrennte Zustände machen das unmöglich;
+`useAnalysis` bleibt unangetastet. Die gewählte Methode trägt die Clip-ID mit sich und
+wird beim Rendern abgeleitet — ein Clipwechsel fällt dadurch auf die Standardansicht
+zurück, **ohne** einen Effekt, der den Zustand nachträglich zurücksetzt (der würde einmal
+mit den Frames des alten Clips unter dem neuen Video rendern).
+
+**Drei Stufen, nicht zwei.** `1 → 2` isoliert den Wegfall der Richtungsachse, `2 → 3` den
+Methodenunterschied. Ein Zweifach-Schalter änderte beides gleichzeitig, und kein
+Screenshot könnte die Ursache trennen. Nachgemessen: die Alpha-Korrelation zwischen
+Stufe 1 und 2 ist **exakt 1,000000** (dieselbe LRP-Rechnung), zwischen 2 und 3 **0,748**.
+
+**Geltungsbereich, dreifach ausgesprochen:** Label `HEATMAP-METHODE`, dauerhaft sichtbare
+Bildunterschrift am Schalter, und ein Badge am Player, sobald die Ansicht nicht der
+Default ist — damit ein auf den Player beschnittener Screenshot die Methode und den
+Geltungsbereich noch mit sich trägt.

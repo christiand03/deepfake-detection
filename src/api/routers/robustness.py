@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
 
 from src.api.analysis_cache import load_cached, save_cache
 from src.api.clip_registry import get_clip_video_path
+from src.api.executor import inference_executor
 from src.api.inference import (
     ModelNotReadyError,
     run_audio_robustness_inference,
@@ -18,8 +18,6 @@ from src.api.inference import (
 from src.api.schemas import Phase3ResultSchema, RobustnessRequest
 
 router = APIRouter(prefix="/robustness", tags=["robustness"])
-
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="robustness")
 
 
 def _cache_key(req: RobustnessRequest) -> str:
@@ -79,7 +77,7 @@ async def robustness_test(req: RobustnessRequest) -> Phase3ResultSchema:
     """Apply social-media degradation to a clip and return updated xAI results."""
     loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(_executor, _run, req)
+        return await loop.run_in_executor(inference_executor, _run, req)
     except ModelNotReadyError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except FileNotFoundError as exc:

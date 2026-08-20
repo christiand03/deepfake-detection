@@ -625,3 +625,91 @@ class VideoMAEModule(BaseDeepfakeModule):
             heatmap = rearrange(heatmap_2d, "(b t) (h w) -> b t h w", b=B, t=T, h=H, w=W)
 
         return heatmap, target_class
+
+    def explain_chefer(
+        self,
+        pixel_values: torch.Tensor,
+        target_class: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute Chefer et al. (ICCV 2021) relevance maps for a batch of video clips.
+
+        The LRP-independent second opinion on localisation (``docs/chefer_ablation.md``).
+        Accumulates gradient-weighted attention across the twelve blocks instead of
+        decomposing the logit down to the pixels, and returns a map on the SAME
+        ``(B, T, 224, 224)`` grid as :meth:`explain` so the two are directly comparable.
+
+        Two deviations from the paper, both forced by the architecture and both to be
+        named as such in any write-up (``docs/chefer_ablation.md`` §4):
+
+        * **Readout.** VideoMAE has no CLS token — the head pools with ``mean(1)``
+          (``use_mean_pooling=True``). The paper reads the CLS row of the relevance
+          matrix; the exact analogue for a uniform pooling head is the mean over all
+          query rows, so ``readout="mean"`` is used.
+        * **Temporal resolution.** ``tubelet_size=2`` means one token spans two frames,
+          so the map has 8 distinct time steps per 16-frame window, not 16. Each slice is
+          repeated across the two frames it covers. That is the model's native temporal
+          granularity: the blocks never distinguish the two frames of a tubelet.
+
+        Runs under :func:`~src.utils.attnlrp.lxt_patches_disabled` — mandatory, not
+        defensive. :meth:`explain` patches lxt permanently and process-globally, and
+        those patches rewrite the *backward* of LayerNorm, GELU and attention. Without
+        the guard, ``∂logit/∂attention`` would be an LRP pseudo-gradient and this method
+        would return a plausible-looking map that is not Chefer's at all.
+
+        Must be called in eval mode.
+
+        Args:
+            pixel_values: ``(B, T, C, H, W)`` input batch.
+            target_class: Class index to explain. ``None`` explains the predicted class.
+
+        Returns:
+            heatmap: Non-negative ``(B, T, H, W)`` relevance, **un-normalised** — the
+                caller normalises across a whole clip, exactly as for the bivariate
+                path, so weak windows stay weak and windows remain comparable.
+            resolved_target: ``(B,)`` long tensor of the explained class indices.
+        """
+        assert not self.training, "explain_chefer() must be called in eval mode: model.eval()"
+        self._require_eager_attention(self.net)
+
+        import torch.nn.functional as F_nn
+        from einops import rearrange, repeat
+
+        from src.utils.attnlrp import lxt_patches_disabled
+        from src.utils.chefer import compute_chefer_relevance
+
+        def forward_fn(x: torch.Tensor) -> tuple[torch.Tensor, tuple[torch.Tensor, ...]]:
+            out = self.net(pixel_values=x, output_attentions=True)
+            return out.logits, out.attentions
+
+        with lxt_patches_disabled():
+            relevance, resolved = compute_chefer_relevance(
+                forward_fn=forward_fn,
+                input_tensor=pixel_values,
+                target_class=target_class,
+                readout="mean",
+            )
+
+        # Token grid -> pixel grid. Derived from the config rather than hardcoded, with
+        # the token count asserted: a silent geometry change (a different tubelet size or
+        # patch size) would otherwise reshape into a wrong-but-plausible map.
+        b, frames, _c, height, width = pixel_values.shape
+        cfg = self.net.config
+        time_steps = frames // cfg.tubelet_size
+        grid = cfg.image_size // cfg.patch_size
+        expected_tokens = time_steps * grid * grid
+        if relevance.shape[1] != expected_tokens:
+            raise RuntimeError(
+                f"Chefer returned {relevance.shape[1]} tokens but the config implies "
+                f"{expected_tokens} ({time_steps} time steps x {grid}x{grid} patches). "
+                "The token geometry changed — the reshape below would silently produce "
+                "a wrong map."
+            )
+
+        tokens = rearrange(relevance, "b (t g1 g2) -> (b t) 1 g1 g2", t=time_steps, g1=grid, g2=grid)
+        upsampled = F_nn.interpolate(tokens, size=(height, width), mode="bilinear", align_corners=False)
+        per_tubelet = rearrange(upsampled, "(b t) 1 h w -> b t h w", b=b, t=time_steps)
+        # One tubelet covers `tubelet_size` consecutive frames; index t*r + r' lands on
+        # the frames that token actually spans.
+        heatmap = repeat(per_tubelet, "b t h w -> b (t r) h w", r=cfg.tubelet_size)
+
+        return heatmap, resolved

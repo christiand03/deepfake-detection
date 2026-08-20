@@ -15,10 +15,19 @@ Detail im Glossar [`explanations/xai_and_explainability.md`](explanations/xai_an
 - **Das Problem:** Grad-CAM nutzt die topologische Struktur der finalen
   Convolution-Matrix — Transformer besitzen solche Restriktionen nicht (flache
   Token).
-- **Attention Rollout:** Rollt die Attention-Weights (Softmax nach Q·Kᵀ) Schicht
-  für Schicht auf die Eingabe-Patches zurück. Leichtgewichtiger Indikator
-  ("guckt das Modell auf den Mund oder die Wand?"). Beschreibt jedoch nur den
-  Informationsfluss, nicht die kausale Relevanz.
+- **Attention Rollout (Grundform):** Rollt die Attention-Weights (Softmax nach
+  Q·Kᵀ) Schicht für Schicht auf die Eingabe-Patches zurück. Leichtgewichtiger
+  Indikator ("guckt das Modell auf den Mund oder die Wand?"). Beschreibt jedoch
+  nur den Informationsfluss, nicht die kausale Relevanz — die reine Form ist
+  **nicht** implementiert.
+- **Chefer et al., ICCV 2021 (implementierte Zweitmethode, `src/utils/chefer.py`):**
+  Attention-Rollout, aber **gradienten-gewichtet** — `Ā = E_h[(∇A ⊙ A)⁺]`,
+  akkumuliert über `R = R + Ā·R`. Damit ist es kein reiner Informationsfluss mehr,
+  sondern an das erklärte Logit gebunden. Seit 2026-08-20 als **LRP-unabhängige
+  Ablation** implementiert (Phase 1, Video): Es teilt keine Berechnung mit AttnLRP
+  und dient als methodisch unabhängige Zweitmeinung zur Lokalisierungsfrage.
+  Nicht-negativ, ohne Richtungskanal. Vollständige Begründung, Messwerte und
+  Grenzen: [`chefer_ablation.md`](chefer_ablation.md).
 - **AttnLRP (implementierte Primärmethode, Achtibat et al., ICML 2024):** Eine
   für Transformer-Attention entwickelte LRP-Variante. Sie kalkuliert nicht nur
   *wo* die Aufmerksamkeit lag, sondern explizit, ob ein Pixel positiv (Richtung

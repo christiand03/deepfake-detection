@@ -5,7 +5,14 @@
  * analyzeClip always uses the real backend — no mock path.
  */
 
-import type { AnalysisResult, ClipMeta, Phase3Result, Phase4Result } from '../types/analysis'
+import type {
+  AnalysisResult,
+  ClipMeta,
+  HeatmapMethod,
+  HeatmapResult,
+  Phase3Result,
+  Phase4Result,
+} from '../types/analysis'
 import { DEMO_CLIPS, makeMockPhase3Result, makeMockPhase4Result } from '../lib/mockData'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
@@ -55,6 +62,26 @@ export async function analyzeClip(
     throw new Error(`POST ${url} → ${res.status}: ${text}`)
   }
   return res.json() as Promise<AnalysisResult>
+}
+
+/**
+ * Fetch ONLY the player overlay rendered with an alternative explanation method.
+ *
+ * Separate from `analyzeClip` on purpose: the response carries frames and nothing else,
+ * so switching the heatmap method cannot touch the verdict, the timelines or the region
+ * scores. Backend caches per (clip, method), so re-toggling is cheap after the first call.
+ */
+export async function fetchHeatmap(
+  clipId: string,
+  method: Exclude<HeatmapMethod, 'bivariate'>,
+): Promise<HeatmapResult> {
+  const url = `/api/analyze/${clipId}/heatmap?method=${method}`
+  const res = await fetch(url, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`POST ${url} → ${res.status}: ${text}`)
+  }
+  return res.json() as Promise<HeatmapResult>
 }
 
 export async function runRobustnessTest(

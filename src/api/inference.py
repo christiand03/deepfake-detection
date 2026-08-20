@@ -701,6 +701,7 @@ def _array_to_data_uri(
     heatmap: np.ndarray,
     alpha_mask: np.ndarray | None = None,
     magnitude_alpha: bool = False,
+    magnitude_global: bool = False,
     direction: np.ndarray | None = None,
     max_alpha: float = 0.95,
     alpha_gamma: float = 0.5,
@@ -730,6 +731,10 @@ def _array_to_data_uri(
             keeps neutral / near-zero regions (incl. everything outside the face
             crop, which is exactly zero) transparent, so the crop edge fades out
             seamlessly (no hard rectangle).
+      * ``magnitude_global=True``: single-axis magnitude view.  The value is used
+        AS-IS (it is already clip-globally normalised), mapped through the
+        sequential ``afmhot`` colormap (bright end only), with ``alpha = mag ** alpha_gamma *
+        max_alpha``.  Cross-frame comparable, unlike ``magnitude_alpha``.
       * ``alpha_mask`` provided: pixels where the mask is ``False`` are fully
         transparent (alpha = 0); the rest get ``max_alpha``.
       * neither: keep the colormap's default alpha (fully opaque).
@@ -781,6 +786,37 @@ def _array_to_data_uri(
         color_mag = np.clip((np.abs(d) ** dir_gamma) * dir_gain, 0.0, dir_cap)
         color_val = np.sign(d) * color_mag
         rgba_float = cmap(norm(color_val))  # (H, W, 4) float [0, 1]
+        rgba_float[..., 3] = np.clip(mag**alpha_gamma * max_alpha, 0.0, max_alpha)
+    elif magnitude_global:
+        # Magnitude-only view (the switch's middle and right stages, see
+        # docs/chefer_ablation.md §5): one axis, no direction. Deliberately NOT
+        # `magnitude_alpha`, which re-peaks per image — that makes every frame equally
+        # opaque and destroys the temporal localisation the bivariate path is careful to
+        # preserve. The magnitude arrives already percentile-normalised CLIP-GLOBAL, so
+        # it is used AS-IS and a weakly-engaged frame stays faint.
+        #
+        # NEUTRAL, not a hue. This is deliberately the bivariate encoding with the
+        # direction channel held at zero: there, a pixel with no directional lean renders
+        # near-white and alpha alone carries the magnitude. A magnitude-only map has no
+        # lean anywhere, so grey-to-white IS its consistent representation, and stage 2 of
+        # the switch becomes exactly "the same map with the direction axis removed" —
+        # visually as well as conceptually, which is what the three-stage comparison is
+        # meant to isolate (docs/chefer_ablation.md §5).
+        #
+        # Two coloured ramps were tried first and both failed on measurement. Full
+        # `inferno` put the mean brightness of visible pixels at 25/255 (bivariate reaches
+        # 245) — invisible on dark video. Windowing it to a bright amber fixed that but
+        # needed a steep alpha gamma to stop the near-uniform bulk becoming an opaque
+        # veil, and that gamma in turn made weakly-engaged frames vanish: at the clip-wide
+        # p50 of 0.075 the alpha fell to 0.02, so the overlay only appeared on the
+        # manipulated frames. Grey needs neither correction — it stays legible at the
+        # bivariate's own alpha curve, so a quiet frame still shows a faint wash.
+        #
+        # The floor keeps the ramp off pure black, which would be invisible against dark
+        # footage exactly where alpha is still non-zero.
+        color_floor, color_ceiling = 0.55, 1.0
+        mag = np.clip(np.abs(heatmap).astype(np.float32), 0.0, 1.0)
+        rgba_float = plt.get_cmap("gray")(color_floor + (color_ceiling - color_floor) * mag)
         rgba_float[..., 3] = np.clip(mag**alpha_gamma * max_alpha, 0.0, max_alpha)
     elif magnitude_alpha:
         mag = np.abs(heatmap).astype(np.float32)
@@ -1321,6 +1357,155 @@ def _compute_heatmaps_chunked(
     magnitude_np, direction_np = to_bivariate(rel_fake_np, rel_real_np)
     signed_np = _percentile_normalize(rel_fake_np)
     return magnitude_np, direction_np, signed_np, per_window_conf
+
+
+def _compute_heatmaps_chefer(model: VideoMAEModule, all_frames: torch.Tensor) -> np.ndarray:
+    """Per-frame Chefer relevance for every frame in *all_frames*.
+
+    The LRP-independent ablation arm (``docs/chefer_ablation.md``). Mirrors
+    :func:`_compute_heatmaps_chunked` window for window — same 16-frame windows, same
+    last-window padding, same clip-global percentile normalisation — so the only
+    difference between the two heatmaps is the METHOD, never the plumbing.
+
+    ``explain_chefer`` runs itself un-patched, so mixing this with AttnLRP calls in one
+    process is safe (``src.utils.attnlrp.lxt_patches_disabled``).
+
+    Args:
+        model:      :class:`VideoMAEModule` in eval mode.
+        all_frames: Float tensor of shape ``(N, C, H, W)``.
+
+    Returns:
+        ``(N, IMG_SIZE, IMG_SIZE)`` float32 in ``[0, 1]`` — non-negative, so unlike the
+        bivariate channels there is no sign to preserve.
+    """
+    n = all_frames.shape[0]
+    relevance = np.zeros((n, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+    n_chunks = -(-n // NUM_FRAMES)  # ceiling division
+    for chunk_idx, chunk_start in enumerate(range(0, n, NUM_FRAMES)):
+        chunk_end = min(chunk_start + NUM_FRAMES, n)
+        chunk = all_frames[chunk_start:chunk_end]
+        if chunk.shape[0] < NUM_FRAMES:
+            pad = chunk[-1:].expand(NUM_FRAMES - chunk.shape[0], -1, -1, -1)
+            chunk = torch.cat([chunk, pad], dim=0)
+        pv = chunk.unsqueeze(0).to(_device)
+        # target_class=1 (FAKE) matches the legacy signed_np channel and the
+        # eval_localization arm, so UI and measurement explain the same logit.
+        heatmap, _target = model.explain_chefer(pixel_values=pv, target_class=1)
+        rel = heatmap.detach().cpu().numpy()[0]
+        relevance[chunk_start:chunk_end] = rel[: chunk_end - chunk_start]
+        log.debug("Chefer heatmap chunk %d/%d processed.", chunk_idx + 1, n_chunks)
+
+    return _percentile_normalize(relevance)
+
+
+def _render_magnitude_frames(
+    magnitude_np: np.ndarray,
+    per_window_boxes: list[tuple[int, int, int, int]] | None,
+    crop_box: tuple[int, int, int, int],
+    orig_w: int,
+    orig_h: int,
+) -> list[str]:
+    """Upproject and render a magnitude-only map as per-frame data-URI PNGs.
+
+    Shared by both single-axis switch stages — the LRP magnitude channel and the Chefer
+    map — so the two differ only in the numbers handed in, never in the rendering. That
+    is what lets a reader attribute a visible difference to the method.
+    """
+    frames: list[str] = []
+    for i in range(magnitude_np.shape[0]):
+        box = per_window_boxes[i // NUM_FRAMES] if per_window_boxes else crop_box
+        full = _upproject_heatmap(magnitude_np[i], *box, orig_w, orig_h)
+        frames.append(_array_to_data_uri(full, magnitude_global=True))
+    return frames
+
+
+def _heatmap_frames_only(
+    model: VideoMAEModule,
+    method: str,
+    video_path: Path,
+    crop_box: tuple[int, int, int, int],
+    orig_w: int,
+    orig_h: int,
+    chunk_box_map: dict[int, tuple[int, int, int, int]] | None = None,
+) -> list[str]:
+    """Compute ONLY the player overlay for *method* — no verdict, regions or timelines.
+
+    The heatmap-method switch swaps the video overlay and nothing else
+    (``docs/chefer_ablation.md`` §5). Returning only the frames is what makes that
+    guarantee structural rather than a convention the frontend has to keep: an
+    alternative method physically cannot reach the verdict or the region scores,
+    because they are not in this response.
+
+    Frame loading and the A2-Box per-window cropping are identical to
+    :func:`_video_result_with_heatmaps`, so the overlay lines up with the default one
+    frame for frame.
+
+    Args:
+        method: ``"lrp_magnitude"`` (the bivariate magnitude channel, direction dropped)
+            or ``"chefer"``.
+    """
+    if chunk_box_map:
+        all_frames, per_window_boxes = _load_all_frames_cropped_per_window(video_path, chunk_box_map, crop_box)
+    else:
+        all_frames = _load_all_frames_cropped(video_path, *crop_box)
+        per_window_boxes = None
+
+    if method == "chefer":
+        magnitude_np = _compute_heatmaps_chefer(model, all_frames)
+    elif method == "lrp_magnitude":
+        # Same dual-seed pass as the default view; only the direction channel is
+        # dropped at render time. Isolating the encoding change from the method
+        # change is the whole point of the middle stage.
+        magnitude_np, _direction, _signed, _conf = _compute_heatmaps_chunked(model, all_frames)
+    else:
+        raise ValueError(f"unknown heatmap method {method!r}")
+
+    return _render_magnitude_frames(magnitude_np, per_window_boxes, crop_box, orig_w, orig_h)
+
+
+def run_video_heatmap_h5(
+    h5_metadata: ClipH5Metadata,
+    h5_chunks: list[ClipH5Chunk] | None,
+    method: str,
+) -> list[str]:
+    """Overlay-only heatmaps for a registry clip, from the stored crop boxes.
+
+    The slim counterpart to :func:`run_video_inference_h5`: same frame source and same
+    A2-Box per-window cropping, but no forward pass for the verdict and no region or
+    timeline derivation.
+    """
+    model = get_video_model()
+    chunk_box_map = (
+        {c.chunk_index: (c.crop_x1, c.crop_y1, c.crop_x2, c.crop_y2) for c in h5_chunks} if h5_chunks else None
+    )
+    return _heatmap_frames_only(
+        model,
+        method,
+        Path(h5_metadata.video_path),
+        (h5_metadata.crop_x1, h5_metadata.crop_y1, h5_metadata.crop_x2, h5_metadata.crop_y2),
+        h5_metadata.orig_w,
+        h5_metadata.orig_h,
+        chunk_box_map=chunk_box_map,
+    )
+
+
+def run_video_heatmap(clip_path: Path, method: str) -> list[str]:
+    """Overlay-only heatmaps for a clip without HDF5 metadata (face detection path)."""
+    model = get_video_model()
+    prepared = _prepare_uploaded_video(clip_path)
+    if prepared is None:
+        raise ValueError(
+            f"No face detected in {clip_path.name} — the alternative heatmap methods only cover the face-crop path."
+        )
+    return _heatmap_frames_only(
+        model,
+        method,
+        prepared.video_path,
+        prepared.crop_box,
+        prepared.orig_w,
+        prepared.orig_h,
+        chunk_box_map=prepared.chunk_box_map,
+    )
 
 
 # ── Video inference ───────────────────────────────────────────────────────────

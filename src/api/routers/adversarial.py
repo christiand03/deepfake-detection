@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
 
 from src.api.analysis_cache import load_cached, save_cache
 from src.api.clip_registry import get_clip_video_path
+from src.api.executor import inference_executor
 from src.api.inference import (
     ModelNotReadyError,
     run_adversarial_inference,
@@ -19,8 +19,6 @@ from src.api.inference import (
 from src.api.schemas import AdversarialRequest, Phase4ResultSchema
 
 router = APIRouter(prefix="/adversarial", tags=["adversarial"])
-
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adversarial")
 
 
 def _cache_key(req: AdversarialRequest) -> str:
@@ -77,7 +75,7 @@ async def adversarial_attack(req: AdversarialRequest) -> Phase4ResultSchema:
     """Launch a white-box adversarial attack and return perturbed-frame analysis."""
     loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(_executor, _run, req)
+        return await loop.run_in_executor(inference_executor, _run, req)
     except ModelNotReadyError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except FileNotFoundError as exc:

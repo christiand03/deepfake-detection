@@ -14,6 +14,7 @@ import { RegionFacePanel } from './RegionFacePanel'
 import { AnalysisControls } from './AnalysisControls'
 import { ExplanationButton } from '../../explanations/ui/ExplanationButton'
 import { useAnalysis } from '../../hooks/useAnalysis'
+import { useHeatmapMethod } from '../../hooks/useHeatmapMethod'
 import { useVideoSync } from '../../hooks/useVideoSync'
 import { fetchClips } from '../../api/client'
 import { useErrorToast } from '../../context/ErrorToastContext'
@@ -44,6 +45,20 @@ export function VideoPanel({
   const isScanning = state.status === 'scanning'
   const isDone = state.status === 'done'
   const result = isDone ? state.result : null
+
+  // Player-overlay method. Reads `result` but never writes it: switching the method
+  // cannot touch the verdict, the timelines or the region scores
+  // (docs/chefer_ablation.md §5).
+  const {
+    method: heatmapMethod,
+    setMethod: setHeatmapMethod,
+    frames: overlayFrames,
+    isLoading: heatmapLoading,
+  } = useHeatmapMethod({
+    clipId: selectedId,
+    bivariateFrames: result?.heatmapFrames ?? null,
+    onError: message => showError(`Heatmap-Methode fehlgeschlagen: ${message}`),
+  })
 
   // Show a toast whenever analysis enters error state
   useEffect(() => {
@@ -134,7 +149,7 @@ export function VideoPanel({
           <VideoAnalysisPlayer
             ref={videoRef}
             clip={selectedClip}
-            heatmapFrames={result?.heatmapFrames ?? null}
+            heatmapFrames={overlayFrames}
             frameIndex={frameIndex}
             isScanning={isScanning}
             heatmapOpacity={heatmapOpacity}
@@ -151,6 +166,40 @@ export function VideoPanel({
           )}
         </div>
 
+        {/* Method badge — top-left, directly under the explanation button, and only
+            when the overlay is NOT the default. A screenshot cropped to the player
+            alone must still say which method drew the heatmap, and that the rest of the
+            app did not change. Not at the bottom: the native video controls span the
+            full width there and the badge would sit on the play button. */}
+        {heatmapMethod !== 'bivariate' && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 42,
+              left: 10,
+              zIndex: 7,
+              paddingInline: 10,
+              paddingBlock: 6,
+              borderRadius: 5,
+              fontSize: 10,
+              fontFamily: 'monospace',
+              lineHeight: 1.5,
+              backgroundColor: 'rgba(13,15,20,0.88)',
+              border: '1px solid #f59e0b66',
+              color: '#f59e0b',
+              maxWidth: 248,
+            }}
+          >
+            <strong>
+              Overlay: {heatmapMethod === 'chefer' ? 'Chefer et al. (ICCV 2021)' : 'LRP — nur Magnitude'}
+            </strong>
+            <br />
+            <span style={{ color: '#8b92a8' }}>
+              Nur diese Ansicht. Übriges: Bivariate LRP.
+            </span>
+          </div>
+        )}
+
         {/* Analysis controls overlay — top-right corner of the player. */}
         <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 7 }}>
           <AnalysisControls
@@ -164,6 +213,9 @@ export function VideoPanel({
             fusionMode={fusionMode}
             onFusionModeChange={handleFusionModeChange}
             multimodalDisabled={multimodalDisabled}
+            heatmapMethod={heatmapMethod}
+            onHeatmapMethodChange={m => void setHeatmapMethod(m)}
+            heatmapLoading={heatmapLoading}
           />
         </div>
       </div>

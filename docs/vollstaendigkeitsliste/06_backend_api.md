@@ -303,3 +303,31 @@ Router-Objekte heißen im Ursprungsmodul schlicht `router`.
 | Gesicht nahezu im Profil | Rotationswarnung im Ergebnis | `inference.py:1194` |
 | Präparierte `clip_id` / präparierter Cacheschlüssel | `ValueError` aus den drei Pfad-Guards; beim Vorschaubild → HTTP 400 | `clips.py:36`, `analysis_cache.py:38`, `phase_media.py:34` |
 | Parameter außerhalb der `Field`-Grenzen | Pydantic-Validierungsfehler → **HTTP 422**, Anfrage erreicht die Inferenz nie | `schemas.py:283-305` |
+
+---
+
+## Heatmap-Endpunkt — Methodenwechsel ohne Nebenwirkung **[K]**
+
+Ergänzt 2026-08-20. `POST /analyze/{clip_id}/heatmap?method=lrp_magnitude|chefer`
+(`src/api/routers/analyze.py`, `_run_heatmap`).
+
+**Bewusst kein Feld an `AnalysisResultSchema`, sondern ein eigenes
+`HeatmapResultSchema` mit genau drei Feldern** (`clipId`, `method`, `heatmapFrames`).
+Zwei Gründe:
+
+1. **Die Zusage wird strukturell.** Der Schalter im Frontend tauscht nur das
+   Player-Overlay. Eine Alternativmethode *kann* Verdict, Timelines oder Region-Scores
+   nicht beeinflussen, weil sie nicht in dieser Response stehen. `tests/test_api_heatmap.py`
+   nagelt den Feldsatz fest — ein später hinzugefügtes Feld lässt den Test fallen.
+2. **Bestehende Caches bleiben gültig.** `load_cached` behandelt Schema-Drift als Miss;
+   ein neues Pflichtfeld am Analyse-Schema hätte jede vorhandene
+   `data/analysis_cache/*.json` still entwertet.
+
+Cache-Key: `{clip_id}__heatmap_{method}` — kollisionsfrei zu den Analyse-Keys (getestet).
+
+**`src/api/executor.py` (neu):** ein prozessweiter `ThreadPoolExecutor(max_workers=1)`
+für alle drei Router. Vorher hatte jeder Router seinen eigenen. Solange das
+`lxt`-Patching monoton war, war das harmlos; mit `lxt_patches_disabled` wäre daraus
+eine Race geworden — ein Chefer-Request hätte ent-patchen können, während ein
+Robustness-Sweep mitten im `explain()` steckt, mit still falschen Heatmaps als Folge.
+**Verhaltensänderung:** Sweep und Analyse laufen nun nacheinander statt parallel.

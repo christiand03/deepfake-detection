@@ -528,6 +528,46 @@ python src/explain.py experiment=train_video \
 **Ausgaben:**
 - `lrp_explanation.png` (Standard) – enthält Originalframe, Heatmap, Überlagerung
 
+### 6.1b Chefer-Ablation – LRP-unabhängige Zweitmethode (Phase 1, Video)
+
+Gradienten-gewichtetes Attention-Rollout (Chefer et al., ICCV 2021) als methodisch
+unabhängige Gegenprobe zur Lokalisierung. Hintergrund, Messwerte und Grenzen:
+[`chefer_ablation.md`](chefer_ablation.md).
+
+**Messung — beide Methoden auf denselben Chunks und Metriken:**
+
+```bash
+# Chefer-Arm (identische Chunk-Auswahl, Masken und Metriken wie die AttnLRP-Arme)
+python -m scripts.eval_localization --ckpt checkpoints/videomae_phase2.ckpt     --split test --relevance chefer --resume-csv temp/loc_chefer_baseline.csv
+
+# Gegenstück auf dem regularisierten Checkpoint → ergibt die 2×2 aus §9 des Doks
+python -m scripts.eval_localization --ckpt checkpoints/videomae_relevance_reg.ckpt     --split test --relevance chefer --resume-csv temp/loc_chefer_reg.csv
+```
+
+`--relevance` akzeptiert `fake | bivariate | chefer`; `--split` zusätzlich `demo`
+(kleiner lokaler Split für Smoke-Tests). Voraussetzung ist ein Maskenspeicher
+`{split}_masks.npz` — falls nicht vorhanden:
+
+```bash
+python -m scripts.build_manipulation_masks --splits demo --dry-run --report-csv temp/mask_g0.csv
+python -m scripts.build_manipulation_masks --splits demo --resume
+```
+
+**Smoke-Test an einem echten Checkpoint** (Gradientenpfad, Tubelet-Abbildung,
+Klassensensitivität, lxt-Patch-Scope):
+
+```bash
+python -m scripts.smoke_chefer --ckpt checkpoints/videomae_phase2.ckpt --split demo --index 4
+```
+
+**Im Frontend** stellt der Schalter `HEATMAP-METHODE` das Player-Overlay um
+(`bivariate | lrp_magnitude | chefer`). Er tauscht **ausschließlich** das Overlay;
+Verdict, Timelines und Region-Scores bleiben Bivariate-LRP. Direkt per API:
+
+```bash
+curl -X POST "http://localhost:8000/api/analyze/clip_01/heatmap?method=chefer"
+```
+
 ### 6.2 Audio – LRP-Heatmap (Wav2Vec2)
 
 ```bash

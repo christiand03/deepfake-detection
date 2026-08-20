@@ -20,15 +20,40 @@ Usage pattern in a LightningModule::
 from __future__ import annotations
 
 import contextlib
+import sys
 from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from transformers.activations import GELUActivation
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from jaxtyping import Float
+
+# ── Pristine state for un-patching ────────────────────────────────────────────
+
+# The four classes lxt mutates process-globally via setattr on the CLASS.
+_LXT_PATCHED_CLASSES: tuple[type[nn.Module], ...] = (nn.GELU, GELUActivation, nn.LayerNorm, nn.Dropout)
+
+# Un-patched forwards, captured at import time. This is the ONLY moment they are
+# guaranteed pristine, and the capture is safe because every patching entry point
+# (patch_videomae_for_attnlrp, patch_wav2vec2_for_attnlrp) lives in THIS module —
+# nothing can patch before this module has been imported.
+#
+# Capturing lazily would not work: lxt's patch_method only stashes the original for
+# the GELU classes (keep_original=True). For nn.LayerNorm and nn.Dropout the original
+# is overwritten without a copy, so once patched it is unrecoverable from the class.
+_PRISTINE_FORWARDS: dict[type[nn.Module], Callable] = {cls: cls.forward for cls in _LXT_PATCHED_CLASSES}
+
+# Modeling modules whose module-level ``eager_attention_forward`` gets wrapped. Only
+# consulted when already in sys.modules — a module that was never imported cannot
+# have been patched, and touching it here would force-load an unused backbone.
+_LXT_PATCHED_MODULES: tuple[str, ...] = (
+    "transformers.models.videomae.modeling_videomae",
+    "transformers.models.wav2vec2.modeling_wav2vec2",
+)
 
 
 def build_common_patch_map() -> dict:
@@ -88,6 +113,9 @@ def patch_videomae_for_attnlrp(net: nn.Module) -> None:
     from lxt.efficient.patches import wrap_attention_forward
 
     if not getattr(_mod, "_lxt_patched", False):
+        # Stash the un-wrapped original: lxt overwrites it in place, so this is the
+        # only chance to keep a reference for lxt_patches_disabled() to restore.
+        _mod._lxt_pristine_attention = _mod.eager_attention_forward
         _mod.eager_attention_forward = wrap_attention_forward(_mod.eager_attention_forward)
         _mod._lxt_patched = True
     monkey_patch(net, patch_map=build_common_patch_map())
@@ -148,6 +176,76 @@ def videomae_attnlrp_patched(net: nn.Module) -> Iterator[None]:
                 cls.original_forward = original
         _mod.eager_attention_forward = saved_attention
         _mod._lxt_patched = saved_flag
+
+
+@contextlib.contextmanager
+def lxt_patches_disabled() -> Iterator[None]:
+    """Force the process into an un-patched state for the block, then restore it exactly.
+
+    The inverse of :func:`videomae_attnlrp_patched`. Required by any gradient-based
+    explanation method that is **not** AttnLRP — currently Chefer et al. (ICCV 2021),
+    which reads ``∂logit/∂attention`` and needs the true gradient.
+
+    Why this is necessary: :meth:`VideoMAEModule.explain` applies the lxt patches
+    permanently and process-globally. The patches change the *backward* of the affected
+    layers — LayerNorm's variance path is cut, GELU's derivative becomes ``GELU(x)/x``,
+    and attention divides the query/key gradients by 4 in every block. A Chefer pass in
+    the same process would therefore build its attention gradients from an LRP
+    pseudo-gradient and return a plausible-looking but wrong map, with no error and no
+    warning.
+
+    Scope: this restores the pristine forwards for **all** lxt-mutated classes, so it
+    also neutralises the patches installed by :func:`patch_wav2vec2_for_attnlrp` and the
+    multimodal path — they mutate the same four classes. Scoping only VideoMAE's
+    ``explain()`` would not be sufficient for that reason.
+
+    Thread-safety: the mutations are process-global, so this must not run concurrently
+    with a relevance pass on another thread. The API serialises all model work through
+    the single shared executor in ``src.api.executor`` precisely so that cannot happen.
+
+    Both restore directions are exact: the state saved on entry is written back in
+    ``finally``, so the block is safe to enter from an already-patched *or* an already
+    un-patched process, and an exception inside it cannot leave a half-restored process.
+    """
+    saved_forwards = {cls: cls.forward for cls in _LXT_PATCHED_CLASSES}
+    # non_linear_forward is installed with keep_original=True, which adds this attribute.
+    saved_originals = {cls: cls.__dict__.get("original_forward") for cls in (nn.GELU, GELUActivation)}
+    saved_modules: dict[str, tuple[Callable, bool]] = {}
+
+    try:
+        for cls, pristine in _PRISTINE_FORWARDS.items():
+            cls.forward = pristine
+        for cls in (nn.GELU, GELUActivation):
+            # Drop the stale original so a later re-patch captures the pristine forward.
+            with contextlib.suppress(AttributeError):
+                delattr(cls, "original_forward")
+
+        for name in _LXT_PATCHED_MODULES:
+            mod = sys.modules.get(name)
+            if mod is None:
+                continue  # never imported → cannot have been patched
+            saved_modules[name] = (mod.eager_attention_forward, getattr(mod, "_lxt_patched", False))
+            pristine_attention = getattr(mod, "_lxt_pristine_attention", None)
+            if pristine_attention is not None:
+                mod.eager_attention_forward = pristine_attention
+            # Clearing the flag matters even when the module was never patched: leaving
+            # it True would make the next patch_*_for_attnlrp skip the attention wrap.
+            mod._lxt_patched = False
+
+        yield
+    finally:
+        for cls, forward in saved_forwards.items():
+            cls.forward = forward
+        for cls, original in saved_originals.items():
+            if original is None:
+                with contextlib.suppress(AttributeError):
+                    delattr(cls, "original_forward")
+            else:
+                cls.original_forward = original
+        for name, (attention, flag) in saved_modules.items():
+            mod = sys.modules[name]
+            mod.eager_attention_forward = attention
+            mod._lxt_patched = flag
 
 
 def compute_relevance_differentiable(
@@ -232,6 +330,8 @@ def patch_wav2vec2_for_attnlrp(net: nn.Module) -> None:
     from lxt.efficient.patches import wrap_attention_forward
 
     if not getattr(_mod, "_lxt_patched", False):
+        # Stash the un-wrapped original — see patch_videomae_for_attnlrp.
+        _mod._lxt_pristine_attention = _mod.eager_attention_forward
         _mod.eager_attention_forward = wrap_attention_forward(_mod.eager_attention_forward)
         _mod._lxt_patched = True
     monkey_patch(net, patch_map=build_common_patch_map())

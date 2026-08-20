@@ -278,6 +278,27 @@ class AnalysisResultSchema(BaseModel):
     fusionMode: Literal["cross_attention", "concat"] | None = None
 
 
+class HeatmapResultSchema(BaseModel):
+    """Player overlay for one alternative explanation method — and nothing else.
+
+    Deliberately NOT a field on :class:`AnalysisResultSchema`. Two reasons
+    (``docs/chefer_ablation.md`` §11.1):
+
+    * **The scope promise becomes structural.** The switch is documented as swapping
+      only the video overlay; an alternative method physically cannot influence the
+      verdict, the regions or the timelines because they are not in this response.
+    * **Cached analyses stay valid.** ``load_cached`` treats a schema mismatch as a
+      miss, so a new field on the analysis schema would silently invalidate every
+      existing ``data/analysis_cache/*.json`` and force a full recompute.
+    """
+
+    clipId: str
+    # "lrp_magnitude" = the bivariate magnitude channel with the direction axis dropped;
+    # "chefer" = the LRP-independent Chefer et al. (ICCV 2021) rollout.
+    method: Literal["lrp_magnitude", "chefer"]
+    heatmapFrames: list[str]
+
+
 # ── Request bodies ────────────────────────────────────────────────────────────
 
 
