@@ -14,19 +14,19 @@ Das Register ist *deskriptiv* — es dokumentiert, was da ist, nicht was da sein
 
 | Dokument | Umfang | Inhalt |
 |---|---|---|
-| [00_inventar.md](00_inventar.md) | 485 Dateien | Vollständiges Dateiinventar, Zählweise, Abgrenzungen |
-| [01_datenpipeline.md](01_datenpipeline.md) | 15 Module + 11 Skripte | Rohvideo → Face-Crop → HDF5 → DataLoader |
-| [02_modelle.md](02_modelle.md) | 6 Module | VideoMAE, Wav2Vec2, Cross-Attention-Fusion, Basisklasse, Metriken |
-| [03_training_evaluation.md](03_training_evaluation.md) | 10 Module | Trainings-/Eval-Entrypoints, Lightning-Utilities, LR-Schedules |
-| [04_xai.md](04_xai.md) | 5 Module | AttnLRP-Kern, bivariate Relevanz, Audio-3-Schichten-xAI, Explain-Skripte |
+| [00_inventar.md](00_inventar.md) | 533 Dateien | Vollständiges Dateiinventar, Zählweise, Abgrenzungen |
+| [01_datenpipeline.md](01_datenpipeline.md) | 16 Module + 12 Skripte | Rohvideo → Face-Crop → HDF5 → DataLoader, **Manipulationsmasken** |
+| [02_modelle.md](02_modelle.md) | 7 Module | VideoMAE, Wav2Vec2, Cross-Attention-Fusion, Basisklasse, Metriken, **Lokalisierungskopf** |
+| [03_training_evaluation.md](03_training_evaluation.md) | 11 Module + 6 Werkzeuge | Trainings-/Eval-Entrypoints, Lightning-Utilities, LR-Schedules, **Trainingswächter, Sweep-Runbooks** |
+| [04_xai.md](04_xai.md) | 8 Module | AttnLRP-Kern, bivariate Relevanz, Audio-3-Schichten-xAI, Explain-Skripte, **Lokalisierungsmetrik, Chefer-Rollout, Messskript** |
 | [05_robustheit_adversarial.md](05_robustheit_adversarial.md) | 8 Module + 2 Runbooks | Phase 3 (Degradation) + Phase 4 (FGSM/PGD/UAP/Adv-Training) |
 | [06_backend_api.md](06_backend_api.md) | 13 Module | FastAPI-App, Router, Schemas, Clip-Registry, Cache |
 | [07_inference_pipeline.md](07_inference_pipeline.md) | 1 Modul, 85 Funktionen | `src/api/inference.py` — die Laufzeit-Analysepipeline |
 | [08_frontend.md](08_frontend.md) | 61 Module | React-Komponenten, Visualisierungen, Erklärsystem |
-| [09_tests.md](09_tests.md) | 38 Testmodule | Testabdeckung nach geprüftem Verhalten |
-| [10_konfiguration.md](10_konfiguration.md) | 71 YAML | Hydra-Configs: Experimente, Modelle, Callbacks, Preprocessing |
+| [09_tests.md](09_tests.md) | 52 Testmodule | Testabdeckung nach geprüftem Verhalten |
+| [10_konfiguration.md](10_konfiguration.md) | 79 YAML | Hydra-Configs: Experimente, Modelle, Callbacks, Preprocessing |
 | [11_infrastruktur.md](11_infrastruktur.md) | 30 Dateien | Docker, CI, Pre-Commit, W&B-Launch, Projektmetadaten |
-| [12_dokumentation_vault.md](12_dokumentation_vault.md) | 161 Dateien | Bestandsaufnahme `docs/` und `vault/` |
+| [12_dokumentation_vault.md](12_dokumentation_vault.md) | 170 Dateien | Bestandsaufnahme `docs/` und `vault/`, **`docs/results/`** |
 | [99_abgleich_beleg.md](99_abgleich_beleg.md) | Matrix | **Abgleichmatrix Code → Beleg-Kapitel** |
 
 ---
@@ -120,44 +120,67 @@ Damit bleiben **485 Projektdateien**, die dieses Register vollständig erfasst.
 
 ## Stand und Pflege
 
-- **Erstellt:** 2026-08-02
-- **Code-Stand:** Branch `main`. Ausgangspunkt war Commit `19dd0d5` (*Add L3 Audio
-  Confidence Statement*, 2026-07-21) — **HEAD ist inzwischen `49e2772`**.
-- **Erfasst:** 485 Dateien; 110 Python-Module (25.245 Zeilen), **61 TS/TSX-Module
-  (11.019 Zeilen — davon 60 unter `frontend/src/` mit 10.995, dazu `vite.config.ts`)**,
-  75 YAML-/YML-Dateien (davon 71 Hydra-Configs, der Rest CI, Pre-Commit, Compose)
+- **Erstellt:** 2026-08-02 · **Zuletzt nachgezogen:** 2026-08-21
+- **Code-Stand:** Branch `main`, HEAD `ce2075d`. Ausgangspunkt der Erstaufnahme war Commit
+  `19dd0d5` (*Add L3 Audio Confidence Statement*, 2026-07-21).
+- **Erfasst:** 533 Dateien; **136 Python-Module (32.966 Zeilen)**, 62 TS/TSX-Module,
+  83 YAML-/YML-Dateien (davon 79 Hydra-Configs, der Rest CI, Pre-Commit, Compose)
+
+### Nachtrag 2026-08-21 — Relevanz-Regularisierung und Chefer-Ablation
+
+Zehn Commits (`b9db3f5` … `ce2075d`) haben **48 Dateien hinzugefügt und keine entfernt**.
+Inhaltlich sind es zwei Stränge:
+
+| Strang | Datum | Was dazukam |
+|---|---|---|
+| **Relevanz-Regularisierung** | 2026-08-16/17 | Manipulationsmasken als zweiter Ground-Truth-Bestand, ein skaleninvarianter Lokalisierungsverlust, der Trainingszweig unter manueller Optimierung, ein Aux-Lokalisierungskopf, das Messskript mit Bootstrap-Intervallen, sieben Experimentkonfigurationen und `docs/results/` |
+| **Chefer-Ablation** | 2026-08-20 | Ein gradienten-gewichtetes Attention-Rollout als LRP-unabhängige Zweitmethode, die Patch-Kontextmanager, die dafür nötig sind, ein Heatmap-Endpunkt und der Methodenschalter im Frontend |
+
+Nachgezogen wurden [00](00_inventar.md), [01](01_datenpipeline.md), [02](02_modelle.md),
+[03](03_training_evaluation.md), [04](04_xai.md), [09](09_tests.md),
+[10](10_konfiguration.md), [12](12_dokumentation_vault.md) und
+[99](99_abgleich_beleg.md). [06](06_backend_api.md), [07](07_inference_pipeline.md) und
+[08](08_frontend.md) waren mit dem Chefer-Commit selbst bereits nachgezogen und blieben
+unverändert.
+
+> **Ein Statuswechsel, der über eine Zeile hinausgeht.** Die Erstaufnahme führte in
+> [12 §1.2](12_dokumentation_vault.md) und in Registerzeile **F25b** das
+> Explanation-Guided-Training als *geplant, im Code nicht vorhanden* — mit der
+> ausdrücklichen Notiz, dies sei „der einzige Eintrag, der beim Landen der Implementierung
+> nachgetragen werden muss". Er ist gelandet, ist gelaufen und ist ausgewertet. Der
+> Befundkasten in [12](12_dokumentation_vault.md) ist ersetzt, F25b umgeschrieben und um
+> **F25d–F25g** (Ergebnis, Vorbehalte, Anti-Gaming-Nachweis, Metrik≡Verlust) ergänzt.
+
+> **Die neuen Matrixzeilen stehen fast alle auf `✗`.** Die Kapitelskizzen stammen vom
+> 2026-08-01, die Implementierung ist zweieinhalb Wochen jünger — sie kann dort nicht
+> vermerkt sein. Konkret: A48–A51, B22–B25, C20–C22, D50–D54, E13, F25d–F25g, F58–F64
+> und Q38–Q42 sind **vollständig ungeschrieben**. Vier davon sind in
+> [99 §Lückenkandidaten](99_abgleich_beleg.md) als **P0** eingeordnet, darunter das
+> Lokalisierungsergebnis selbst.
+
+> **Wer nur den Vault abgleicht, übersieht die gesamte Strecke.** Bis Juli 2026 lagen die
+> Ergebniszahlen in `vault/Research/deepfake-detection/Results/`. Zu keinem der sechs
+> Relevanz-Läufe existiert dort eine Notiz; ihre Zahlen stehen in `docs/results/` (JSON
+> mit Bootstrap-Intervallen, versioniert), in `docs/relevance_regularization.md` §13 und
+> in `docs/chefer_ablation.md` §9.
+
+### Ältere Standhinweise
 
 > **Drei Commits sind nach der Erstaufnahme dazugekommen.** Das Register wurde gegen
 > `19dd0d5` erstellt; am selben Tag (2026-08-02) folgten `db5608f` (16:00, *fix stale
 > schema comments*), `e3ec619` (17:28, *Add Regularization Plan*) und `49e2772` (17:30,
-> *Add older xai doc*). Einzelne Fachdokumente wurden danach überarbeitet, andere nicht —
-> das Register bildet deshalb **nicht durchgängig einen einzigen Stand** ab.
->
-> **Inhaltlich sind die drei Commits abgedeckt:** die beiden neuen Dokumente stehen in
-> [12 §1.2](12_dokumentation_vault.md) (`relevance_regularization.md` mit eigenem
-> Befundkasten, `xai_pipeline_reference.md` als technische Referenz) und waren als Dateien
-> bereits inventarisiert — sie lagen zum Aufnahmezeitpunkt ungetrackt auf der Platte.
-> `db5608f` änderte nur Kommentare. Nachzuziehen bleiben daher genau zwei Textstellen:
->
-> - **[12 §1.2](12_dokumentation_vault.md)** führt `xai_pipeline_reference.md` und
->   `relevance_regularization.md` als *ungetrackt*. Sie wurden durch `e3ec619`/`49e2772`
->   versioniert; `git ls-files` führt beide. In
->   [99](99_abgleich_beleg.md) ist der Befund als erledigt markiert.
-> - **[08](08_frontend.md) §4** nennt als Rückfallgrund für die L3-Balkenansicht
->   „multimodale Ergebnisse ohne Gitter". Genau diese Aussage hat `db5608f` als veralteten
->   Kommentar korrigiert: **beide** Audiopfade berechnen die Gitter
->   (`inference.py:2348` unimodal, `:2547` multimodal), `null` steht nur noch für Caches
->   von vor der Einführung der Gitter.
->
-> **Beide Textstellen sind am 2026-08-06 nachgezogen.** [12 §1.2](12_dokumentation_vault.md)
-> war bereits in [99](99_abgleich_beleg.md) als erledigt vermerkt; die Aussage in
-> [08](08_frontend.md) §4 ist korrigiert und trägt jetzt einen Kasten mit dem richtigen
-> Stand. In derselben Runde wurden zwei weitere registerinterne Widersprüche behoben: die
+> *Add older xai doc*). **Beide daraus offenen Textstellen sind am 2026-08-06
+> nachgezogen** — [12 §1.2](12_dokumentation_vault.md) (die beiden Dokumente sind
+> versioniert, nicht mehr ungetrackt) und [08](08_frontend.md) §4 (beide Audiopfade
+> berechnen die Gitter; `null` steht nur noch für Caches von vor deren Einführung). In
+> derselben Runde wurden zwei registerinterne Widersprüche behoben: die
 > Breaking-Point-Definition in [05](05_robustheit_adversarial.md) und die Nullungsaussage
 > zu den `*_only`-Modi in [10 §4](10_konfiguration.md). Alle drei sind in
 > [99 §Ergebnis des Abgleichs](99_abgleich_beleg.md) dokumentiert.
->
-> Bei Zahlen- oder Verhaltensangaben, die für den Beleg zählen, ist der Code gegenzulesen.
+
+> **Das Register bildet nicht durchgängig einen einzigen Stand ab.** Einzelne
+> Fachdokumente wurden nach ihrer Erstfassung überarbeitet, andere nicht. Bei Zahlen- oder
+> Verhaltensangaben, die für den Beleg zählen, ist der Code gegenzulesen.
 
 Bei Codeänderungen ist das betroffene Fachdokument und ggf. die Zeile in
 [99_abgleich_beleg.md](99_abgleich_beleg.md) nachzuziehen. Das Register ist kein

@@ -1,8 +1,11 @@
 # 04 — Explainable AI (AttnLRP)
 
-Der methodische Kern des Projekts. Fünf Module: der modellagnostische Relevanzkern,
-die Audio-Nachverarbeitung mit ihren drei Erklärschichten, und drei Hydra-Skripte, die
-Abbildungen erzeugen.
+Der methodische Kern des Projekts. Ursprünglich fünf Module: der modellagnostische
+Relevanzkern, die Audio-Nachverarbeitung mit ihren drei Erklärschichten und drei
+Hydra-Skripte, die Abbildungen erzeugen. Seit August 2026 kommen **drei weitere Bausteine**
+hinzu, die die xAI von einer reinen Darstellung zu einer *gemessenen* Größe machen:
+`src/utils/localization.py` (Metrik **und** Trainingsverlust), `src/utils/chefer.py` (die
+LRP-unabhängige Zweitmethode) und `scripts/eval_localization.py` (die Messung selbst).
 
 ```
 src/utils/attnlrp.py         Relevanzkern — Single-Seed + Dual-Seed, uni- + multimodal
@@ -16,6 +19,13 @@ src/api/inference.py         Laufzeit-xAI für das Frontend (siehe 07)
 
 src/utils/audio_xai.py       WhisperX-Wortsegmente, Frequenzbänder, Plots
         ↑ genutzt von        explain_audio.py + explain_multimodal.py (nur diese beiden)
+
+src/utils/localization.py    RMA-Metrik + skaleninvarianter Lokalisierungsverlust
+        ↑ genutzt von
+VideoMAEModule._localization_loss    Training  (siehe 02_modelle.md)
+scripts/eval_localization.py         Messung   (siehe unten)
+
+src/utils/chefer.py          gradienten-gewichtetes Attention-Rollout (Zweitmethode)
 ```
 
 `src/utils/audio_xai.py` hat genau zwei Importeure: `explain_audio.py` und
@@ -69,20 +79,31 @@ Kosten: **1 Forward + 2 Backwards**, nicht 2 volle Durchläufe
 
 ## `src/utils/attnlrp.py` — Relevanzkern **[K]**
 
-416 Zeilen. Modellagnostisch. Der Modulkopf nennt den Grund für die Zentralisierung:
+625 Zeilen (416 vor der Erweiterung um die Patch-Kontextmanager und die
+differenzierbare Relevanz, 2026-08-16/20). Modellagnostisch. Der Modulkopf nennt den Grund für die Zentralisierung:
 Vorwärts-/Rückwärtspipeline und Normalisierung müssen über Modalitäten hinweg
 byte-für-byte identisch sein, sonst ist der Phase-1-↔-Phase-2-Vergleich wertlos.
 
 | Symbol | Zeilen | Aufgabe |
 |---|---|---|
-| `build_common_patch_map()` | L33 | Baut die lxt-Patch-Map für die Nicht-Attention-Komponenten, die alle HuggingFace-Transformer teilen: genau vier Einträge — `nn.GELU`, `GELUActivation` (HF-Alias), `nn.LayerNorm`, `nn.Dropout`. Softmax und Matmul stehen **nicht** darin; die Attention-Regel ist modellspezifisch und kommt aus `wrap_attention_forward` in den beiden Patch-Funktionen darunter. |
-| `patch_videomae_for_attnlrp(net)` | L63 | **Chirurgischer Patch für VideoMAE** an `transformers==4.57.6` (installierte Version verifiziert): ersetzt `eager_attention_forward` im Modul `modeling_videomae` durch lxts `wrap_attention_forward` und ruft `monkey_patch` auf *net*. Versionsgebunden — bei einem Upgrade ist dies die Stelle, die bricht. |
-| `patch_wav2vec2_for_attnlrp(net)` | L95 | Dito für Wav2Vec2. Der Docstring hält fest, dass Wav2Vec2 in 4.57.6 vom alten `WAV2VEC2_ATTENTION_CLASSES`-Muster auf denselben Dispatch wie VideoMAE umgestellt wurde — deshalb genügt der Modulaustausch, `ALL_ATTENTION_FUNCTIONS` bleibt unangetastet. |
-| `compute_attnlrp(net, input_tensor, forward_fn, target_class)` | L131 | **Ein Pass:** Forward → Zielauswahl → Backward → Input×Gradient. Kapselt alles in `torch.enable_grad()`, ist daher auch aus `no_grad`/`inference_mode` heraus sicher aufrufbar (z. B. aus einem Lightning-Validierungs-Callback). `target_class=None` erklärt die *vorhergesagte* Klasse; ein int gilt für den ganzen Batch; ein Tensor erlaubt Ziele je Sample. Wirft explizit, wenn `x.grad is None` — der typische Fehler bei fehlendem Monkey-Patch. |
-| `compute_attnlrp_per_class(net, input_tensor, forward_fn, targets=(1,0))` | L190 | **Dual-Seed.** Liefert `[R_fake, R_real]` aus einem geteilten Forward. `x.grad = None` vor jedem Seed verhindert Gradientenakkumulation zwischen den Seeds. Hat **kein** `target_class`-Argument — die Ziele stehen in `targets`; der zweite Rückgabewert ist `argmax(logits)` und laut Docstring „for reference only", also nur die vorhergesagte Klasse zur Beschriftung, kein Erklärziel. |
-| `normalize_relevance(relevance)` | L248 | **Symmetrische Abs-Max-Normalisierung** auf `[-1, 1]` je Zeile (`relevance / (absmax + 1e-8)`). Null bleibt exakt null — Voraussetzung für die vorzeichenbehaftete Seismic-Colormap; das Epsilon fängt Zeilen ab, die durchgehend null sind. Verlangt einen 2-D-Tensor und wirft sonst `ValueError`; die Granularität der Normalisierung (je Frame, je Clip, je Sample) bestimmt der Aufrufer durch das Reshape davor. Diese Trennung ist der Grund, warum clipglobale und framelokale Normalisierung nebeneinander möglich sind. |
-| `compute_attnlrp_multimodal(net, input_tensors, forward_fn, target_class)` | L283 | **Gemeinsamer Rückwärtspass über mehrere Eingabetensoren.** Ein Backward verteilt die Relevanz auf Video *und* Audio. Die im Code genannte Begründung ist die Cross-Attention: getrennte Rückwärtspässe würden die jeweils andere Modalität als Konstante sehen und deren Cross-Attention-Gradientenbeitrag auf null setzen. Wirft je Eingabetensor einzeln, wenn dessen `.grad` `None` bleibt — nennt den Index, sodass eine nur teilweise gepatchte Backbone-Kombination sofort auffällt. |
-| `compute_attnlrp_multimodal_per_class(net, input_tensors, forward_fn, targets)` | L352 | Kombination aus beidem: Dual-Seed über mehrere Modalitäten. Die Grundlage der bivariaten multimodalen Ansichten im Frontend. |
+| `build_common_patch_map()` | L59 | Baut die lxt-Patch-Map für die Nicht-Attention-Komponenten, die alle HuggingFace-Transformer teilen: genau vier Einträge — `nn.GELU`, `GELUActivation` (HF-Alias), `nn.LayerNorm`, `nn.Dropout`. Softmax und Matmul stehen **nicht** darin; die Attention-Regel ist modellspezifisch und kommt aus `wrap_attention_forward` in den beiden Patch-Funktionen darunter. |
+| `patch_videomae_for_attnlrp(net)` | L89 | **Chirurgischer Patch für VideoMAE** an `transformers==4.57.6` (installierte Version verifiziert): ersetzt `eager_attention_forward` im Modul `modeling_videomae` durch lxts `wrap_attention_forward` und ruft `monkey_patch` auf *net*. Versionsgebunden — bei einem Upgrade ist dies die Stelle, die bricht. |
+| `patch_wav2vec2_for_attnlrp(net)` | L302 | Dito für Wav2Vec2. Der Docstring hält fest, dass Wav2Vec2 in 4.57.6 vom alten `WAV2VEC2_ATTENTION_CLASSES`-Muster auf denselben Dispatch wie VideoMAE umgestellt wurde — deshalb genügt der Modulaustausch, `ALL_ATTENTION_FUNCTIONS` bleibt unangetastet. |
+| `compute_attnlrp(net, input_tensor, forward_fn, target_class)` | L340 | **Ein Pass:** Forward → Zielauswahl → Backward → Input×Gradient. Kapselt alles in `torch.enable_grad()`, ist daher auch aus `no_grad`/`inference_mode` heraus sicher aufrufbar (z. B. aus einem Lightning-Validierungs-Callback). `target_class=None` erklärt die *vorhergesagte* Klasse; ein int gilt für den ganzen Batch; ein Tensor erlaubt Ziele je Sample. Wirft explizit, wenn `x.grad is None` — der typische Fehler bei fehlendem Monkey-Patch. |
+| `compute_attnlrp_per_class(net, input_tensor, forward_fn, targets=(1,0))` | L399 | **Dual-Seed.** Liefert `[R_fake, R_real]` aus einem geteilten Forward. `x.grad = None` vor jedem Seed verhindert Gradientenakkumulation zwischen den Seeds. Hat **kein** `target_class`-Argument — die Ziele stehen in `targets`; der zweite Rückgabewert ist `argmax(logits)` und laut Docstring „for reference only", also nur die vorhergesagte Klasse zur Beschriftung, kein Erklärziel. |
+| `normalize_relevance(relevance)` | L457 | **Symmetrische Abs-Max-Normalisierung** auf `[-1, 1]` je Zeile (`relevance / (absmax + 1e-8)`). Null bleibt exakt null — Voraussetzung für die vorzeichenbehaftete Seismic-Colormap; das Epsilon fängt Zeilen ab, die durchgehend null sind. Verlangt einen 2-D-Tensor und wirft sonst `ValueError`; die Granularität der Normalisierung (je Frame, je Clip, je Sample) bestimmt der Aufrufer durch das Reshape davor. Diese Trennung ist der Grund, warum clipglobale und framelokale Normalisierung nebeneinander möglich sind. |
+| `compute_attnlrp_multimodal(net, input_tensors, forward_fn, target_class)` | L492 | **Gemeinsamer Rückwärtspass über mehrere Eingabetensoren.** Ein Backward verteilt die Relevanz auf Video *und* Audio. Die im Code genannte Begründung ist die Cross-Attention: getrennte Rückwärtspässe würden die jeweils andere Modalität als Konstante sehen und deren Cross-Attention-Gradientenbeitrag auf null setzen. Wirft je Eingabetensor einzeln, wenn dessen `.grad` `None` bleibt — nennt den Index, sodass eine nur teilweise gepatchte Backbone-Kombination sofort auffällt. |
+| `compute_attnlrp_multimodal_per_class(net, input_tensors, forward_fn, targets)` | L561 | Kombination aus beidem: Dual-Seed über mehrere Modalitäten. Die Grundlage der bivariaten multimodalen Ansichten im Frontend. |
+
+**Drei Ergänzungen vom August 2026** — sie machen den Patch *steuerbar* und die Relevanz
+*trainierbar*:
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `_PRISTINE_FORWARDS` / `_LXT_PATCHED_CLASSES` / `_LXT_PATCHED_MODULES` | L37–56 | Modulkonstanten. `_PRISTINE_FORWARDS` sichert die **unberührten** `forward`-Methoden der vier von lxt mutierten Klassen **zur Importzeit** — der einzige garantiert saubere Zeitpunkt, und zulässig, weil beide Patch-Einstiegspunkte in genau diesem Modul liegen. Ein späteres Sichern ginge nicht: lxts `patch_method` legt nur für die GELU-Klassen eine Kopie an (`keep_original=True`); bei `nn.LayerNorm` und `nn.Dropout` wird das Original **ersatzlos** überschrieben und ist danach aus der Klasse nicht mehr rekonstruierbar. |
+| `videomae_attnlrp_patched(net)` | L125 | Kontextmanager: patcht für die Dauer des Blocks und stellt danach **jedes** mutierte Attribut wieder her. **Der Grund ist die Relevanz-Regularisierung.** `patch_videomae_for_attnlrp` wirkt dauerhaft und — weil lxt per `setattr` auf der **Klasse** arbeitet — prozessweit. Für `explain()` ist das harmlos, für Training nicht: Die Patches verändern das **Backward**, nicht nur den Forward — LayerNorms Varianzpfad wird per `stop_gradient` gekappt, GELUs Ableitung wird zu `GELU(x)/x`, und die Attention teilt in **jedem** der 12 Blöcke die Query/Key-Gradienten durch 4 und den Value-Gradienten durch 2. Ein unter Patch zurückpropagierter Cross-Entropy-Verlust liefert damit einen LRP-Pseudogradienten statt `dCE/dθ`. Ein Training, das einmal beim Start patcht, optimierte still etwas anderes. Der Docstring hält außerdem fest, dass `_lxt_patched` **mit** zurückgesetzt werden muss: bliebe das Flag `True`, übersprünge der nächste Patch den Attention-Wrap und AttnLRP degradierte lautlos zu reinem Input×Gradient. |
+| `lxt_patches_disabled()` | L182 | Die Umkehrung: erzwingt für die Dauer des Blocks den **ungepatchten** Zustand. Voraussetzung jeder gradientenbasierten Erklärmethode, die *nicht* AttnLRP ist — derzeit Chefer (siehe unten), das `∂logit/∂attention` liest und dafür den echten Gradienten braucht. **Reichweite:** stellt die unberührten Forwards **aller** lxt-mutierten Klassen her, neutralisiert also auch die Wav2Vec2- und die multimodalen Patches — sie mutieren dieselben vier Klassen, eine Beschränkung auf VideoMAE genügte nicht. **Thread-Sicherheit:** die Mutationen sind prozessweit, der Block darf also nicht parallel zu einem Relevanzlauf stehen; genau deshalb serialisiert die API alle Modellarbeit über den einen Executor in `src/api/executor.py` ([06](06_backend_api.md)). Beide Richtungen sind exakt: der beim Eintritt gesicherte Zustand wird im `finally` zurückgeschrieben, der Block ist also aus einem gepatchten *wie* aus einem ungepatchten Prozess betretbar, und eine Ausnahme darin kann keinen halb wiederhergestellten Prozess hinterlassen. |
+| `compute_relevance_differentiable(net, input_tensor, forward_fn, target_class, create_graph)` | L251 | **Input×Gradient-Relevanz, durch die ein Verlust zurückpropagiert werden kann.** Der Docstring begründet, warum `compute_attnlrp` dafür unbrauchbar ist: es ruft `net.zero_grad()` (was die akkumulierten Klassifikationsgradienten löschte) und `target_logits.backward()` (was jedem Parameter den Erklärungsgradienten in `.grad` schreibt), und liest dann `x.grad` — einen Blattpuffer **ohne** `grad_fn`. Ein darauf gebauter Verlust hätte **null** Gradient bezüglich der Gewichte: der Trainingsschritt liefe, konvergierte und änderte nichts. Diese Variante nutzt stattdessen `torch.autograd.grad(..., create_graph=True)`, fasst keine `.grad`-Puffer an (dieselbe Isolation wie `untargeted_pgd`) und gibt eine Relevanz mit lebendigem `grad_fn` zurück. Ohne umschließendes `videomae_attnlrp_patched` ist das **reines Input×Gradient** — der dokumentierte Rückfallmodus `loc_signal: ixg`. |
 
 Beide Patch-Funktionen sind **idempotent**: ein `_lxt_patched`-Attribut auf dem
 `transformers`-Modul sorgt dafür, dass `wrap_attention_forward` genau einmal angewandt
@@ -242,6 +263,107 @@ Inkonsistenz. Die erklärten Gewichte sind exakt die trainierten.
 | Der Eager-Wächter selbst wirft bei SDPA | `test_attn_implementation.py::test_require_eager_attention_guard` |
 | `explain()` verweigert SDPA-Modelle | `test_attn_implementation.py::test_explain_refuses_sdpa_model` |
 | Laufzeit-Audio nutzt tatsächlich den Dual-Seed | `test_api_inference.py::test_run_audio_inference_uses_dual_seed_per_class` |
+| Der Lokalisierungsverlust ist **skaleninvariant** — `R → cR` ändert ihn nicht | `test_localization_loss.py` (33 Tests) |
+| `videomae_attnlrp_patched` stellt jedes mutierte Attribut exakt wieder her | `test_attnlrp_patch_scope.py` (16 Tests) |
+| `lxt_patches_disabled` neutralisiert die Patches in **beiden** Richtungen | `test_lxt_patch_neutralize.py` (12 Tests) |
+| Chefers Rollout-Regel gegen ein Modell mit analytisch bekannten Gradienten | `test_chefer.py` (16 Tests) |
+| Der Methodenschalter der API verändert **nur** die Heatmap | `test_api_heatmap.py` (12 Tests) |
+
+---
+
+## Lokalisierung — die Erklärung wird messbar **[K]**
+
+Neu seit 2026-08-16. Bis dahin war die Heatmap eine **Darstellung**: man konnte sie
+ansehen, aber nicht beziffern. `docs/relevance_regularization.md` §4 hatte den Befund
+(„flächig statt auf den Mund lokalisiert") an **einem** Clip gemessen, was das Dokument
+selbst als `n = 1` markierte. Dieser Abschnitt beschreibt die Maschinerie, die daraus eine
+Größe mit Konfidenzintervall macht — und zugleich den Verlust, der sie optimiert.
+
+```
+src/data_processing/manipulation_mask.py   Ground Truth: wo wurde manipuliert (siehe 01)
+        ↓
+src/utils/localization.py                  RMA-Metrik === Trainingsverlust
+        ↓                          ↘
+VideoMAEModule._localization_loss    scripts/eval_localization.py
+   (Training, siehe 02)                (Messung, mit Bootstrap-CI)
+```
+
+### `src/utils/localization.py` — Metrik und Verlust in einem **[K]**
+
+262 Zeilen. **Metrik und Strafterm sind absichtlich dieselbe Größe** — Relevance Mass
+Accuracy (RMA), der Anteil der Relevanzmasse innerhalb der Maske. Die berichtete Zahl ist
+damit die optimierte Zahl, kein Stellvertreter dafür.
+
+> **Warum nicht der naheliegende Strafterm.** `docs/relevance_regularization.md` §7.5
+> schlug `L = mean(|R| · (1 − mask))` vor: Relevanz außerhalb der Maske bestrafen. Der
+> Modulkopf zeigt, dass dieser Verlust einen **degenerierten Minimierer** hat. Mit
+> `R = x · dy/dx` wird er minimiert, indem `|R| → 0` überall geht — und das ist zu
+> **null** Klassifikationskosten erreichbar: den Klassifikationskopf um `c` hochskalieren,
+> die Ausgabe des letzten Blocks um `c` herunter, und die Logits sind unverändert, die
+> Cross-Entropy ist unverändert, `dy/dx` ist mit `1/c` skaliert und der Strafterm fällt auf
+> `L/c`. Da das Modell schon bei val AUC 1,000 steht und sein CE-Gradient nahezu null ist,
+> **wirkt dieser Richtung nichts entgegen**: der Lauf konvergierte, meldete einen fallenden
+> Verlust und lokalisierte nichts. Die Verhältnisform ist invariant unter `R → cR`, diese
+> ganze Richtung hat darin **exakt null Gradient**. Das ist analytisch geschlossen, nicht
+> über λ austariert.
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `_MASS_FLOOR` | L47 | `1e-12`. Samples darunter werden **ausgeschlossen, nicht geklemmt** — ihr Verhältnis wäre Rauschen. |
+| `_apply_gate(values, frame_gate)` | L50 | Nullt die vom Gate ausgeschlossenen Frames. |
+| `relevance_mass(relevance, mask, frame_gate)` | L58 | `(inside, total, ratio)` je Sample. Nutzt **nur den Betrag** der Relevanz: außerhalb der Maske ist Evidenz *für real* genauso ein Lokalisierungsfehler wie Evidenz für fake. Die Division erfolgt durch das geklemmte `total` (statt ein Epsilon auf beide Terme zu addieren), damit `ratio(cR) == ratio(R)` **exakt** gilt. |
+| `mask_area_fraction(mask, frame_gate)` | L90 | Der Flächenanteil der Maske — das **Zufallsniveau** von RMA. Ohne ihn ist RMA bedeutungslos: 0,30 ist hervorragend gegen eine 5-%-Maske und schlecht gegen eine 40-%-Maske. |
+| `localization_loss(relevance, mask, frame_gate, mode, eps)` | L110 | Der Strafterm. `neg_log_ratio` (`−log RMA`) ist die Vorgabe: steil auf dem Zufallsniveau, mit dem ein Lauf startet, und flacher werdend, sodass spätes Training eine bereits lokalisierte Karte nicht weiter presst. `one_minus_ratio` ist die beschränkte Alternative. Liefert einen **exakten, aber weiterhin graphverbundenen** Nullwert, wenn kein Sample qualifiziert. |
+| `_normalized_ratio(...)` | L186 | RMA nach Normierung **je Frame auf dessen eigenes Maximum** — die Kontrolle gegen zeitliche Konzentration. Die Normierung *muss* pro Frame erfolgen: RMA ist gegen eine Skalierung je Sample ohnehin invariant, eine Division durch einen einzigen Skalar gäbe das Verhältnis unverändert zurück und die „Kontrolle" wäre konstruktionsbedingt eine Identität. |
+| `pointing_game(...)` | L211 | Liegt die **stärkste** Stelle in der Maske? (Zhang et al. 2018.) Ergänzt RMA: RMA kann ordentlich sein, während die Spitze woanders sitzt. |
+| `relevance_iou(..., top_frac=0.10)` | L231 | IoU zwischen den obersten `top_frac` Relevanzstellen und der Maske. Binarisiert über einen **Anteil** statt einen festen Schwellwert, bleibt damit skaleninvariant wie der Verlust. |
+
+**Die Diagnosewerte sind kein Beiwerk** — sie sind der Laufzeitnachweis, dass die
+Anti-Gaming-Eigenschaft gehalten hat:
+
+| Diagnose | Wozu |
+|---|---|
+| `mass_total` | Muss ungefähr konstant bleiben. Fällt sie gegen null, während `ratio` steigt, ist das genau die degenerierte Lösung — `RelevanceCollapseGuard` bricht darauf ab ([03](03_training_evaluation.md)). Gemessen fiel sie über die Läufe um **23 %**, während sich das Verhältnis verdreifachte: der Gewinn ist echte räumliche Umverteilung. |
+| `ratio_over_chance` | **Die Leitgröße.** RMA geteilt durch den Flächenanteil; 1,0 = die Relevanz ignoriert die Maske vollständig. Über Clips mit unterschiedlich großen Masken vergleichbar. |
+| `ratio_normalized` | Weicht sie von `ratio` ab, kommt der Gewinn daher, **welcher Frame** die Relevanz trägt, statt daher, wo sie *innerhalb* jedes Frames sitzt — eine zeitliche Abkürzung statt räumlicher Lokalisierung. |
+
+Getestet in `tests/test_localization_loss.py` (33 Tests) — darunter die Skaleninvarianz,
+die Gate-Semantik und das Verhalten an den numerischen Rändern.
+
+### `scripts/eval_localization.py` — die Messung **[K]**
+
+489 Zeilen. Der Modulkopf nennt den Grund für die Existenz: **ohne vorab festgelegte Metrik
+und Baseline kann ein Trainingslauf nur berichten, dass sein eigener Verlust gefallen ist**
+— was über die Heatmap nichts beweist. Das Skript stellt außerdem die Regionsdiagnose aus
+§4.3 des Dokuments wieder her, deren ursprüngliches Skript in einem Scratchpad lag und
+verloren ist (`--per-region`).
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `_ResumeCheckpoint` | L103 | Fortsetzbarkeit über eine Per-Chunk-CSV. |
+| `load_mask_store(processed_dir, split)` | L143 | Lädt `{split}_masks.npz`. |
+| `relevance_map_224(model, pixel_values, mode)` | L166 | **Die eine Stelle, an der die Methode gewählt wird.** `fake` = Single-Target-FAKE-Relevanz (entspricht §4 des Dokuments), `bivariate` = `\|R_fake\| + \|R_real\|` (was die Oberfläche rendert), `chefer` = das gradienten-gewichtete Rollout. Bewusst **eine** Funktion für alle drei: Chunk-Auswahl, Maskenpooling, Frame-Gating und alle fünf Metriken bleiben byte-identisch, ein Unterschied in den Zahlen ist damit ein Unterschied der **Methode** und nicht der Messung. Ein Skript je Methode setzte genau diese Zusage aufs Spiel. |
+| `pool_to_grid(heatmap)` | L206 | Macht das bilineare Upsampling von `explain()` durch Average-Pooling rückgängig und bringt die Karte auf das 14×14-Gitter — dasselbe Gitter, auf dem der Trainingsverlust rechnet. Eval und Training messen damit dasselbe Objekt. |
+| `region_shares(relevance_224, label_maps)` | L232 | Reproduziert die §4.2/§4.3-Tabelle (Relevanzanteil je Gesichtsregion plus `outside_face`), damit dieselbe Messung auf einem regularisierten Checkpoint wiederholbar ist. |
+| `bootstrap_ci(values, n_boot=2000, seed=42)` | L253 | Perzentil-Bootstrap, 95 %, **über Clips resampelt**. |
+| `summarize(rows, clip_level=True)` | L262 | **Aggregiert zuerst je Clip**, damit lange Clips die Statistik nicht dominieren. |
+| `evaluate(...)` | L297 | Die Schleife über die Chunks mit Maske. |
+
+Ergebnisdateien: `docs/results/loc_*.json` (je Metrik Mittelwert und Bootstrap-Intervall)
+sowie `docs/results/training_curve.csv`. Die Per-Chunk-CSVs bleiben in `temp/` und sind
+bewusst nicht versioniert.
+
+Getestet in `tests/test_eval_localization.py` (20 Tests).
+
+### Die zwei Gates — `scripts/smoke_*.py` **[E]**
+
+Beide sind **Go/No-go-Prüfungen vor** einem teuren Schritt, und beide sind so geschrieben,
+dass „drei von vier Prüfungen bestanden" ausdrücklich nicht genügt.
+
+| Datei | Zeilen | Prüft |
+|---|---:|---|
+| `smoke_relevance_backprop.py` | 458 | **Gate G2 — läuft das Verfahren überhaupt auf dieser GPU?** Vier Punkte: (1) **Gradient ungleich null am ERSTEN Encoder-Block** — ein reiner Kopf-Gradient wäre auch ungleich null, während der Backbone (wo das Lokalisierungsverhalten sitzt) nichts lernt; (2) **Äquivalenz zu `compute_attnlrp`** — ohne sie beweisen Gradienten nur, dass *irgendetwas* fließt, nicht dass es die AttnLRP-Heatmap ist (§8 Schritt 2 des Dokuments lässt diese Prüfung aus); (3) **Spitzen-VRAM und Schrittzeit mit Spill-Detektor** — unter Windows/WDDM wirft eine zu große Allokation **nicht**, sie spillt still in den geteilten Speicher und läuft rund 9× langsamer; ein Lauf, der „passt", aber 30 s/Schritt braucht, ist ein gescheiterter Lauf; (4) **CE-Gradiententreue unter dem Patch** — `cos(grad_CE_patched, grad_CE_true)` je Parametergruppe entscheidet, ob die billigere Variante mit einmaligem Patch vertretbar ist oder ob der Kontextmanager jeden Relevanzzweig umschließen muss. **Ergebnis:** Letzteres — daher `videomae_attnlrp_patched`. |
+| `smoke_chefer.py` | 175 | **Gate für die Chefer-Ablation.** Fünf Punkte, siehe unten. Die entscheidende, nur an einem echten Backbone beantwortbare Frage: gibt HuggingFaces `output_attentions=True` die Attention-Tensoren **im** Autograd-Graphen zurück oder abgelöste Kopien? Wären es Kopien, bräuchte der Ansatz eine Forward-Hook-Erfassung. |
 
 ---
 
@@ -282,5 +404,34 @@ Regularisierung bei beiden Methoden signifikant (AttnLRP +6,30, Chefer +0,848, b
 p = 0,0003). Chefers Karte ist dabei deutlich flacher: Formfaktor `p99/p50` von 2,5
 gegenüber 13,4 bei der LRP-Magnitude — beide identisch normiert.
 
+### `src/utils/chefer.py` auf Funktionsebene
+
+178 Zeilen, eine öffentliche Funktion. Modellagnostisch nach demselben Vertrag wie
+`compute_attnlrp`: alles Modellspezifische steckt im übergebenen `forward_fn`.
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `_NO_ATTENTION_GRAD_PATH` | L46 | Eine Fehlermeldung für zwei Symptome. Abgelöste Tensoren lassen `autograd` werfen, bevor es beginnt; im Graphen liegende, aber unbenutzte kommen unter `allow_unused` als `None` zurück — beide brauchen denselben Hinweis (Erfassung per Forward-Hook statt `output_attentions`). |
+| `compute_chefer_relevance(forward_fn, input_tensor, target_class, readout)` | L53 | Der ganze Durchlauf: Forward → Zielauswahl → `∂logit/∂A` → Rollout. Differenziert **nie** nach dem Eingang, sondern nach den Attention-Matrizen — `input_tensor` braucht daher kein `requires_grad`. Der Gradient wird über die **Summe** der Ziel-Logits genommen: jedes Sample hängt nur an seinen eigenen Attention-Zeilen, die Summe liefert also die Per-Sample-Gradienten in *einem* Backward statt B. **Klemmen vor dem Kopfmittel** (Paper-Reihenfolge) — andersherum könnte ein negativer Kopf einen positiven aufheben und genau die Evidenz löschen, die das Klemmen je Kopf entfernen soll. |
+
+**Warum `R − I` vor der Ablesung abgezogen wird — mit Zahlen.** Die Identität legt bei
+einer Mittel-Ablesung einen konstanten `1/n`-Sockel unter jedes Token, und `n = 1568`.
+An einem echten Clip gemessen waren das **99 % des schwächsten Wertes**; die Dynamik fiel
+von 27,6× auf 1,3×. Zwei Dinge brechen dort: Eine nahezu konstante Karte hat
+Relevanzmasse proportional zur Fläche, `ratio_over_chance` kollabiert damit
+**konstruktionsbedingt** gegen 1,0, ganz gleich was das Modell tut — und nach der
+Perzentil-Normalisierung gerendert ergibt sie einen gleichmäßig hellen Fleck. Die
+CLS-Ablesung des Papers entfernt den Sockel implizit (sie liest `R[0, 1:]`, die Identität
+berührt dort nur `R[0, 0]`); die Subtraktion macht beide Ablesungen konsistent, statt
+`"cls"` still richtig und `"mean"` still verdünnt zu lassen.
+
 **Tests:** `tests/test_chefer.py` (16), `tests/test_lxt_patch_neutralize.py` (12),
-`tests/test_api_heatmap.py` (14). Smoke: `scripts/smoke_chefer.py`.
+`tests/test_api_heatmap.py` (12). Smoke: `scripts/smoke_chefer.py` — fünf Prüfungen:
+Gradientenpfad vorhanden, Form/Endlichkeit/Nichtnegativität/keine Konstante (eine
+konstante Karte hieße, das Rollout ist auf die Identität kollabiert),
+**Tubelet-Duplizierung** (Frames `2k` und `2k+1` müssen identisch sein — sie teilen ein
+Token), **Klassensensitivität** `corr(R_fake, R_real)` (Teile der Rollout-Familie sind
+klassenblind; liegt der Wert bei ~1,0, muss die Ablation das sagen, statt die Karte
+stillschweigend als Klassenevidenz auszugeben) und das Halten des lxt-Wächters.
+Zusätzlich berichtet es `corr(Chefer, AttnLRP)` — die erste Zahl dazu, ob beide Methoden
+dasselbe sehen.

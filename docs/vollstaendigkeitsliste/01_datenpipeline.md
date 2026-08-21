@@ -14,6 +14,10 @@ AV-Deepfake1M (MP4 + JSON-Sidecar)
    └─→ H5Writer            → train/val/test.h5 + *_metadata.csv
    │                       (Nebenausgabe: data/normalized/{video_id}.mp4)
    │
+   │  ── OFFLINE, ZWEITE STUFE (seit 2026-08-16) ─────────────────────────
+   ├─→ manipulation_mask   Fake gegen gepaartes real.mp4 differenzieren
+   └─→ build_manipulation_masks.py  → {split}_masks.npz (zeilengleich zu h5_index)
+   │
    │  ── LAUFZEIT (jeder Trainingsschritt, src/data/) ───────────────────
    ├─→ BaseHDF5Dataset     lazy HDF5-Handle, Eval-Metadaten
    ├─→ normalize_*         ImageNet-z-Score (Video) / Zero-Mean-Unit-Var (Audio)
@@ -123,7 +127,8 @@ in der xAI-Ansicht:
 | ` ._create_landmarker()` | L595 | Baut einen frischen FaceLandmarker für den konfigurierten Modus (`num_faces=1`). |
 | ` .reset_video_state()` | L609 | Verwirft Tracking-Zustand vor einem neuen Video (nur VIDEO-Modus) — verhindert Übersprechen zwischen Videos. Umgesetzt als Neuanlage des Landmarkers, weil MediaPipe VIDEO-Modus **streng steigende Zeitstempel** auf derselben Instanz verlangt: die Uhr ließe sich sonst nicht auf 0 zurücksetzen. Im IMAGE-Modus ein No-op. Wird von beiden Pfaden (sequenziell und parallel) zu Beginn von `_extract_video_chunks` aufgerufen. |
 | ` ._detect_bbox(frame_rgb)` | L626 | Erkennung auf einem RGB-Frame; liefert `(bbox, landmarks)` oder `None`. Wählt je nach Modus `detect()` oder `detect_for_video()` und zählt im VIDEO-Modus die Zeitstempeluhr um `frame_interval_ms` weiter. |
-| ` .__call__(frames)` | L652 | **Hauptpfad (84 Z.):** Erkennung je Frame → Box-Mittelung → Skalierung → Quadratisierung → Crop → Resize. Rückgabe `(cropped, bbox6, landmarks)` mit `cropped` als `(16, 3, 224, 224)` uint8 channels-first, `bbox6 = (x1, y1, x2, y2, orig_w, orig_h)` und `landmarks` als `(16, 468, 2)` int16. Die Originalauflösung wird mitgeführt, damit Heatmaps später zurückprojiziert werden können. |
+| ` .landmarks_in_frame_space(frames)` | L652 | **Neu seit 2026-08-16.** Erkennt Landmarks auf **bereits zugeschnittenen** Frames und gibt sie im Koordinatenraum *dieser* Frames zurück — ohne neuen Crop. `__call__` würde eine neue Box berechnen und damit den Bezugsrahmen verschieben. Zweck: Landmarks für Datenbestände nachziehen, die vor Einführung des `landmarks`-Datensatzes im HDF5-Writer verarbeitet wurden; genutzt von `scripts/build_manipulation_masks.py` (`LandmarkSource`). Die Projektion ist eine reine Skalierung mit der Eingabegröße, bewusst **nicht** über `_landmarks_to_crop` — das skaliert beide Achsen mit `target_size` und würde nichtquadratische Eingaben verzerren. Liefert `None`, sobald *ein* Frame kein Gesicht zeigt (dieselbe Alles-oder-nichts-Regel wie `__call__`). |
+| ` .__call__(frames)` | L700 | **Hauptpfad (84 Z.):** Erkennung je Frame → Box-Mittelung → Skalierung → Quadratisierung → Crop → Resize. Rückgabe `(cropped, bbox6, landmarks)` mit `cropped` als `(16, 3, 224, 224)` uint8 channels-first, `bbox6 = (x1, y1, x2, y2, orig_w, orig_h)` und `landmarks` als `(16, 468, 2)` int16. Die Originalauflösung wird mitgeführt, damit Heatmaps später zurückprojiziert werden können. |
 | `iter_video_chunks(video_path, num_frames)` | L751 | Liest das Video mit decord und liefert aufeinanderfolgende, nicht überlappende `(16, H, W, 3)`-uint8-Blöcke. Ein unvollständiger Restblock wird verworfen. |
 
 ---
@@ -237,13 +242,77 @@ Szenarien laufen; die Zählwerte aus dem Manifest gehören mit in den Ergebnisve
 
 ---
 
+## `src/data_processing/manipulation_mask.py` — Manipulationsmasken **[K]**
+
+513 Zeilen, neu seit 2026-08-16. Erzeugt die **Ground-Truth-Karte, *wo* ein Fake bearbeitet
+wurde** — genau die Supervision, die den Chunk-Labels fehlt. Grundlage der
+Relevanz-Regularisierung ([02](02_modelle.md), [04](04_xai.md)); die Begründung steht in
+`docs/relevance_regularization.md` §7.1.
+
+**Das Verfahren in einem Satz:** das Fake-Video gegen sein gepaartes `real.mp4`
+differenzieren, beide mit der **Crop-Box des Fakes** auf 224 bringen, weichzeichnen,
+schwellen, morphologisch säubern, auf das 14×14-Tokengitter mitteln — und alle Frames
+außerhalb der `visual_fake_segments` auf null setzen.
+
+Drei Entscheidungen tragen das Verfahren und sind im Modul jeweils **gemessen**, nicht
+angenommen:
+
+1. **Die Crop-Box des Fakes gilt für beide Videos.** Würde die Box aus dem Realvideo neu
+   berechnet, läge die Maske in einem anderen Koordinatenrahmen als die gespeicherten
+   Frames.
+2. **Weichzeichnen vor dem Schwellen.** Die beiden MP4s sind *unabhängig kodiert*; die
+   rohe Differenz hat deshalb einen Codec-Rauschboden über das ganze Bild, der ohne
+   Vorglättung zu einer Vollbildmaske schwellt.
+3. **Beschränkung auf das Gesichtsoval.** Über 22 Clips gemessen liegen **40–54 %** der
+   rohen Differenzenergie *außerhalb* des Gesichts (Hintergrund, Haare, Schultern
+   re-enkodieren anders). Die Ovalmaske entfernt das und hebt den Mundanteil der Maske
+   von 27 % auf 61 %.
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `IMG_SIZE` / `PATCH_SIZE` / `GRID_SIZE` / `NUM_FRAMES` / `DEFAULT_FPS` | L53–57 | Geometriekonstanten (`224`, `16`, `14`, `16`, `25.0`). Der Modulkopf verlangt ausdrücklich Gleichlauf mit `hdf5_writer.py` und der VideoMAE-Patchgröße. |
+| `MaskConfig` | L65 | Frozen Dataclass mit sieben Parametern: `abs_threshold` 0,10 · `blur_sigma` 1,5 · `morph_open_px` 3 · `morph_close_px` 5 · `min_area_frac` 0,001 · `max_area_frac` 0,08 · `min_in_segment_frac` 0,0. **Der Docstring ist die eigentliche Quelle:** er enthält drei Kalibriertabellen (Schwelle × Sigma über 28 Clips, Flächenband über 1.955 Masken, `in_segment_frac`-Verteilung über 1.964 Masken je Variante). |
+| `crop_and_resize(frames, crop_box)` | L167 | Schneidet beide Framestapel mit derselben Box zu und skaliert per `INTER_AREA` auf 224 — dieselbe Kette wie im Preprocessing. Wirft bei leerer oder außerhalb liegender Box. |
+| `face_oval_mask(landmarks_seq)` | L198 | Rastert das `FACE_OVAL_INDICES`-Polygon aus `face_extractor.py` je Frame. **Dieselbe Polygonquelle wie die Regionspartition der Laufzeit-xAI** (`_partition_label_maps`) — Maske und Auswertung sind sich also darüber einig, wo das Gesicht liegt. |
+| `frame_difference_mask(fake, real, crop_box, cfg, landmarks_seq)` | L230 | Der Kern: Crop → `\|Δ\|` als **Maximum über die Kanäle** (ein reiner Chroma-Edit muss überleben, ein Kanalmittel würde ihn verdünnen) → Gauß → Schwelle → Opening → Closing → optional Ovalmaske. Wirft bei unterschiedlichen Formen der beiden Stapel. |
+| `pool_mask_to_grid(mask_224)` | L294 | Mittelt 16×16-Blöcke zum 14×14-Gitter. Der gepoolte Wert ist die **Flächenabdeckung** des Patches — weiche Abdeckung statt Re-Binarisierung, gleicher Speicherbedarf, mehr Information. Genau das Gitter, auf dem der Lokalisierungs-Loss und `VideoMAEModule.explain` arbeiten. |
+| `chunk_index_from_id(chunk_id)` | L328 | Zieht den Zeitindex aus `{video_id}__chunk{NNNNN}`. **Bewusst aus der ID, nicht aus der CSV-Zeilenreihenfolge:** gesichtslose Chunks werden beim Preprocessing übersprungen, ohne einen Index zu verbrauchen — Zeilennummer und `chunk_idx` laufen deshalb auseinander. |
+| `segment_frame_gate(chunk_idx, visual_fake_segments, …)` | L345 | Per-Frame-Gate aus den Metadatensegmenten. Frame `j` von Chunk `c` ist Globalframe `c·16 + j` und deckt das halboffene Intervall `[idx/fps, (idx+1)/fps)` ab. |
+| `apply_frame_gate(mask, gate)` | L378 | Nullt jeden nicht gegateten Frame. |
+| `mask_area_fraction(mask)` | L398 | Per-Frame-Flächenanteil `(T,)`. |
+| `in_segment_energy_fraction(mask, gate)` | L403 | **Die falsifizierbare Prüfung:** Anteil der *ungegateten* Maskenenergie, der schon vor dem Gating in den Segmenten liegt. Ein niedriger Wert heißt, die Maske misst Codec-Rauschen und das Gating würde das *verdecken* statt es zu bestätigen. |
+| `ChunkMask` | L420 | Ergebnis-Dataclass: `grid` (Training), `mask_224` (Overlays und Regionszuordnung), `frame_gate`, `area_frac`, `in_segment_frac`, `rejected`, `reject_reason`. Verworfene Chunks behalten ihre Diagnosewerte, damit die Ablehnungsquote berichtbar bleibt; `grid` und `frame_gate` werden genullt. |
+| `build_chunk_mask(...)` | L447 | Orchestrierung für einen Chunk: Differenzmaske → Gate → `in_segment_frac` → Gating → Frames unter `min_area_frac` aus dem Gate entfernen → Ablehnungsprüfung → Pooling. |
+
+> **Das Gating ist eine Bestätigung, keine Ersatzhandlung.** Frames außerhalb der Segmente
+> sind echt und müssen eine leere Maske tragen — sonst brächte der Lokalisierungs-Loss dem
+> Modell bei, auch auf unmanipulierten Frames „auf den Mund zu schauen". Ob die Pixelmessung
+> und die Metadaten überhaupt übereinstimmen, sagt aber erst `in_segment_energy_fraction`;
+> deshalb wird der Wert je Chunk berichtet und ist Teil des Gates G0.
+
+> **`min_in_segment_frac` ist absichtlich auf 0 (aus).** Die Absicht war, „Generierungsrauschen,
+> das zufällig ins Segment fällt" per Messung statt per Variantenname auszuschließen. Über
+> 1.964 Masken überlappen sich die Verteilungen der drei Varianten dafür zu stark: Schwelle
+> 0,30 lässt 3 `real_video_fake_audio`-Chunks stehen (bei 81,9 % Abdeckung), Schwelle 0,60
+> entfernt sie bei 66 % Abdeckung — unter der 80-%-Untergrenze von Gate G0. Diese Chunks
+> werden stattdessen **über die Variante** ausgeschlossen, was per Datensatzdefinition exakt
+> ist. Der Schalter bleibt, weil er weiterhin frame-fehlausgerichtete Paare erkennt.
+
+> **Für den Beleg — der Vergleichswert:** `docs/relevance_regularization.md` §4.4 misst die
+> Relevanz des *Modells* auf dem Mund während der manipulierten Frames bei **17,4 %**
+> (Zufallsniveau). Die Masken legen **58 %** ihrer Energie dorthin. Diese Differenz ist das
+> Trainingssignal — und zugleich der Beleg, dass die Supervision etwas anderes sagt als das,
+> was das Modell ohnehin tut.
+
+---
+
 # Laufzeitseite: `src/data/`
 
 > Ohne `__init__.py` — siehe [00_inventar.md §6](00_inventar.md).
 
 ## `src/data/base_hdf5_dataset.py` — Normalisierung, Augmentierung, Perturbation **[K]**
 
-416 Zeilen. Zentralisiert alles, was zwischen den drei Dataset-Klassen
+542 Zeilen (416 vor der Augmentierungs-Aufspaltung vom 2026-08-16). Zentralisiert alles, was zwischen den drei Dataset-Klassen
 **byte-für-byte identisch** sein muss. Diese Identität ist Voraussetzung für den
 Phase-1-↔-Phase-2-Vergleich: unterschiedliche Normalisierung würde den Vergleich
 unmöglich machen. Die API-Inferenz repliziert dieselbe Rechnung
@@ -254,27 +323,31 @@ unmöglich machen. Die API-Inferenz repliziert dieselbe Rechnung
 | `MODIFY_TYPE_TO_IDX` | L30 | Stabile Kodierung der Videokategorie (`real`/`visual`/`audio`/`both`) für die kategorienweise Testauswertung; `-1` = unbekannt bei Alt-CSVs. |
 | `normalize_video_frames(video_np, augment_fn)` | L41 | uint8 → float32 `/255`, optional Augmentierung, dann ImageNet-Mean/Std-z-Score über `(T, C, H, W)`. Die Augmentierung greift bewusst **vor** der z-Normierung, also im `[0, 1]`-Raum. |
 | `normalize_audio(audio_np, augment_fn)` | L58 | Zero-Mean/Unit-Variance je Sample (nicht je Datensatz) — die Normierung, die Wav2Vec2 erwartet. Das Epsilon `1e-7` unter der Wurzel verhindert die Division durch Null bei stillen (varianzfreien) Segmenten. |
-| `augment_video_frames(frames)` | L78 | **Standard-Augmentierung** im `[0, 1]`-Raum: Horizontalspiegelung (p = 0,5), Helligkeits-/Kontrast-/Sättigungsjitter mit Faktoren in `[0,8; 1,2]`, Random-Resized-Crop mit Seitenskala `[0,9; 1,0]`. Bewusst konservativ: das Ziel ist, Identitäts- und Aufnahme-Shortcuts zu brechen (der dominante Überanpassungsmodus in Phase 2), **nicht** die Fälschungsartefakte selbst zu beschädigen. |
-| `_jpeg_compress_frames(frames, quality)` | L117 | JPEG-Roundtrip je Frame — erzeugt Block- und Ringing-Artefakte. Tauscht die Kanäle in beide Richtungen, damit OpenCVs BGR-Chroma-Subsampling die richtigen Ebenen trifft. |
-| `_gaussian_blur_frames(frames, sigma)` | L138 | Separabler Gauß-Blur über die Ortsdimensionen. |
-| `augment_video_frames_robust(frames)` | L152 | **Robuste Augmentierung:** Standard + kompressionsartige Korruptionen (Rezept der DFDC-Gewinner), je mit p = 0,3: JPEG-Qualität `[30; 90]`, Gauß-σ `[0,5; 2,0]`, Downscale-Upscale mit Faktor `[0,5; 0,9]`. Zielt auf Phase 3 — das Modell soll Degradation schon im Training sehen. Anders als die Standardvariante **sollen** diese Störungen die Fälschungsartefakte angreifen, damit sich das Modell nicht allein auf fragile Hochfrequenzspuren stützt. |
-| `augment_audio(waveform)` | L187 | **Standard-Audioaugmentierung** auf der Rohwellenform: Polaritätsumkehr (p = 0,5) und additives Gaußrauschen bei zufälligem SNR in `[15; 40]` dB (p = 0,5). Läuft vor der Standardisierung — eine reine Pegeländerung wäre danach wegnormiert und wird deshalb gar nicht erst verwendet. Die Polaritätsumkehr ist für die Aufgabe phaseninvariant und nimmt dem Modell die absolute Wellenformpolarität als Merkmal. |
-| `augment_audio_robust(waveform)` | L214 | Zusätzlich Zeitmaskierung (SpecAugment-artig, direkt auf der Wellenform): eine zusammenhängende Spanne von 5–10 % des Chunks wird mit p = 0,5 auf Null gesetzt. Zwingt zur Auswertung des ganzen Fensters statt eines einzelnen Transienten und simuliert kurze Aussetzer der Übertragungskette. |
+| `VideoAugmentParams` | L80 | **Neu seit 2026-08-16.** Frozen Dataclass der *gezogenen* Augmentierungsparameter eines Chunks (`flip`, `brightness`, `contrast`, `saturation`, `crop_top/left/side`). Existiert, weil eine Manipulationsmaske **dieselbe** geometrische Transformation erfahren muss wie die Frames: ein gespiegelter Frame mit ungespiegelter Maske brächte dem Modell bei, die Manipulation liege auf der falschen Gesichtshälfte — und **nichts würde scheitern**, der Loss bliebe endlich, die Formen passten weiter. |
+| `sample_video_augment_params(h, w, allow_scale_crop)` | L102 | Zieht die Parameter. **Die Ziehreihenfolge ist tragend** (flip → Jitter → Cropseite → top → left), damit ein geseedeter Lauf exakt reproduziert, was `augment_video_frames` vor der Aufspaltung erzeugte. `allow_scale_crop=False` unterdrückt den Random-Resized-Crop. |
+| `apply_geometric_augment(x, params, reference_size, mode)` | L144 | Wendet **nur** die geometrieändernden Teile an (Spiegelung, Crop) — genau das, was eine Abdeckungsmaske braucht; der photometrische Jitter ist für sie bedeutungslos. `reference_size` rechnet die in 224er-Koordinaten gezogene Cropbox auf das gröbere Gitter um; eine 14×14-Maske mit einer 224er-Box zu indizieren träfe still nichts. Voreinstellung `mode="nearest"`, damit die Abdeckung nicht über Nachbarzellen verschmiert wird. |
+| `apply_video_augment(frames, params)` | L191 | Wendet eine gezogene Augmentierung auf die Frames an. |
+| `augment_video_frames(frames)` | L222 | **Standard-Augmentierung** im `[0, 1]`-Raum: Horizontalspiegelung (p = 0,5), Helligkeits-/Kontrast-/Sättigungsjitter mit Faktoren in `[0,8; 1,2]`, Random-Resized-Crop mit Seitenskala `[0,9; 1,0]`. Seit 2026-08-16 nur noch ein dünner Wrapper über `sample_video_augment_params` + `apply_video_augment`; **Verhalten unverändert**. Bewusst konservativ: das Ziel ist, Identitäts- und Aufnahme-Shortcuts zu brechen (der dominante Überanpassungsmodus in Phase 2), **nicht** die Fälschungsartefakte selbst zu beschädigen. |
+| `_jpeg_compress_frames(frames, quality)` | L243 | JPEG-Roundtrip je Frame — erzeugt Block- und Ringing-Artefakte. Tauscht die Kanäle in beide Richtungen, damit OpenCVs BGR-Chroma-Subsampling die richtigen Ebenen trifft. |
+| `_gaussian_blur_frames(frames, sigma)` | L264 | Separabler Gauß-Blur über die Ortsdimensionen. |
+| `augment_video_frames_robust(frames)` | L278 | **Robuste Augmentierung:** Standard + kompressionsartige Korruptionen (Rezept der DFDC-Gewinner), je mit p = 0,3: JPEG-Qualität `[30; 90]`, Gauß-σ `[0,5; 2,0]`, Downscale-Upscale mit Faktor `[0,5; 0,9]`. Zielt auf Phase 3 — das Modell soll Degradation schon im Training sehen. Anders als die Standardvariante **sollen** diese Störungen die Fälschungsartefakte angreifen, damit sich das Modell nicht allein auf fragile Hochfrequenzspuren stützt. |
+| `augment_audio(waveform)` | L313 | **Standard-Audioaugmentierung** auf der Rohwellenform: Polaritätsumkehr (p = 0,5) und additives Gaußrauschen bei zufälligem SNR in `[15; 40]` dB (p = 0,5). Läuft vor der Standardisierung — eine reine Pegeländerung wäre danach wegnormiert und wird deshalb gar nicht erst verwendet. Die Polaritätsumkehr ist für die Aufgabe phaseninvariant und nimmt dem Modell die absolute Wellenformpolarität als Merkmal. |
+| `augment_audio_robust(waveform)` | L340 | Zusätzlich Zeitmaskierung (SpecAugment-artig, direkt auf der Wellenform): eine zusammenhängende Spanne von 5–10 % des Chunks wird mit p = 0,5 auf Null gesetzt. Zwingt zur Auswertung des ganzen Fensters statt eines einzelnen Transienten und simuliert kurze Aussetzer der Übertragungskette. |
 
 **Eine Ziehung je Chunk, nicht je Frame.** Alle Zufallsparameter der Video-Augmentierung
 werden einmal pro Chunk gezogen und auf **alle 16 Frames identisch** angewandt. Zöge man je
 Frame neu, entstünde ein künstliches, mit dem Label unkorreliertes Flackern — genau in der
 temporalen Dimension, die der Spatio-Temporal-Transformer auswerten soll.
-| `resolve_video_augment_fn(augment, strength)` | L246 | Dispatch `strength ∈ {standard, robust}` → Callable oder `None`. |
-| `resolve_audio_augment_fn(augment, strength)` | L254 | Dito für Audio. |
-| `tubelet_shuffle(frames, generator, tubelet_size)` | L268 | **Diagnostik:** permutiert VideoMAE-*Tubelets* (Frame-Paare, `tubelet_size=2` bei VideoMAE-base), lässt jedes Tubelet aber intakt. Zerstört die *globale* Zeitordnung im Chunk (etwa die Lage eines Real→Fake-Übergangs), ohne die Mikrobewegung anzutasten, die das Patch-Embedding verarbeitet. `T` muss durch `tubelet_size` teilbar sein. |
-| `frame_shuffle(frames, generator)` | L295 | **Stärkere Diagnostik:** permutiert jeden Frame einzeln, zerstört sowohl die globale Ordnung als auch die Paarung innerhalb der Tubelets. |
-| `resolve_frame_perturbation_fn(perturbation)` | L318 | Dispatch für die Eval-Zeit-Perturbationen. → **Spatial-Dominance-Test:** bleibt die AUROC unverändert, ignoriert das Modell die zeitliche Ordnung und entscheidet rein räumlich. Belegrelevant als Nachweis einer Modelleigenschaft, nicht als Trainingsverfahren. |
-| `BaseHDF5Dataset` | L333 | Basisklasse; öffnet das HDF5-Handle **lazy** (`_open_h5`), damit DataLoader-Worker nach dem Fork je ein eigenes Handle bekommen. |
-| ` ._load_eval_metadata()` | L361 | Lädt `video_idx`/`modify_idx` aus dem Geschwister-CSV — Grundlage der videoweisen Aggregation und der kategorienweisen Auswertung. Das HDF5 selbst speichert keine `video_id`. **Degradiert kontrolliert:** Fehlt die CSV oder passt ihre Zeilenzahl nicht zur Chunkzahl, gibt es eine Warnung und die Metriken fallen auf Chunk-Ebene zurück, statt still falsch zu aggregieren. |
-| ` ._eval_metadata(idx)` | L395 | Liefert `video_idx`/`modify_idx` eines Samples als Tensoren — oder `{}`, wenn keine Metadaten geladen wurden. Wird von allen drei Datasets in den Rückgabedict eingemischt. |
-| ` ._open_h5()` | L404 | Öffnet das Handle beim ersten Zugriff im jeweiligen Worker-Prozess. |
-| ` .__del__()` | L413 | Schließt das Handle beim Einsammeln, Ausnahmen unterdrückt — Aufräumen darf den Interpreter-Shutdown nicht stören. |
+| `resolve_video_augment_fn(augment, strength)` | L372 | Dispatch `strength ∈ {standard, robust}` → Callable oder `None`. |
+| `resolve_audio_augment_fn(augment, strength)` | L380 | Dito für Audio. |
+| `tubelet_shuffle(frames, generator, tubelet_size)` | L394 | **Diagnostik:** permutiert VideoMAE-*Tubelets* (Frame-Paare, `tubelet_size=2` bei VideoMAE-base), lässt jedes Tubelet aber intakt. Zerstört die *globale* Zeitordnung im Chunk (etwa die Lage eines Real→Fake-Übergangs), ohne die Mikrobewegung anzutasten, die das Patch-Embedding verarbeitet. `T` muss durch `tubelet_size` teilbar sein. |
+| `frame_shuffle(frames, generator)` | L421 | **Stärkere Diagnostik:** permutiert jeden Frame einzeln, zerstört sowohl die globale Ordnung als auch die Paarung innerhalb der Tubelets. |
+| `resolve_frame_perturbation_fn(perturbation)` | L444 | Dispatch für die Eval-Zeit-Perturbationen. → **Spatial-Dominance-Test:** bleibt die AUROC unverändert, ignoriert das Modell die zeitliche Ordnung und entscheidet rein räumlich. Belegrelevant als Nachweis einer Modelleigenschaft, nicht als Trainingsverfahren. |
+| `BaseHDF5Dataset` | L459 | Basisklasse; öffnet das HDF5-Handle **lazy** (`_open_h5`), damit DataLoader-Worker nach dem Fork je ein eigenes Handle bekommen. |
+| ` ._load_eval_metadata()` | L487 | Lädt `video_idx`/`modify_idx` aus dem Geschwister-CSV — Grundlage der videoweisen Aggregation und der kategorienweisen Auswertung. Das HDF5 selbst speichert keine `video_id`. **Degradiert kontrolliert:** Fehlt die CSV oder passt ihre Zeilenzahl nicht zur Chunkzahl, gibt es eine Warnung und die Metriken fallen auf Chunk-Ebene zurück, statt still falsch zu aggregieren. |
+| ` ._eval_metadata(idx)` | L521 | Liefert `video_idx`/`modify_idx` eines Samples als Tensoren — oder `{}`, wenn keine Metadaten geladen wurden. Wird von allen drei Datasets in den Rückgabedict eingemischt. |
+| ` ._open_h5()` | L530 | Öffnet das Handle beim ersten Zugriff im jeweiligen Worker-Prozess. |
+| ` .__del__()` | L539 | Schließt das Handle beim Einsammeln, Ausnahmen unterdrückt — Aufräumen darf den Interpreter-Shutdown nicht stören. |
 
 ---
 
@@ -285,7 +358,7 @@ darin, welche Felder sie aus dem HDF5 ziehen.
 
 | Datei | Klasse | Liefert | Voreinstellung `label_type` | Besonderheit |
 |---|---|---|---|---|
-| `hdf5_dataset.py` (81 Z.) | `DeepfakeHDF5Dataset` | `pixel_values`, `labels` | `label_video` | Einzige Klasse mit `frame_perturbation` + `frame_perturbation_seed` (Diagnostik). Seed wird pro Chunk abgeleitet (`seed + idx`), damit Chunks unterschiedlich, aber reproduzierbar permutiert werden. Die Permutation greift nach der Normierung — zulässig, weil Mischen und framweise Normierung kommutieren. |
+| `hdf5_dataset.py` (206 Z.) | `DeepfakeHDF5Dataset` | `pixel_values`, `labels`, optional `loc_mask`/`loc_frame_gate`/`has_loc_mask` | `label_video` | Einzige Klasse mit `frame_perturbation` + `frame_perturbation_seed` (Diagnostik). Seed wird pro Chunk abgeleitet (`seed + idx`), damit Chunks unterschiedlich, aber reproduzierbar permutiert werden. Die Permutation greift nach der Normierung — zulässig, weil Mischen und framweise Normierung kommutieren. |
 | `audio_hdf5_dataset.py` (62 Z.) | `DeepfakeAudioHDF5Dataset` | `input_values`, `labels` | `label_audio` | Prüft beim Öffnen, dass die Datei überhaupt einen `audio`-Datensatz hat, sonst `ValueError` mit Hinweis auf erneutes Preprocessing. |
 | `multimodal_hdf5_dataset.py` (85 Z.) | `MultimodalHDF5Dataset` | `pixel_values`, `input_values`, `labels` | `label` | Liefert **ausgerichtete** Tripel: Video- und Audiofenster stammen garantiert aus demselben Chunk. Prüft zusätzlich, dass `video` und `audio` **gleich lang** sind — eine Längendifferenz würde die Modalitäten stillschweigend gegeneinander verschieben. |
 
@@ -301,6 +374,33 @@ existiert, und listen im Fehlerfall die verfügbaren Labelschlüssel auf.
   Training kollabiert dann auf die Mehrheitsklasse. `label_video` ist das beobachtbare Ziel.
 - **Multimodal (`label`):** Hier ist das kombinierte Label korrekt, weil dem Modell beide
   Modalitäten vorliegen.
+
+---
+
+### Der Maskenspeicher im `DeepfakeHDF5Dataset` **[K]**
+
+Neu seit 2026-08-16, über zwei Konstruktorargumente: `mask_path` (Pfad auf
+`{split}_masks.npz`) und `mask_allow_scale_crop`. **Ohne `mask_path` ist der Pfad
+byte-für-byte der alte** — alle Phase-1- bis Phase-4-Konfigurationen bleiben unberührt.
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `_load_mask_store(mask_path)` | L90 | Lädt den **gesamten** Speicher in den Arbeitsspeicher, zeilengleich zu `h5_index`. Vertretbar, weil er winzig ist (14×14-uint8-Gitter für ~6 % der Chunks, deutlich unter 1 MB je Split) — und nötig, weil ein zweites Dateihandle je Worker geöffnet werden müsste (HDF5 ist nicht fork-sicher). **Fehlende Datei = Funktion aus, mit genau einer Warnung.** Eine Längenabweichung zwischen Speicher und HDF5 wirft dagegen: die Zeilenzuordnung erfolgt über `h5_index`, eine andere Länge heißt anderer Preprocessing-Lauf. |
+| `has_masks` (Property) | L133 | Ob ein Speicher geladen ist. |
+| `mask_presence()` | L137 | `(N,)`-uint8-Flag je Chunk — die Grundlage des Maskensamplers im DataModule. |
+| `_mask_for(idx)` | L148 | `(mask, frame_gate, has_mask)`, **nullgefüllt** für Chunks ohne Maske. Das hält die Batchform konstant, sodass der Default-Collate weiter greift und kein eigener Collate nötig wird. |
+| `__getitem__` (Maskenzweig) | L167 | Maskierte Chunks teilen sich **eine** Augmentierungsziehung zwischen Frames und Maske (`sample_video_augment_params` → `apply_video_augment` für die Frames, `apply_geometric_augment` für die Maske). Unmaskierte Chunks laufen unverändert über den alten Pfad. |
+
+> **Warum der Random-Resized-Crop für maskierte Chunks standardmäßig aus ist.** Die
+> Cropseite liegt bei 12,6–14,0 Zellen des 14×14-Gitters; ihn auf der Maske nachzuspielen
+> kostet also bis zu **eine ganze Zelle** — rund 7 % des Bildes und damit mehr, als eine
+> typische Mundmaske groß ist. Die Spiegelung ist bei jeder Auflösung exakt und wird
+> **immer** nachgespielt. In den drei tatsächlich gelaufenen Experimenten ist die
+> Augmentierung ohnehin ganz abgeschaltet (`data.augment: false`), um jede
+> Frame-Masken-Fehlausrichtung auszuschließen.
+
+Geprüft in `tests/test_mask_dataset.py` (16 Tests) und `tests/test_augment_mask_alignment.py`
+(14 Tests) — Letzteres weist nach, dass Frames und Maske dieselbe Geometrie erfahren.
 
 ---
 
@@ -325,7 +425,15 @@ festgelegt werden.
 Je 36–64 Zeilen. Dünne Unterklassen, die `_make_dataset` implementieren und die
 Hydra-Signatur bereitstellen (`data_dir`, `batch_size`, `num_workers`, `pin_memory`,
 `label_type`, `augment`, `augment_strength`, `balanced_sampling`, `prefetch_factor`).
-`VideoMAEDataModule` reicht zusätzlich `frame_perturbation` + `_seed` durch.
+`VideoMAEDataModule` reicht zusätzlich `frame_perturbation` + `_seed` durch — und ist
+seit 2026-08-16 mit 115 Zeilen die einzige der drei, die mehr tut als das:
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `mask_dir` / `mask_allow_scale_crop` / `mask_oversample` | L26 | Drei neue Hydra-Parameter. `mask_dir: null` (Voreinstellung) schaltet die Masken vollständig ab. |
+| `_mask_path(split)` | L50 | `{mask_dir}/{split}_masks.npz` oder `None`. |
+| `train_dataloader()` | L71 | **Überschrieben, weil die Basisklasse sonst still das Falsche täte:** sie greift nur dann zu einem Sampler, wenn `balanced_sampling` gesetzt ist. Ein `mask_oversample: true` bei `balanced_sampling: false` würde ignoriert — der Lauf liefe normal durch, der Lokalisierungs-Loss feuerte auf ~5 % statt ~50 % der Samples, und nichts meldete ein Problem. |
+| `_train_sampler()` | L84 | `WeightedRandomSampler` nach **inverser Häufigkeit von „trägt eine Maske"**, sodass ein Batch etwa 50/50 statt 6/94 gemischt ist. Fällt auf die geerbte Klassenbalancierung zurück, wenn `mask_oversample` aus ist, kein Speicher geladen wurde (mit Warnung) oder alle/keine Chunks eine Maske tragen. **Nebeneffekt, der in den Beleg gehört:** Masken tragen ausschließlich Fake-Chunks, das Übersampeln balanciert die Klassen also implizit mit — deshalb setzen die Experimentkonfigurationen `balanced_sampling: false`, sonst würde zweimal korrigiert. |
 
 Zwei Gemeinsamkeiten sind belegrelevant:
 
@@ -346,6 +454,7 @@ Speicher.
 
 | Datei | Zeilen | Aufgabe | Beleg |
 |---|---:|---|---|
+| `build_manipulation_masks.py` | 615 | **Erzeugt die Manipulationsmasken für einen ganzen Split** (seit 2026-08-16). Schreibt `{split}_masks.npz` neben `{split}.h5`, **zeilengleich zu `h5_index`** — das Dataset schlägt eine Maske damit ohne Join-Logik nach, und die HDF5-Dateien bleiben bitgleich. Bausteine: `build_metadata_index` (globt den Baum statt `video_id` an `__` zu zerlegen — 27 Clip-IDs sind YouTube-IDs, die selbst `__` enthalten), `paired_real_video_id` (löst das Realvideo über das `original`-Feld der Metadaten auf, mit Suffixtausch als Rückfall), `_VideoPair` (zwei decord-Reader; eine große Differenz der Framezahlen heißt „nicht dieselbe Aufnahme"), `MaskStore` (Akkumulation, `uint8`-Speicherung ≈ 3 KB je Chunk, `--resume`), `LandmarkSource` (Landmarks aus dem HDF5, sonst MediaPipe über die rekonstruierten 224er-Crops), `write_overlay` (Sichtprüfung) und `summarize_g0`. **Nur `fake_video_*`-Varianten mit nichtleeren `visual_fake_segments`** — `real_video_fake_audio` lässt die Videospur unangetastet, seine visuelle Maske wäre konstruktionsbedingt leer und brächte dem Modell „nirgends Relevanz" bei. | **[K]** — erzeugt die Ground Truth der Lokalisierung |
 | `validate_processed.py` | 288 | **Integritätsprüfung des HDF5-Bestands.** Prüft Struktur/Shapes/dtypes (`_check_h5_structure`), CSV-Konsistenz (`_check_csv`), Labelverteilung (`_check_labels`, leere Trainklasse = Fehler), Crop-Box-Geometrie (`_check_crop_boxes`: positive Fläche, im Bild, quadratisch ±1 px), Pixel- und Audiostatistik auf Stichprobe, sowie **Identitätsdisjunktheit über die Splits** (`_check_identity_disjointness`). `_export_samples` schreibt Kontaktbögen + WAV zur Sichtprüfung. | **[K]** — belegt methodische Sorgfalt |
 | `relabel_chunks.py` | 226 | Rechnet Chunk-Labels **in-place** aus den Fake-Segmenten neu (CSV + HDF5), ohne Neu-Preprocessing. `_suggest_class_weights` schlägt die passenden Inverse-Frequenz-Gewichte vor. `dry_run` verfügbar. Entstand, als die Überlappungsregel eingeführt wurde. | **[E]** |
 | `build_demo_subset.py` | 313 | Erzeugt einen kleinen, **identitätsdiversen** Demo-Teilsatz für die Clip-Auswahl der Weboberfläche. `select_diverse_videos` bevorzugt Segmente mit den meisten Varianten; `_resolve_outputs` verhindert das Überschreiben der Primärdaten. | **[E]** |

@@ -1,14 +1,15 @@
 # 10 — Konfiguration (Hydra)
 
-71 YAML-Dateien plus `conf/clips.json`. Zwei getrennte Konfigurationsbäume:
+**79 YAML-Dateien** plus `conf/clips.json` (71 bis 2026-08-15; die acht neuen gehören
+sämtlich zur Relevanz-Regularisierung, §4 und §5). Zwei getrennte Konfigurationsbäume:
 
 | Baum | YAML | Zweck | Einstiegspunkte |
 |---|---:|---|---|
-| `configs/` | 68 | Training, Evaluation, Erklärung | `src/train.py`, `src/eval.py`, `src/explain.py`, `src/explain_audio.py`, `src/explain_multimodal.py` |
+| `configs/` | 76 | Training, Evaluation, Erklärung | `src/train.py`, `src/eval.py`, `src/explain.py`, `src/explain_audio.py`, `src/explain_multimodal.py` |
 | `conf/` | 3 | Preprocessing, Ablationsaufbau, Cross-Dataset | `src/data_processing/preprocess.py`, `src/data_processing/build_ablation.py`, `scripts/preprocess_loose_videos.py` |
 
 (Das Verzeichnis `configs/` enthält daneben `__init__.py`, `readme.md` und
-`local/.gitkeep` — daher die 71 Dateien in [00](00_inventar.md).)
+`local/.gitkeep` — daher die 79 Dateien in [00](00_inventar.md).)
 
 **Grundregel des Projekts** (aus `CLAUDE.md`): Keine Hyperparameter im Python-Code. Jede
 Zahl, die ein Experiment definiert, steht in einer YAML. Für den Beleg heißt das: Die
@@ -86,7 +87,7 @@ empirisch gesetzt (Train-Loss 0,37 gegen Val-Loss 1,03 im zweiten Lauf).
 
 ## 3. `configs/data/` — DataModule-Definitionen **[K]**
 
-`deepfake_video.yaml` (28 Z.), `deepfake_audio.yaml` (28 Z.),
+`deepfake_video.yaml` (45 Z.), `deepfake_audio.yaml` (28 Z.),
 `deepfake_multimodal.yaml` (20 Z.) setzen `data_dir`, `batch_size`, `num_workers`,
 `pin_memory`, `label_type`, `augment`, `augment_strength`, `balanced_sampling`,
 `prefetch_factor` (und beim Video zusätzlich `frame_perturbation` und
@@ -125,6 +126,14 @@ kennt zwei Stufen, die das Dokument bisher nur qualitativ nannte:
 > Die native Verteilung unter `label_video` ist ~94/6; der `WeightedRandomSampler` zieht
 > ~50/50 mit Zurücklegen.
 
+**Drei Schlüssel nur beim Video, neu seit 2026-08-16** (`deepfake_video.yaml`):
+
+| Schlüssel | Vorgabe | Wirkung |
+|---|---|---|
+| `mask_dir` | `null` | Verzeichnis mit `{split}_masks.npz` aus `scripts/build_manipulation_masks.py`. **`null` schaltet die Masken vollständig ab** — genau deshalb bleiben alle Phase-1- bis Phase-4-Konfigurationen unverändert. Gesetzt liefert jedes Item zusätzlich `loc_mask (16,14,14)`, `loc_frame_gate (16,)` und `has_loc_mask ()`, nullgefüllt für Chunks ohne Maske, damit die Batchform konstant bleibt und der Default-Collate weiter greift. |
+| `mask_allow_scale_crop` | `false` | Ob maskierte Chunks zusätzlich zur Spiegelung den Random-Resized-Crop bekommen. Aus, weil die Cropseite bei 12,6–14,0 Zellen des 14×14-Gitters liegt und das Nachspielen bis zu eine ganze Zelle (~7 % des Bildes) kostet — mehr, als eine typische Mundmaske groß ist. Die Spiegelung ist bei jeder Auflösung exakt und wird **immer** nachgespielt. |
+| `mask_oversample` | `false` | Gewichtet maskierte Chunks im Trainingssampler hoch (~6 % → ~50 % je Batch). Ohne das feuert der Lokalisierungsverlust auf etwa einem von zwanzig Samples und sein Gradient verschwindet neben dem Klassifikationsterm. |
+
 `frame_perturbation` ist eine **Eval-only-Diagnose** mit drei Werten: `null`,
 `tubelet_shuffle` (permutiert die 8 Tubelet-Paare — VideoMAE nutzt `tubelet_size=2` —
 und erhält damit die Intra-Tubelet-Bewegung) und `frame_shuffle` (zerstört jede
@@ -132,13 +141,16 @@ Reihenfolge). Der Kommentar schreibt vor: „NIE fürs Training aktivieren."
 
 ## 4. `configs/experiment/` — die Experimentdefinitionen **[K]**
 
-29 Dateien: **27 Trainingsexperimente**, eine Diagnose (`eval_video_frame_shuffle.yaml`,
-für `src/eval.py`) und ein Template-Rest (`example.yaml`, MNIST). Jede Datei
-überschreibt gezielt einzelne Parameter der Basis. Bis auf `example.yaml` setzen **alle
-28** `override /logger: wandb` und `override /trainer: gpu` — Mixed Precision
-(`bf16-mixed`) kommt also aus `trainer/gpu.yaml`, nicht aus den Experimenten selbst
-(§6). Alle 27 Trainingsexperimente vergeben ein eigenes `ckpt_export_name`; `tags`
-setzt jede der 29 Dateien.
+36 Dateien (29 bis 2026-08-15): **33 Trainingsexperimente**, eine Diagnose
+(`eval_video_frame_shuffle.yaml`, für `src/eval.py`), ein Template-Rest (`example.yaml`,
+MNIST) und seit dem 2026-08-16 ein **Basisfragment** (`sweep_relevance_base.yaml`), das
+kein eigenständiges Experiment ist, sondern über `defaults` von den drei λ-Armen geerbt
+wird. Jede Datei überschreibt gezielt einzelne Parameter der Basis. Bis auf `example.yaml`
+setzen alle übrigen `override /logger: wandb` und `override /trainer: gpu` — Mixed
+Precision (`bf16-mixed`) kommt also aus `trainer/gpu.yaml`, nicht aus den Experimenten
+selbst (§6); die drei λ-Arme erben beides über `sweep_relevance_base`. Alle 33
+Trainingsexperimente vergeben ein eigenes `ckpt_export_name`, `sweep_relevance_base` als
+Fragment nicht.
 
 ### Phase 1 — Baselines (frozen backbone)
 
@@ -214,6 +226,40 @@ Die Kopfkommentare beziffern die Schieflage je Modalität: `label_video` ~94/6
 > Audio-Mixup ist implementiert und ablatiert. `train_audio_smoothing.yaml` ist damit
 > die Konfiguration, die Label Smoothing **ohne** Mixup isoliert — der eigentliche
 > Zusatzwert gegenüber `train_audio_mixup.yaml`.
+
+### Relevanz-Regularisierung und Lokalisierung (seit 2026-08-16)
+
+Sieben neue Dateien. Alle warm-starten vom **selben** Phase-2-Checkpoint
+(`warmstart_ckpt: ${paths.export_dir}/videomae_phase2.ckpt`), alle nutzen
+`override /callbacks: model_checkpoint_loss` und `override /data: deepfake_video` mit
+gesetztem `mask_dir`.
+
+| Datei | Rolle | Setzt |
+|---|---|---|
+| `sweep_relevance_base.yaml` | **Basisfragment**, kein Lauf | `data.batch_size: 2`, `augment: false`, `mask_oversample: true`, `balanced_sampling: false`; `model.freeze_backbone: false`, `attn_implementation: eager`, `llrd_decay: 0.75`, `grad_clip_val: 1.0`, `loc_enabled: true`, `loc_signal: attnlrp`, `loc_mode: neg_log_ratio`, `loc_max_samples: 1`, `loc_warmup_steps: 200`, `loc_accumulate_grad_batches: 3`, `lr: 5e-6`; `trainer.gradient_clip_val: null`, `accumulate_grad_batches: 1`, `max_epochs: 1`, `limit_train_batches: 6000`, `val_check_interval: 0.25`, `limit_val_batches: 750` |
+| `sweep_relevance_lambda0.yaml` | **Kontrollarm** | `loc_lambda: 0.0` — der einzige Unterschied |
+| `sweep_relevance_lambda002.yaml` | schwacher Arm | `loc_lambda: 0.02`, eigener `RelevanceCollapseGuard` (`val_loss_ceiling_ratio: 5.0`, `min_steps: 500`) |
+| `sweep_relevance_lambda01.yaml` | starker Arm | `loc_lambda: 0.1`, eigener Wächter |
+| `train_video_relevance_reg.yaml` | Einzellauf (Run 1) | wie die Basis, aber `max_epochs: 3`, `val_check_interval: 0.5`, `loc_lambda: 0.1` |
+| `train_video_relevance_reg_lambda0.yaml` | Einzellauf-Kontrolle (Run 0) | identisch, `loc_lambda: 0.0` — im Kopfkommentar ausdrücklich als „der einzige Unterschied zu Run 1" markiert |
+| `train_video_loc_head.yaml` | **Aux-Kopf**, zweiter Arm | `aux_loc_enabled: true`, `aux_loc_lambda: 1.0`, `aux_loc_dropout: 0.0`, `batch_size: 6`, `lr: 1e-5` (wie Phase 2), `limit_train_batches: 2000`, `limit_val_batches: 250`; **kein** `loc_enabled` — erster Ordnung, also automatische Optimierung |
+
+**Vier Festlegungen, die aus Messungen stammen und nicht aus Vorsicht** — jede steht als
+Kommentar in der YAML:
+
+| Wert | Begründung in der Konfiguration |
+|---|---|
+| `batch_size: 2` | Gate G2 maß 7,57 GB Spitze auf einer 8-GB-Karte; Batch 2 **im Double-Backprop** läuft OOM. Die effektive Batchgröße 6 kommt über `loc_accumulate_grad_batches: 3` zustande — wie in Phase 2. |
+| `attn_implementation: eager` | **Pflicht.** Unter SDPA ist der lxt-Attention-Wrap ein No-op; der Lauf liefe durch und optimierte eine falsche Größe. |
+| `trainer.gradient_clip_val: null` + `accumulate_grad_batches: 1` | Lightning verbietet beides unter manueller Optimierung. Das Modul übernimmt sie über `model.grad_clip_val` und `model.loc_accumulate_grad_batches` ([02](02_modelle.md)). |
+| `limit_val_batches: 750` | Der volle Validierungssplit kostet unter eager-Attention rund 2,4 h **je Prüfung**; bei 12 Prüfungen stünden 29 h Validierung gegen 2,4 h Training. |
+| `augment: false` | In allen sieben Dateien. Keine Frame-Masken-Fehlausrichtung riskieren — obwohl `apply_geometric_augment` die Maske mitführen könnte ([01](01_datenpipeline.md)). |
+| `balanced_sampling: false` | `mask_oversample` balanciert implizit mit, weil ausschließlich Fake-Chunks eine Maske tragen; beides zusammen korrigierte doppelt. |
+
+**Der Wächter wird je Arm konfiguriert, nicht global.** `callbacks.relevance_guard`
+(`_target_: src.utils.callbacks.RelevanceCollapseGuard`) steht in den Experimentdateien,
+weil die Schwellen λ-abhängig sind: bei λ = 0,02 sind `val_loss_ceiling_ratio: 5.0` und
+`min_steps: 500` gesetzt, beim Einzellauf `3.0` / `100`.
 
 ### Fusions-Ablationen
 
@@ -296,7 +342,37 @@ wird `test/auc_video` gegen die unperturbierte Baseline (`experiment=train_video
 | `early_stopping.yaml` | Basiswerte (`patience: 3`, `monitor: ???`); die effektiven Werte stehen in `default.yaml` |
 | `swa.yaml` | **Stochastic Weight Averaging, opt-in.** Erbt alle Defaults **außer** Early Stopping — ausführlich begründet: SWA braucht die späten Epochen und beißt sich mit `patience: 5`. `swa_lrs: 1e-5`, `swa_epoch_start: 0.75`. Der Kommentar hält auch die bekannte Einschränkung fest: Lightning-SWA tauscht die LR nur epochenweise, der schrittbasierte `linear_warmup_cosine` passt nicht dazu — die Gewichtsmittelung funktioniert trotzdem. |
 | `model_summary.yaml`, `rich_progress_bar.yaml` | Kleinteile; `default.yaml` hebt `model_summary.max_depth` auf `-1` (volle Schichttiefe im Lauf-Log) |
+| `model_checkpoint_loss.yaml` | **Neu seit 2026-08-16, 69 Zeilen, davon der Großteil Begründung.** Überwacht `val/loss` statt `val/auc_video`, `mode: min`, `save_top_k: -1`, zusätzlich `every_n_train_steps` als monitorunabhängige Sicherung; `early_stopping.patience: 1000` — praktisch aus. Siehe den Kasten unten. |
 | `none.yaml` | **Leere Datei** (0 Zeilen) — `callbacks=none` schaltet alle Callbacks ab |
+
+> ### `model_checkpoint_loss.yaml` — eine Konfiguration, die einen verlorenen Lauf dokumentiert
+>
+> Zwei Fehler, beide am Ergebnis unsichtbar, beide in der YAML festgehalten:
+>
+> 1. **`val/auc_video` sättigt.** Sobald ein Modell dort exakt 1,000 erreicht — was die
+>    warm-gestarteten Relevanzläufe sofort tun — ist kein späterer Wert mehr *strikt*
+>    besser, `save_top_k=1` löst also nie wieder ein Speicherereignis aus. Beobachtet am
+>    2026-08-16: Run 0 lief 18.000 Batches, aber Best- **und** `last.ckpt` froren bei
+>    Batch 6.000 ein; der Endzustand war weg und erzwang den kompletten Neulauf.
+> 2. **`save_top_k: 2` genügt nicht.** Am 2026-08-17 verifiziert: Bei *steigendem*
+>    `val/loss` behält `mode=min` die beiden **frühesten** Validierungen, danach feuert
+>    nichts mehr — und `last.ckpt` friert mit ein, weil es bitweise eine Kopie des letzten
+>    Speicherstands ist und kein eigener Schreibvorgang am Trainingsende. Bei den
+>    λ > 0-Armen **steigt** `val/loss` zwangsläufig, denn genau das ist der gemessene
+>    Trade-off. Ergebnis: λ = 0,02 und λ = 0,1 hatten nur Checkpoints bei Batch 3.000 von
+>    6.000, die Kontrolle speicherte bis 6.000 durch — die Arme waren **nicht
+>    schrittgleich**, obwohl alle 6.000 Batches trainiert hatten.
+>
+> Daher `save_top_k: -1`: alles behalten, rund 4 GB je Lauf. Der Kommentar nennt die Regel
+> ausdrücklich — **nie `save_top_k`, wenn die überwachte Metrik steigen darf**; wer Platz
+> sparen muss, nutzt `every_n_train_steps` statt eines metrikabhängigen Kriteriums.
+>
+> **Early Stopping ist mit `patience: 1000` praktisch abgeschaltet, und das ist Absicht:**
+> Ein steigender `val/loss` ist bei diesen Läufen das *erwartete* Ergebnis; Early Stopping
+> darauf bräche genau den Lauf ab, der das Ergebnis gerade erzeugt. `check_finite` bleibt
+> als Divergenzschutz erhalten. `tests/test_checkpoint_config.py` (5 Tests) prüft alle
+> vier Zusagen — inklusive, dass die Sweep-Arme dieselbe Checkpoint-Politik und dasselbe
+> Trainingsbudget teilen.
 
 `default.yaml` und `swa.yaml` setzen dieselbe Checkpoint-Namensvorlage
 `epoch_{epoch:03d}-val_auc_video_{val/auc_video:.3f}` mit `auto_insert_metric_name:
@@ -439,11 +515,13 @@ handgepflegtes Artefakt.
    `preprocess.yaml` und die Phase-2-Experimente enthalten mehr Begründungstext als
    Parameter. Für den Beleg sind sie eine direkt zitierfähige Quelle.
 
-2. **27 trainierbare Experimentkonfigurationen existieren — nicht alle sind gelaufen.**
-   (29 Dateien im Verzeichnis, abzüglich Diagnose und Template.) Ergebnisse liegen laut
-   `vault/Research/deepfake-detection/Results/` für acht Läufe vor
-   (siehe [12](12_dokumentation_vault.md)). Der Beleg sollte zwischen *implementiert* und
-   *durchgeführt* trennen.
+2. **33 trainierbare Experimentkonfigurationen existieren — nicht alle sind gelaufen.**
+   (36 Dateien im Verzeichnis, abzüglich Diagnose, Template und Basisfragment.)
+   Ergebnisse liegen laut `vault/Research/deepfake-detection/Results/` für acht Läufe vor
+   (siehe [12](12_dokumentation_vault.md)); für die sechs Relevanz-Experimente liegen sie
+   stattdessen unter `docs/results/` und in `docs/relevance_regularization.md` §13 — sie
+   sind also **tatsächlich gelaufen**, aber an anderer Stelle dokumentiert als die
+   Phase-1/2-Läufe. Der Beleg sollte zwischen *implementiert* und *durchgeführt* trennen.
 
 3. **`istvt.yaml` ist leer.** ISTVT gehört in die Ausblick-, nicht in die Methodikkapitel.
 
@@ -453,7 +531,15 @@ handgepflegtes Artefakt.
    `configs/train.yaml` `data: mnist` als Default hat — jeder echte Lauf überschreibt das
    über `experiment=`.
 
-5. **Konfigurationskommentare sind nicht automatisch aktuell.** Zwei Stellen widersprechen
+5. **Zwei Konfigurationsdateien tragen Ergebnisbegründungen, die sonst nirgends stehen.**
+   `configs/callbacks/model_checkpoint_loss.yaml` erklärt in 40 Zeilen Kommentar, warum die
+   erste Fassung der Trade-off-Kurve Punkte unterschiedlicher Trainingsdauer mischte, und
+   `sweep_relevance_base.yaml` hält die vier gemessenen Grenzen des 8-GB-Budgets fest.
+   Beide sind für ein Kapitel zu Reproduzierbarkeit direkt zitierfähig — und beide sind
+   durch `tests/test_checkpoint_config.py` gegen stille Rückabwicklung abgesichert, was im
+   Projekt sonst für keine YAML gilt.
+
+6. **Konfigurationskommentare sind nicht automatisch aktuell.** Zwei Stellen widersprechen
    dem Code bzw. einander: `train_audio_smoothing.yaml` behauptet, Audio-Mixup gebe es
    nicht (§4), und die Auto-Klassengewichte werden in `configs/model/videomae.yaml` mit
    `[0.536, 7.361]`, in `train_video_balanced.yaml` dagegen mit „~8,7" angegeben. Beide

@@ -1,8 +1,16 @@
 # 12 — Dokumentation und Forschungs-Vault
 
-Bestandsaufnahme von `docs/` (57 Dateien) und `vault/` (104 Dateien). Kein Code, aber
-für den Beleg-Abgleich zentral: Hier steht, was bereits geschrieben ist und wo die
-Ergebnisse dokumentiert sind.
+Bestandsaufnahme von `docs/` (**60 Dateien**, 57 bis 2026-08-15) und `vault/`
+(104 Dateien). Kein Code, aber für den Beleg-Abgleich zentral: Hier steht, was bereits
+geschrieben ist und wo die Ergebnisse dokumentiert sind.
+
+> **Der Zuwachs ist nicht nur Umfang, sondern eine Verschiebung.** Bis Juli 2026 lagen die
+> Ergebniszahlen im Vault (`vault/Research/deepfake-detection/Results/`, §3.2). Die
+> Relevanz- und Chefer-Arbeit vom August 2026 dokumentiert ihre Ergebnisse dagegen
+> **ausschließlich in `docs/`** — `relevance_regularization.md` §13, `chefer_ablation.md`
+> §9 und das versionierte `docs/results/`. Zu keinem der sechs Relevanz-Läufe existiert
+> eine Vault-Notiz. Wer für `06Results.tex` nur den Vault abgleicht, übersieht die
+> gesamte xAI-Lokalisierungsstrecke.
 
 ---
 
@@ -19,7 +27,7 @@ Ergebnisse dokumentiert sind.
 | `datasets.md` | 26 KB | AV-Deepfake1M, Preprocessing, Splits, Labelstrategie | Datenkapitel |
 | `xai.md` | 6 KB | Attention Rollout, AttnLRP, Audio-3-Schichten-Zeitleiste | Methodik xAI |
 | `engineering.md` | 8 KB | Tech-Stack, Struktur, MLOps, Testing, Frontend (konsolidiert vier ältere Dokumente) | Systemarchitektur |
-| `commands.md` | 32 KB | **Vollständige Befehlsreferenz** von Rohdaten bis xAI, inkl. Attention-Modus-Prozess §4.0 | Anhang |
+| `commands.md` | 34 KB | **Vollständige Befehlsreferenz** von Rohdaten bis xAI, inkl. Attention-Modus-Prozess §4.0 · seit 2026-08-20 auch der Heatmap-Methodenschalter und die Chefer-Auswertung | Anhang |
 | `metrics.md` | 9,4 KB | Metrikdefinitionen | Evaluationskapitel |
 | `process.md` | 21 KB | Arbeitsprozess und Vorgehen | Methodik / Anhang |
 | `performance_roadmap.md` | 18 KB | **Umgesetzte SOTA-Merkmale:** Balanced Sampling, Mixup/Label-Smoothing, SWA, LoRA, robuste Augmentierung, paralleles Preprocessing, SDPA-Training mit Eager-only-`explain()` | Methodik |
@@ -32,7 +40,8 @@ Ergebnisse dokumentiert sind.
 | `attnlrp_relevance_explanations_and_decision.md` | 34 KB | **Die Entscheidungsdokumentation zur bivariaten Relevanz.** Die zentrale Quelle für das xAI-Methodikkapitel — enthält die Herleitung, Alternativen und die Begründung der gewählten Kodierung. |
 | `xai_pipeline_reference.md` | 21 KB | **Technische Referenz:** exakte Berechnungen, Normierungsstufen und Display-Tuning jeder xAI-Stufe — mit Zahlen. Die Quelle für die Abbildungslegenden. |
 | `frontend_roadmap.md` | 51 KB | **Die größte Datei in `docs/`.** Roadmap der Weboberfläche; die Kürzel `I1`–`I4`, `A1`, `A2-Box`, `E1`, `E2`, `H2` aus den Code-Kommentaren stammen von hier. |
-| `relevance_regularization.md` | 23 KB | **Ausstehende Implementierung — siehe Kasten unten.** |
+| `relevance_regularization.md` | 48 KB | **Umgesetzt und gemessen — siehe Kasten unten.** Diagnose (§1–§5), Entscheidung (§6), Implementierung (§7), Ablaufplan (§8) und seit dem 2026-08-16 die **Ergebnisse (§13)** mit Trade-off-Kurve, Kontrolllauf, Trainingsdauer-Achse, Aux-Head und Fehlerprotokoll. |
+| `chefer_ablation.md` | 44 KB | **Die LRP-unabhängige Zweitmethode.** Warum sie nötig ist (§1), welches Chefer-Paper (§2), die Regel formal (§3), die zwei erzwungenen Abweichungen von VideoMAE (§4), der dreistufige Vergleich (§5), die Auflösungsfrage (§6), Confidence gegen Relevanz (§7), die quantitative Auswertung (§9), Grenzen (§10), technische Designentscheidungen (§11), **13 Pflicht-Erwähnungen im Beleg (§12)** und die Folge für den Abgleich (§14). |
 
 **Novelty-Anspruch — in `attnlrp_relevance_explanations_and_decision.md` §7 bereits
 entschieden und vorformuliert.** Das Dokument prüft die Frage am AttnLRP- und am
@@ -51,14 +60,13 @@ mit dem bescheidenen Zusatz *„nach unserem Kenntnisstand … nicht beschrieben
 benennen" ist: Die Faithfulness-Zahlen des AttnLRP-Papers wurden auf Single-Target
 gemessen, nicht auf der hier verwendeten contrastiven Variante.
 
-> ### 🔨 In Arbeit: Relevanz-Regularisierung (Dokumentstand 2026-07-22)
+> ### ✅ Umgesetzt und gemessen: Relevanz-Regularisierung (Dokumentstand 2026-08-17)
 >
-> `relevance_regularization.md` hält eine **Betreuer-Kritik an der Video-xAI** fest: Die
+> `relevance_regularization.md` beginnt mit einer **Betreuer-Kritik an der Video-xAI**: Die
 > Heatmap ist flächig statt auf die manipulierte Region (Mund) lokalisiert. Das Dokument
 > enthält die vollständige Kette *Ausgangsproblem → Diagnose an echten Fake-Frames →
 > verworfene Hypothesen (Normierung/Thresholding) → Entscheidung für
-> Explanation-Guided-Training mit Frame-Difference-Masken → Umsetzungsplan → erwartete
-> Ergebnisse je Ausgang*.
+> Explanation-Guided-Training mit Frame-Difference-Masken → Umsetzung → Ergebnisse*.
 >
 > **Der Kernbefund der Diagnose (§4–§5) ist stärker als „Normierung ist nicht schuld".**
 > Gemessen an Clip 1 (`id00012/21Uxsk56VDQ/00001`, Ground-Truth `visual_fake_segments
@@ -71,19 +79,32 @@ gemessen, nicht auf der hier verwendeten contrastiven Variante.
 > Visualisierung ist korrekt und zeigt ehrlich, was das Modell tut. Das ist selbst ein
 > verwertbares xAI-Ergebnis (die Faithfulness-Lücke, die AttnLRP aufdecken soll).
 >
-> **Grenze der Aussage:** `n = 1`. Das Dokument (§9) verlangt vor jeder
-> Verallgemeinerung denselben Fenster-vs-Rest-Test über weitere Fake-Clips mit bekannten
-> `fake_segments`. Im Beleg darf der Befund daher nicht als Modell- oder
-> Datensatzeigenschaft formuliert werden, sondern als Einzelfallmessung.
+> **Die `n = 1`-Grenze ist aufgehoben.** Das Dokument (§9) verlangte vor jeder
+> Verallgemeinerung denselben Test über weitere Fake-Clips. `scripts/eval_localization.py`
+> leistet genau das: **911 Chunks aus 624 Test-Clips**, mit 95-%-Bootstrap-Intervallen über
+> Clips. Der Baseline-Checkpoint kommt dort auf `ratio_over_chance` **1,921 [1,84; 2,00]**
+> — der Einzelfallbefund verallgemeinert also, und zwar mit Zahl statt Anekdote.
 >
-> **Status: geplant und bestätigt, Umsetzung steht aus.** Zum Registerstand existiert im
-> Code nichts davon — eine Suche nach `relevance_reg`, `explanation_guided`, `frame_diff`
-> und `diff_mask` über `src/` und `configs/` liefert keine Treffer. Die *Voraussetzungen*
-> liegen dagegen vor: das gepaarte, im selben 224-Crop-Raum normalisierte Real-Video
-> (`data/normalized/id00012__21Uxsk56VDQ__00001__real.mp4`) als Maskenquelle, die
-> Warm-Start-Maschinerie (`translate_warmstart_state_dict`) und der Phase-2-Checkpoint
-> `checkpoints/epoch_006-val_auc_video_1.000_video_phase2.ckpt`. Die Implementierung
-> erfolgt wie im Dokument beschrieben.
+> **Status: implementiert, gelaufen, ausgewertet (2026-08-16/17).** Der Kasten der
+> Erstaufnahme sagte „zum Registerstand existiert im Code nichts davon". Das gilt nicht
+> mehr. Nachgetragen ist die Implementierung in:
+>
+> | Registerdokument | Was dort steht |
+> |---|---|
+> | [01](01_datenpipeline.md) | `manipulation_mask.py`, `build_manipulation_masks.py`, der Maskenspeicher im Dataset, `mask_oversample` im DataModule, `landmarks_in_frame_space` |
+> | [02](02_modelle.md) | Der Trainingszweig in `VideoMAEModule` (manuelle Optimierung, λ-Ramp, `_relevance_grid`) und `localization_head.py` |
+> | [03](03_training_evaluation.md) | `RelevanceCollapseGuard` und die sechs Sweep-/Überwachungswerkzeuge |
+> | [04](04_xai.md) | `localization.py` (Metrik = Verlust), die drei neuen `attnlrp.py`-Funktionen, `eval_localization.py`, die beiden Gates |
+> | [09](09_tests.md) §8 | 14 Testmodule, 228 Testfunktionen |
+> | [10](10_konfiguration.md) §4/§5 | Sieben Experimentkonfigurationen und `model_checkpoint_loss.yaml` |
+>
+> **Das Ergebnis in vier Zeilen** (911 Chunks, alle Arme schrittgleich bei Batch 6.000):
+> Kontrolle λ = 0 → 1,867 · Aux-Head → 2,200 · λ = 0,02 → 8,210 · λ = 0,1 → 11,418, bei
+> `val/auc_video` von 1,0000 / 0,9953 / 0,9854 / 0,9444. **Der wichtigste Einzelwert ist
+> 1,867**: Die Kontrolle liegt mit demselben Trainingsbudget, aber ohne Strafterm, nicht
+> über der Baseline. Weitertrainieren allein bringt **keinen** Lokalisierungsgewinn — der
+> gesamte Effekt ist dem Strafterm zuzurechnen, ohne Abschlag für „hat halt länger
+> trainiert". Genau diese Frage stellt ein Betreuer zuerst.
 >
 > **Zwei Punkte gehören unabhängig vom Ausgang in den Beleg** (das Dokument fordert das
 > ausdrücklich): (1) die **methodische Spannung** eines Explanation-Guided-Loss (§6.3) —
@@ -91,22 +112,66 @@ gemessen, nicht auf der hier verwendeten contrastiven Variante.
 > das Modell entscheidet" zu „vorschreiben, wohin es schauen soll"; Pro:
 > Right-for-the-Right-Reasons (Ross et al. 2017), Contra: die Erklärung ist dann teils
 > konstruiert statt entdeckt. (2) Der **Trade-off Lokalisierung ↑ vs. Accuracy ↓** ist
-> laut §7.6/§10 selbst ein berichtenswertes Ergebnis, kein Fehlschlag.
+> laut §7.6/§10 selbst ein berichtenswertes Ergebnis, kein Fehlschlag — und er ist jetzt
+> beziffert.
 >
-> **Konsequenz für das Register:** Dies ist der einzige Eintrag, der beim Landen der
-> Implementierung *nachgetragen* werden muss — voraussichtlich in
-> [02_modelle.md](02_modelle.md) (Verlustterm), [04_xai.md](04_xai.md) (Maskenerzeugung),
-> [10_konfiguration.md](10_konfiguration.md) (neue Experimentkonfiguration) und
-> [09_tests.md](09_tests.md).
+> **Drei Vorbehalte, die mitzitiert werden müssen:**
+> 1. **Nicht auskonvergiert.** `training_curve.csv` zeigt, dass die Lokalisierung bei
+>    Batch 6.000 noch *beschleunigt* (λ = 0,02: +0,774 → +1,800 je 1.000 Batches). Die
+>    Zahlen sind untere Schranken eines abgeschnittenen Laufs.
+> 2. **Einzelläufe.** Wie im ganzen Projekt `seed=42`, keine Seed-Varianz.
+> 3. **Ehrlichkeitsnachweis statt Behauptung.** Der Verlust ist skaleninvariant formuliert,
+>    die degenerierte Lösung hat exakt null Gradient, und `loc/mass_total` fiel über die
+>    Läufe nur um 23 %, während sich das Verhältnis verdreifachte. Der Gewinn ist also
+>    echte räumliche Umverteilung — das gehört als Absicherung in den Beleg, nicht nur die
+>    Zahl.
 >
-> **Konsequenz für den Beleg:** Solange nicht implementiert, darf die Methode in
-> `04Methodology.tex` nicht als vorhanden beschrieben werden. Die **Diagnose** ist
-> dagegen schon jetzt ein verwertbares Ergebnis — sie schließt Normierung und
-> Thresholding als Ursache der flächigen Heatmap aus und gehört nach
-> `07Discussion_Limitations.tex`. Landet die Implementierung vor Abgabe, wandert die
-> Methode nach `04Methodology.tex` und ihr Ergebnis nach `06Results.tex`; landet sie
-> nicht, bleibt sie Ausblick in `08Conclusion.tex`. Siehe
-> [99 §F25](99_abgleich_beleg.md).
+> **Konsequenz für den Beleg:** Die frühere Verzweigung („landet die Umsetzung vor Abgabe
+> …") ist entschieden. Die **Methode** gehört nach `04Methodology.tex`, das **Ergebnis**
+> nach `06Results.tex`, die **Spannung und die Vorbehalte** nach
+> `07Discussion_Limitations.tex`. Siehe [99 §F25a–d](99_abgleich_beleg.md).
+
+> ### 📊 `chefer_ablation.md` — die methodenunabhängige Gegenprobe (2026-08-20)
+>
+> Das Dokument beantwortet den Einwand, der gegen jedes Ergebnis oben zwingend kommt: Der
+> bivariate AttnLRP-Pfad ist **genau die Größe**, auf die das Regularisierungstraining
+> optimiert. Eine Verbesserung dort ist nicht selbsttragend. Chefer et al. (ICCV 2021)
+> teilt keine Berechnung mit diesem Verlust und liefert die unabhängige Zweitmessung.
+>
+> **Ergebnis (vorläufig, Demo-Split, 17 Clips):** `ratio_over_chance` steigt nach der
+> Regularisierung bei **beiden** Methoden signifikant — AttnLRP +6,30, Chefer +0,848,
+> beide p = 0,0003.
+>
+> §12 listet **13 Pflicht-Erwähnungen im Beleg**, §14 die Folge für die Abgleichmatrix:
+> **F57 („Attention Rollout ist nirgends implementiert") ist überholt.** Ein
+> gradienten-gewichtetes Rollout existiert jetzt. Die Abgrenzung ist im Beleg
+> mitzuschreiben: die *reine* Rollout-Form (Abnar & Zuidema, ohne Gradienten) ist
+> weiterhin **nicht** implementiert — es muss „gradienten-gewichtetes Attention-Rollout
+> (Chefer et al., ICCV 2021)" heißen, nicht pauschal „Attention Rollout".
+
+### 1.2b `docs/results/` — versionierte Ergebnisartefakte **[K]**
+
+Neu seit 2026-08-17, 8 Dateien. Der Grund steht im eigenen `README.md`: Die Zahlen lagen
+zuvor nur in `temp/`, und *„ein Ergebnisdokument, dessen Zahlen sich nicht aus dem
+Repositorium nachvollziehen lassen, ist nur halb belegt."*
+
+| Datei | Inhalt |
+|---|---|
+| `README.md` | Die Zuordnung Datei → Checkpoint → trainierte Batches → ausgewerteter Batch → `ratio_over_chance`, das JSON-Format, der Nachrechen-Befehl und der Hinweis auf die frühere, **nicht schrittgleiche** Fassung |
+| `loc_baseline.json` | Phase-2-Checkpoint, `ratio_over_chance` 1,921 |
+| `loc_baseline_regions.json` | derselbe Lauf mit `--per-region` (die §4.3-Diagnose) |
+| `loc_lambda0_control.json` | Kontrollarm, 1,867 |
+| `loc_lambda002.json` · `loc_lambda01.json` | die beiden λ-Arme, 8,210 und 11,418 |
+| `loc_aux_head.json` | Aux-Kopf, 2,200 |
+| `training_curve.csv` | 12 Messpunkte: Lokalisierung als Funktion der Trainingsdauer, je Metrik mit Bootstrap-Intervall, plus `val_loss`/`val_auc_video` aus der `metrics.csv` des Laufs |
+
+Jede JSON enthält je Metrik Mittelwert und 95-%-Bootstrap-Intervall sowie `n_clips`. Die
+Per-Chunk-CSVs bleiben bewusst in `temp/` und sind nicht versioniert; sie lassen sich mit
+demselben Befehl neu erzeugen.
+
+> **Für den Beleg ist das die zitierfähige Quelle der Ergebniszahlen**, nicht der Fließtext
+> von `relevance_regularization.md` §13 — und ausdrücklich nicht der Vault, der zu diesen
+> Läufen keine Notiz enthält (siehe §3.2 und den Befund unten).
 
 ### 1.3 Runbooks und Audits
 
@@ -134,6 +199,19 @@ Einführende Erklärungen der Fachbegriffe — Material für die Grundlagenkapit
 > (`project.md`, `xai.md`, `README.md`). Für `frontend.md`, `tech.md`, `mlops.md` und
 > `code_quality.md` besteht sie nicht — deren Inhalt wurde in `engineering.md` bzw.
 > `frontend_roadmap.md` überführt, es gibt kein gleichnamiges aktuelles Dokument.
+
+> **Das Verzeichnis ist derzeit lokal gelöscht — absichtlich und vorübergehend
+> (Stand 2026-08-21).** Grund ist genau die oben beschriebene Verwechslungsgefahr: Beim
+> Schreiben wurden wiederholt überholte Begründungen von hier übernommen; vier
+> Falschaussagen in der Belegarbeit sind am 2026-08-06 auf diese Dateien zurückgeführt
+> worden (`CLAUDE.md`, Widersprüche F14, F18, F57 in
+> [99](99_abgleich_beleg.md)). Die Löschung ist eine Arbeitsmaßnahme für die Dauer der
+> Schreibphase und **wird nicht persistiert** — die Dateien sind weiterhin versioniert
+> (`git ls-files docs/archive` führt alle 10) und kehren nach Abschluss der Belegarbeit in
+> den Arbeitsbaum zurück. Für dieses Register ändert sich dadurch nichts: Die Verweise auf
+> `../archive/*.md` in diesem Abschnitt sowie in den Registerzeilen **F18** und **F57**
+> bleiben gültig; sie sind über `git show` weiterhin auflösbar, im Arbeitsbaum jedoch bis
+> auf Weiteres tote Links.
 
 ---
 
@@ -329,8 +407,8 @@ die Entscheidung, ISTVT *nicht* zu implementieren (Backbone ist VideoMAE).
 | Beleg-Kapitel | Primäre Abgleichsquellen |
 |---|---|
 | `03Related Work.tex` | `vault/Sources/Papers/` (48), `Knowledge/Claim Map.md`, `references.bib` (46 Einträge, alle zitiert) |
-| `04Methodology.tex` | Registerdokumente [01](01_datenpipeline.md)–[05](05_robustheit_adversarial.md), `docs/model.md`, `docs/concepts.md`, `docs/attnlrp_relevance_explanations_and_decision.md` |
+| `04Methodology.tex` | Registerdokumente [01](01_datenpipeline.md)–[05](05_robustheit_adversarial.md), `docs/model.md`, `docs/concepts.md`, `docs/attnlrp_relevance_explanations_and_decision.md`, `docs/relevance_regularization.md` §6–§7, `docs/chefer_ablation.md` §3–§4 |
 | `05Experimental_Setup.tex` | [10](10_konfiguration.md), [11](11_infrastruktur.md), `docs/commands.md` |
-| `06Results.tex` | `vault/Results/` (8 Notizen + 3 Abbildungen) |
+| `06Results.tex` | `vault/Results/` (8 Notizen + 3 Abbildungen) **für Phase 1–4**; für die xAI-Lokalisierung dagegen `docs/results/` (versionierte JSON + `training_curve.csv`), `docs/relevance_regularization.md` §13 und `docs/chefer_ablation.md` §9 — im Vault nicht vorhanden |
 | `07Discussion_Limitations.tex` | `Knowledge/Research Gaps.md`, `docs/audit_2026-06.md` |
 | `09Appendix.tex` | [09](09_tests.md), [11](11_infrastruktur.md) |

@@ -142,21 +142,24 @@ heißt das: das 0,1-%-Budget existiert und ist geloggt, trägt aber nur auf Chun
 
 ## `src/models/VideoMAE_module.py` — Video-Baseline **[K]**
 
-310 Zeilen. `MCG-NJU/videomae-base` mit Klassifikationskopf. `use_mean_pooling=True` mittelt
-über alle Patch-Tokens statt ein CLS-Token zu verwenden.
+715 Zeilen (310 vor der Relevanz-Regularisierung vom 2026-08-16 und der Chefer-Ergänzung
+vom 2026-08-20). `MCG-NJU/videomae-base` mit Klassifikationskopf. `use_mean_pooling=True`
+mittelt über alle Patch-Tokens statt ein CLS-Token zu verwenden — eine Eigenschaft, die
+später zweimal wiederkehrt: sie erzwingt `readout="mean"` bei Chefer, und sie ist der
+Grund, warum der Aux-Kopf über dieselben Tokens rechnen kann.
 
 | Symbol | Zeilen | Aufgabe |
 |---|---|---|
 | `_VIDEOMAE_LRP_PATCHED` | L10 | Modulweite Wächtervariable: der lxt-Monkey-Patch darf nur **einmal je Prozess** angewandt werden. |
-| `__init__(...)` | L14 | 18 Hyperparameter, alle über Hydra gesetzt: `model_name_or_path`, `num_labels`, `freeze_backbone`, `gradient_checkpointing`, `attn_implementation`, `class_weights`, `label_smoothing`, `mixup_alpha`, `llrd_decay`, `peft_mode`/`lora_*`, `adv_train`/`adv_epsilon`/`adv_steps` sowie `optimizer`/`scheduler`. Weist `adv_steps < 1` bei aktivem `adv_train` als Fehler ab. **Gradient Checkpointing** kostet gemessene ~10 % Schrittzeit und spart viel Aktivierungsspeicher; HF wendet es nur bei `self.training == True` an, der eval-Pfad von `explain()`/AttnLRP ist davon also **unberührt**. |
-| `_backbone_modules()` | L74 | `self.net.videomae` — der vortrainierte Encoder. Der Kopf besteht aus `fc_norm` + `classifier`. |
-| `_llrd_stacks()` | L78 | Ein Stack flach → tief: **Patch-Embeddings**, danach die 12 Encoder-Blöcke. `fc_norm` und `classifier` bleiben auf voller LR. |
-| `forward(pixel_values)` | L83 | `(B, 16, 3, 224, 224)` → Logits `(B, 2)`. |
-| `model_step(batch)` | L86 | Geteilte Logik für train/val/test: Loss, Preds, Targets, Logits. **Der Verlust wird hier berechnet, nicht über die interne CE von HuggingFace** — nur so greifen die `class_weights`, und die sind bei segmentgenauen Chunk-Labels nötig (Fake-Anteil ~7 %). |
-| `_pgd_perturb(pixel_values, labels)` | L99 | Ungezielte PGD-Störung für adversariales Training (Phase 4.2). Schrittweite `ε / adv_steps · 2,5` (die übliche Heuristik, die das ε-Budget in der gegebenen Schrittzahl sicher ausschöpft). Der Angriff läuft mit **festem Dropout im eval-Modus** und stellt den vorherigen Modus danach wieder her; umgeschaltet wird über `self`, nicht `self.net`, damit die `train()`-Überschreibung der Basisklasse die Eval-Invariante des eingefrorenen Backbones erneut anwendet. |
-| `_adversarial_mix(batch)` | L125 | Ersetzt die **erste Hälfte** des Batches durch PGD-Beispiele — 1:1-Mischung aus sauber und adversarial. Die Aufteilung *innerhalb* des Batches (statt eines zweiten Batches) hält den VRAM-Bedarf je Schritt identisch zum sauberen Training, weil weiterhin nur ein kombinierter Forward läuft. |
-| `training_step` / `validation_step` / `test_step` | L144/L164/L184 | Loggen die Chunk-Metriken (`loss`, `acc`, `f1`; in val/test zusätzlich `auc`, `ap` und **beide** Recall-Budgets) und rufen in val/test `_video_eval_update`. |
-| `explain(pixel_values, target_class, normalize_mode, normalize, per_class)` | L204 | **107 Zeilen — die xAI-Schnittstelle.** Patcht VideoMAE einmalig für lxt (`_VIDEOMAE_LRP_PATCHED`), erzwingt `eval` und Eager-Attention. Nachverarbeitung in `_postprocess_raw`: Kanalsumme `(B,T,C,H,W)→(B,T,H,W)`, 16×16-Patch-Pooling (glättet die harten Token-Gitterkanten), bilineares Upsampling. Drei Betriebsarten: |
+| `__init__(...)` | L18 | **31 Hyperparameter** (18 bis 2026-08-15), alle über Hydra gesetzt: `model_name_or_path`, `num_labels`, `freeze_backbone`, `gradient_checkpointing`, `attn_implementation`, `class_weights`, `label_smoothing`, `mixup_alpha`, `llrd_decay`, `peft_mode`/`lora_*`, `adv_train`/`adv_epsilon`/`adv_steps` sowie `optimizer`/`scheduler` — **plus die 13 Parameter der Relevanz-Regularisierung** (`loc_*`, `aux_loc_*`, `grad_clip_val`; siehe unten), die alle standardmäßig aus sind. Weist `adv_steps < 1` bei aktivem `adv_train`, ein unbekanntes `loc_signal` und `loc_max_samples < 1` als Fehler ab. **Gradient Checkpointing** kostet gemessene ~10 % Schrittzeit und spart viel Aktivierungsspeicher; HF wendet es nur bei `self.training == True` an, der eval-Pfad von `explain()`/AttnLRP ist davon also **unberührt**. |
+| `_backbone_modules()` | L167 | `self.net.videomae` — der vortrainierte Encoder. Der Kopf besteht aus `fc_norm` + `classifier`. |
+| `_llrd_stacks()` | L171 | Ein Stack flach → tief: **Patch-Embeddings**, danach die 12 Encoder-Blöcke. `fc_norm` und `classifier` bleiben auf voller LR. |
+| `forward(pixel_values)` | L176 | `(B, 16, 3, 224, 224)` → Logits `(B, 2)`. |
+| `model_step(batch)` | L179 | Geteilte Logik für train/val/test: Loss, Preds, Targets, Logits. **Der Verlust wird hier berechnet, nicht über die interne CE von HuggingFace** — nur so greifen die `class_weights`, und die sind bei segmentgenauen Chunk-Labels nötig (Fake-Anteil ~7 %). |
+| `_pgd_perturb(pixel_values, labels)` | L224 | Ungezielte PGD-Störung für adversariales Training (Phase 4.2). Schrittweite `ε / adv_steps · 2,5` (die übliche Heuristik, die das ε-Budget in der gegebenen Schrittzahl sicher ausschöpft). Der Angriff läuft mit **festem Dropout im eval-Modus** und stellt den vorherigen Modus danach wieder her; umgeschaltet wird über `self`, nicht `self.net`, damit die `train()`-Überschreibung der Basisklasse die Eval-Invariante des eingefrorenen Backbones erneut anwendet. |
+| `_adversarial_mix(batch)` | L250 | Ersetzt die **erste Hälfte** des Batches durch PGD-Beispiele — 1:1-Mischung aus sauber und adversarial. Die Aufteilung *innerhalb* des Batches (statt eines zweiten Batches) hält den VRAM-Bedarf je Schritt identisch zum sauberen Training, weil weiterhin nur ein kombinierter Forward läuft. |
+| `training_step` / `validation_step` / `test_step` | L403/L481/L501 | Loggen die Chunk-Metriken (`loss`, `acc`, `f1`; in val/test zusätzlich `auc`, `ap` und **beide** Recall-Budgets) und rufen in val/test `_video_eval_update`. |
+| `explain(pixel_values, target_class, normalize_mode, normalize, per_class)` | L521 | **107 Zeilen — die xAI-Schnittstelle.** Patcht VideoMAE einmalig für lxt (`_VIDEOMAE_LRP_PATCHED`), erzwingt `eval` und Eager-Attention. Nachverarbeitung in `_postprocess_raw`: Kanalsumme `(B,T,C,H,W)→(B,T,H,W)`, 16×16-Patch-Pooling (glättet die harten Token-Gitterkanten), bilineares Upsampling. Drei Betriebsarten: |
 
 **Betriebsarten von `explain()`** — belegrelevant, weil sie unterschiedliche Aussagen erlauben:
 
@@ -166,6 +169,108 @@ heißt das: das 0,1-%-Budget existiert und ist geloggt, trägt aber nur auf Chun
 | `normalize_mode="per_frame"` | jeder Frame einzeln auf `[-1,1]` | Wenn nur das räumliche Muster je Frame interessiert. |
 | `normalize=False` | rohe vorzeichenbehaftete Relevanz | Der Aufrufer normiert über den **ganzen Clip** statt je 16-Frame-Fenster — Voraussetzung für fensterübergreifend vergleichbare Chunk-Relevanz. |
 | `per_class=True` | `(rel_fake, rel_real, target)` roh | **Dual-Seed / bivariat.** Ein Forward, zwei Backwards. Der Aufrufer bildet Magnitude `\|rel_fake\| + \|rel_real\|` und kontrastive Richtung `rel_fake − rel_real`. Siehe [04_xai.md](04_xai.md). |
+
+---
+
+### Explanation-Guided Regularization — der Trainingszweig **[K]**
+
+Neu seit 2026-08-16 (`docs/relevance_regularization.md` §7, Ergebnisse §13). Der Kern des
+Verfahrens: Die AttnLRP-Relevanz wird **differenzierbar** berechnet, und ein Strafterm
+zieht ihre Masse in die Manipulationsmaske. Alles ist standardmäßig aus;
+`loc_enabled: false` lässt den Trainingsschritt byte-identisch zu Phase 1–4.
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `_freeze_lower_blocks(n)` | L158 | Friert die ersten *n* Encoder-Blöcke ein und begrenzt so, wie weit der Graph zweiter Ordnung reicht — die Speicher-Rückfallstufe, falls ein Batch nicht passt. |
+| `_current_loc_lambda()` | L271 | Linear hochgefahrenes λ über `loc_warmup_steps` (Vorgabe 200). Begründung im Code: Der Lauf startet warm bei `val/auc 1.000`, wo der CE-Gradient nahezu null ist — ein ungerampter Strafterm wäre ab Schritt eins das **gesamte** Trainingssignal. |
+| `_relevance_grid(pixel_values)` | L284 | Differenzierbare Relevanz auf dem **14×14-Tokengitter**. Wendet dieselbe Nachverarbeitung an wie `explain()` (Kanalsumme, 16×16-Pooling), hält aber vor dessen bilinearem Upsampling auf 224 an — das ist ein fester linearer Operator über dieselben 196 Zahlen und fügt bei 256-fachen Kosten keine Information hinzu. Läuft bei `loc_signal: attnlrp` unter `videomae_attnlrp_patched`, bei `ixg` ungepatcht. |
+| `_localization_loss(batch)` | L318 | Der Strafterm über die maskierten Samples des Batches, sonst `(None, {})`. Drei Bedingungen sind im Code begründet: **eval-Modus** (identische Semantik zu `explain()`; nebenbei greift HF-Gradient-Checkpointing nur bei `training=True`, der Pfad zweiter Ordnung bleibt damit von der Rekomputation frei); **Autocast aus** (Double-Backward durch Autocasts Gewichtscache ist eine bekannte Dtype-Fehlerquelle, und die 8 Mantissenbits von bf16 quantisierten eine Relevanz der Größenordnung 1e-5 zu Rauschen); **Rückschaltung über `self.train(...)`**, damit die `train()`-Überschreibung der Basisklasse die Eval-Invariante des gefrorenen Backbones erneut anwendet. |
+| `_log_loc_diagnostics(...)` | L355 | Loggt `loc/loss`, `loc/lambda`, `loc/mass_inside`, `loc/mass_total`, `loc/ratio`, `loc/ratio_over_chance`, `loc/ratio_normalized`. |
+| `_grad_norm()` | L368 | L2-Norm über alle Parametergradienten — geloggt als `grad/ce_norm` (nach dem CE-Backward) und `grad/total_norm` (nach dem Lokalisierungs-Backward). Die beiden Zahlen sagen, in welchem Verhältnis die Terme tatsächlich stehen. |
+| `_classification_step` / `_log_classification` | L377 / L390 | Aus `training_step` herausgelöst, damit beide Schrittvarianten dieselbe Klassifikationslogik nutzen. |
+| `training_step(batch, batch_idx)` | L403 | Weiche: ohne `loc_enabled` der alte Pfad, sonst `_regularized_training_step`. |
+| `_regularized_training_step(...)` | L410 | **Manuelle Optimierung.** CE zuerst und auf dem **vollen** Batch — eine Beschränkung auf maskierte Samples würde die Klassifikationsverteilung verändern und jedes Lokalisierungsergebnis konfundieren. Danach `manual_backward(ce)`, dann der Lokalisierungszweig, dann Clipping, Schritt und Scheduler. |
+| `_step_schedulers()` | L450 | Treibt **nur** die schrittweisen Scheduler. Unter manueller Optimierung stellt Lightning das Scheduling ein, das Modul muss es übernehmen — aber intervalltreu: einen epochenweisen Scheduler je Batch zu steppen verbrauchte seinen ganzen Plan in der ersten Epoche. |
+| `on_train_epoch_end()` | L469 | Treibt die epochenweisen Scheduler, aus demselben Grund. |
+
+**Warum manuelle Optimierung — eine Speicher-, keine Stilentscheidung.** Unter automatischer
+Optimierung hält der summierte Verlust den CE-Graphen am Leben, während der
+Double-Backprop-Graph seinen Höchststand erreicht; die beiden Spitzen **addieren sich**, und
+das passt nicht in 8 GB. Manuell gestept wird der CE-Graph zuerst freigegeben, die Spitzen
+werden sequenziell. Zwei Folgekosten stehen im Docstring: Lightning verbietet unter
+manueller Optimierung sowohl `trainer.gradient_clip_val` als auch
+`Trainer(accumulate_grad_batches=k)`. Beides übernimmt das Modul über `grad_clip_val` und
+`loc_accumulate_grad_batches` — die Experimentkonfigurationen **müssen** die
+Trainer-Gegenstücke deshalb auf `null` bzw. `1` setzen.
+
+**`loc_lambda: 0` ist der Kontrollarm, nicht „aus".** Bei λ = 0 wird die Relevanz mit
+`create_graph=False` berechnet und geloggt, erreicht die Gewichte aber nicht. Der Lauf hat
+damit exakt die Trajektorie eines gewöhnlichen CE-Finetunings **und** eine
+Lokalisierungsspur zum Vergleich. Genau dieser Arm widerlegt den Einwand „das lokalisiert
+nur, weil es länger trainiert hat": er endet bei `ratio_over_chance` 1,867 gegenüber 1,921
+der Baseline — kein Gewinn.
+
+**Gemessene Ergebnisse** (911 Chunks aus 624 Test-Clips, alle Arme schrittgleich bei Batch
+6.000; Rohwerte unter `docs/results/`):
+
+| Arm | `ratio_over_chance` | Pointing Game | `val/auc_video` |
+|---|---|---|---|
+| Baseline (Phase 2) | 1,921 [1,84; 2,00] | 0,299 | 1,0000 |
+| λ = 0 (Kontrolle) | 1,867 [1,79; 1,95] | 0,279 | 1,0000 |
+| Aux-Head | 2,200 [2,11; 2,30] | 0,359 | 0,9953 |
+| λ = 0,02 | 8,210 [7,73; 8,71] | 0,769 | 0,9854 |
+| λ = 0,1 | 11,418 [10,75; 12,12] | 0,810 | 0,9444 |
+
+> **Die Lokalisierung war bei Batch 6.000 nicht gesättigt.** `docs/results/training_curve.csv`
+> misst sie über alle Zwischen-Checkpoints: bei λ = 0,02 **beschleunigt** die Zuwachsrate
+> zum Laufende hin (+0,774 → +1,800 je 1.000 Batches), während die Kontrolle exakt flach
+> bleibt (−0,000/1k). Die Zahlen der Tabelle sind damit **untere Schranken** eines
+> abgeschnittenen, nicht ausgelaufenen Trainings — im Beleg entsprechend zu formulieren.
+
+### Auxiliary-Localization-Zweig **[K]**
+
+Der zweite, direkte Arm — erster Ordnung und damit mit automatischer Optimierung
+verträglich.
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `__init__` (Kopfanlage) | L136 | Legt `self.localization_head` an, **bevor** auf manuelle Optimierung geschaltet wird, damit seine Parameter in den Parametergruppen des Optimierers landen. |
+| `model_step` (Aux-Zweig) | L179 | Fordert `output_hidden_states` **nur** an, wenn der Kopf aktiv ist — der Aux-Verlust reitet damit auf **demselben** Vorwärtspass mit und kostet keinen zweiten. |
+| `_aux_localization_loss(batch, tokens)` | L201 | Ruft Kopf und Verlust auf der maskierten Teilmenge auf; `(None, {})`, wenn der Batch keine Maske trägt — bei ~5 % Maskenanteil der Normalfall. |
+
+## `src/models/localization_head.py` — Aux-Kopf für die Maskenvorhersage **[K]**
+
+161 Zeilen, neu seit 2026-08-16. Der **direkte** Gegenentwurf zur Regularisierung: Statt zu
+bestrafen, *wo die Erklärung liegt*, wird dem Encoder gesagt, wo die Manipulation ist.
+`docs/relevance_regularization.md` §6.1 benennt die Ursache — das Modell lernt auf
+Chunk-Labels und erfährt nie, *welche Pixel* bearbeitet wurden. Der Modulkopf nennt drei
+Vorteile gegenüber dem indirekten Weg: erster Ordnung (kein `create_graph`, kein
+lxt-Patch, passt neben allem anderen auf eine 8-GB-Karte), unmittelbar verwertbar (die
+Ausgabe *ist* eine Lokalisierungskarte statt einer umgedeuteten Attribution) und
+literaturkonform (Deepfake-Lokalisierung wird üblicherweise als Segmentierung gestellt,
+AV-Deepfake1M ist selbst ein Lokalisierungs-Benchmark).
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `GRID_SIZE` / `TUBELET_SIZE` / `NUM_FRAMES` | L36–38 | `14` / `2` / `16` — die VideoMAE-Geometrie. |
+| `LocalizationHead` | L41 | `LayerNorm → Dropout → Linear(hidden, 2)`. **3.074 Parameter.** |
+| ` .forward(tokens)` | L65 | `(B, 8·14·14, 768)` → `(B, 16, 14, 14)` Logits. Sagt **`TUBELET_SIZE` Logits je Token** vorher und entfaltet sie auf die 16 Frames, statt 8 vorherzusagen und zu duplizieren — sonst wären die beiden Frames eines Tubelets konstruktionsbedingt ununterscheidbar, und Lippenbewegung ändert sich bei 25 fps zwischen Nachbarframes messbar. Prüft die Tokenzahl und wirft bei abweichender Geometrie. Kein Sigmoid — der Verlust rechnet auf Logits. |
+| `localization_head_loss(logits, mask, frame_gate, pos_weight)` | L98 | **Maskierte BCE, nur über die gegateten Frames.** Frames außerhalb der `visual_fake_segments` tragen kein Ziel; sie mitzuzählen brächte dem Kopf bei, auf den ~11 von 16 echten Frames je Chunk „nichts manipuliert" vorherzusagen, und ersäufte das eigentliche Signal. `pos_weight=None` leitet das Gewicht aus dem Batch ab (`negatives/positives`, auf `[1; 100]` geklemmt) — nötig, weil die Masken nur rund 1 % des Gitters abdecken. Liefert `aux_iou`, `aux_pos_weight` und `aux_n_gated` als Diagnose. |
+
+**Ergebnis, und warum es das interessantere ist.** Der Kopf erreicht `ratio_over_chance`
+2,200 gegenüber 1,867 der Kontrolle — real (getrenntes Konfidenzintervall), aber **mit
+Abstand der schwächste der drei Eingriffe**: Faktor 1,18 gegenüber 4,40 bei λ = 0,02, und
+das bei vergleichbaren Genauigkeitskosten (−0,005 gegen −0,015 AUC). Der Kopf erreicht
+`aux_iou` 0,069, das Encoder-Signal *enthält* die Ortsinformation also nachweislich — die
+Attribution folgt ihr trotzdem kaum. **Für eine xAI-Arbeit ist das ein Befund über AttnLRP
+selbst:** Heatmap und Merkmalsqualität sind teilweise entkoppelt; eine Erklärung lässt sich
+wirksamer durch einen Prior *auf die Erklärung* verschieben als durch bessere
+Repräsentationen. Vorbehalt aus dem Ergebnisdokument: `aux_iou` stieg am Laufende noch,
+0,069 ist eine untere Schranke, und `val/loss` ist hier nicht mit den λ-Armen vergleichbar,
+weil er den Maskenverlust enthält. Laufzeit 51 min gegenüber ~4 h je λ-Arm.
+
+Tests: `tests/test_localization_head.py` (12), `tests/test_relevance_reg_training_step.py`
+(22), `tests/test_relevance_collapse_guard.py` (8).
 
 ---
 
@@ -317,13 +422,19 @@ alle drei Modelle. Im Beleg dürfen sie nicht als modellspezifisch dargestellt w
 | Adversariales Training | `adv_train`, `adv_epsilon`, `adv_steps` | `train_*_adversarial` |
 | Balanced Sampling | `balanced_sampling` (DataModule) | `train_*_balanced` |
 | Robuste Augmentierung | `augment_strength: robust` (DataModule) | `train_*_robust` |
+| *(nur VideoMAE)* Relevanz-Regularisierung | `loc_enabled`, `loc_lambda`, `loc_signal`, `loc_mode`, `loc_max_samples`, `loc_warmup_steps`, `loc_target_class`, `loc_freeze_blocks`, `loc_accumulate_grad_batches`, `grad_clip_val` | `train_video_relevance_reg`, `sweep_relevance_lambda*` |
+| *(nur VideoMAE)* Aux-Lokalisierungskopf | `aux_loc_enabled`, `aux_loc_lambda`, `aux_loc_dropout` | `train_video_loc_head` |
+| *(nur VideoMAE)* Manipulationsmasken im Loader | `mask_dir`, `mask_oversample`, `mask_allow_scale_crop` (DataModule) | dieselben Experimente |
 
 Ebenfalls einmalig implementiert und daher für alle Modelle gültig: die videoweise
 Aggregation samt kategorienweiser Test-AUC, beide Recall-Budgets, der
 `horizon_epochs`-Schedulerhorizont, der Sanity-Check-Schutz von `val_acc_best` und die
 Eager-Vorbedingung von `explain()`.
 
-**Nur modellspezifisch** und im Beleg nicht zu verallgemeinern sind dagegen: der immer
+**Nur modellspezifisch** und im Beleg nicht zu verallgemeinern sind dagegen: die
+**gesamte Relevanz-Regularisierung** samt Aux-Kopf und `explain_chefer` — sie liegt
+ausschließlich in `VideoMAEModule`, `base_module.py` weiß nichts davon, und weder das
+Audio- noch das multimodale Modul hat einen Lokalisierungszweig; der immer
 gefrorene Wav2Vec2-CNN-Extraktor (Audio und multimodal, nicht Video), die
 CNN-Grenzen-Relevanz der Audio-Erklärung, `fusion_mode` und `adv_modalities` /
 `adv_audio_epsilon` (nur multimodal) sowie `num_labels` (nur VideoMAE) bzw.

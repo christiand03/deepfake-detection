@@ -174,10 +174,57 @@ Parameterzahlen (gesamt / trainierbar / eingefroren, L36–38). Die Zahlen im Be
 Modellgrößen stammen von hier. Ohne konfigurierten Logger wird die Funktion nach einer
 Warnung verlassen; `train.py` und `eval.py` rufen sie ohnehin nur bei vorhandenem Logger.
 
-## `src/utils/pylogger.py` **[I]**
+## `src/utils/pylogger.py` **[I]** / **[E]**
 
-49 Zeilen. `RankedLogger` (L7) — Mehr-GPU-tauglicher Logger, der Meldungen mit dem Rang
+57 Zeilen. `RankedLogger` (L7) — Mehr-GPU-tauglicher Logger, der Meldungen mit dem Rang
 präfixt und optional nur auf Rang 0 loggt.
+
+> **Eine stille Fehlerklasse, geschlossen am 2026-08-17.** `rank` stand in der Signatur von
+> `log()` **zwischen** `msg` und `*args`. Der übliche Aufruf mit verzögerter Formatierung —
+> `log.info("loaded %s", path)` — band damit `path` an `rank` und ließ `*args` leer. Zwei
+> Folgen, beide ohne Fehlermeldung: Platzhalter wurden wörtlich ausgegeben (oder es flog
+> `TypeError: %d format: a real number is required`), und weil der Code danach den nun
+> unsinnigen `rank` gegen den tatsächlichen Rang vergleicht, wurde die Meldung bei
+> Abweichung **komplett verworfen**. Betroffen waren **64 Aufrufstellen** im Projekt.
+> `rank` ist jetzt **keyword-only** (`def log(self, level, msg, *args, rank=None, **kwargs)`)
+> und muss es laut Docstring bleiben. Belegrelevanz: ein Beispiel dafür, dass fehlende
+> Logausgaben nicht immer bedeuten, dass der betreffende Codepfad nicht lief.
+
+## `src/utils/callbacks.py` — Wächter der Relevanz-Regularisierung **[K]**
+
+120 Zeilen, neu seit 2026-08-16. Enthält genau eine Klasse.
+
+**`RelevanceCollapseGuard`** (L16) bricht einen Lauf ab, sobald der Lokalisierungsverlust
+**degeneriert** erfüllt wird. Die Verhältnisform des Verlusts entfernt den *Gradienten* in
+Richtung der Lösung „Relevanz überall gegen null" (siehe
+[04 §Lokalisierung](04_xai.md)), sie kann den Kollaps aber nicht aus anderen Ursachen
+verhindern — ein zu großes λ, das den Backbone destabilisiert, oder ein gegen den Encoder
+skalierter Klassifikator. Die Signatur ist eindeutig und billig zu beobachten:
+`loc/ratio` steigt, während `loc/mass_total` gegen null fällt. Ein Lauf in diesem Zustand
+meldet einen hervorragenden Lokalisierungswert, berechnet über praktisch keine Relevanz.
+
+| Symbol | Zeilen | Aufgabe |
+|---|---|---|
+| `__init__(collapse_ratio, val_loss_ceiling_ratio, ema_decay, min_steps)` | L41 | Vorgaben `0.1` / `3.0` / `0.98` / `100`. Die EMA glättet den Wert je Schritt, der verrauscht ist, weil je Schritt nur eine Handvoll Samples erklärt wird; `min_steps` ist die Schonfrist für λ-Warmup und die ersten Optimiererschritte. |
+| `on_train_batch_end(...)` | L61 | Führt die EMA von `loc/mass_total`, setzt beim ersten beobachteten Wert die Referenz und setzt `trainer.should_stop`, sobald die EMA unter `collapse_ratio ×` Referenz fällt. Loggt dabei den aktuellen `loc/ratio` mit. |
+| `on_validation_end(...)` | L88 | Zweite Achse: Abbruch, sobald `val/loss` das `val_loss_ceiling_ratio`-Fache seines ersten Wertes übersteigt. |
+
+**Warum `val/loss` und nicht `val/auc`.** Bei AUC 1,000 hat die Rangmetrik keinen Spielraum
+mehr und bleibt festgenagelt, lange nachdem die Entscheidungsmarge zusammengebrochen ist —
+sie ist der unempfindlichste verfügbare Kanarienvogel. Dasselbe Argument begründet den
+Checkpoint-Monitor in `configs/callbacks/model_checkpoint_loss.yaml` ([10](10_konfiguration.md)).
+
+> **Der Wächter hat zunächst selbst einen Lauf zerstört, und das steht im Code.** Lightning
+> führt vor dem Training eine Sanity-Check-Validierung aus, deren `val/loss` `0.0` sein
+> kann. Als Referenz genommen ergab die Schwelle `3,0 × 0 = 0`, die jede echte Validierung
+> überschreitet — Run 1 brach am 2026-08-16 bei Schritt 5.999 ab. Behoben durch zwei
+> Bedingungen: `sanity_checking` wird übersprungen, und eine nicht-positive Referenz wird
+> mit einer Warnung verworfen, statt sich daran festzubeißen. Abgesichert durch
+> `tests/test_relevance_collapse_guard.py` (8 Tests).
+
+Konfiguriert wird der Wächter je Experiment unter `callbacks.relevance_guard`
+(`train_video_relevance_reg.yaml`, `sweep_relevance_lambda002/01.yaml`) — nicht in
+`configs/callbacks/`, weil die Schwellen je λ-Arm unterschiedlich sind.
 
 ## `src/utils/rich_utils.py` **[I]**
 
@@ -217,6 +264,21 @@ in `explain_audio.py`/`explain_multimodal.py`) und `adversarial.py` (in den drei
 Modellmodulen erst *innerhalb* der Methoden importiert).
 
 ---
+
+## Lauf- und Sweep-Werkzeuge in `scripts/` **[E]** / **[I]**
+
+Entstanden 2026-08-16/17 rund um die λ-Sweeps. Sie gehören nicht zur Methodik, aber sie
+erklären, **wie die Ergebnisse in `docs/results/` zustande kamen** — und drei von ihnen
+dokumentieren Fehlerklassen, die ohne sie unsichtbar geblieben wären.
+
+| Datei | Zeilen | Aufgabe | Beleg |
+|---|---:|---|---|
+| `check_sweep_health.py` | 255 | **Gesundheitsprüfung eines laufenden Sweeps.** Geschrieben nach drei Fehlschlägen, die von außen alle wie ein gesunder Lauf aussahen: (1) stiller Stillstand — Metriken standen 2,5 h, während der Prozess bei 100 % CPU saß (es war eine volle Validierung, aber nichts unterschied das von einem Hänger); (2) Wächter-Abbruch — `RelevanceCollapseGuard` setzte `should_stop` aus einer schlechten Referenz, der Prozess lebte weiter und „läuft es?" antwortete „ja"; (3) eingefrorene Checkpoints — `save_top_k` überwachte eine bei 1,000 festgenagelte Metrik, nach Batch 6.000 wurde keiner mehr geschrieben. Prüft deshalb **Fortschritt, Abbruchursache und Artefakte getrennt**. Exit 0 = gesund, 1 = Handlungsbedarf; eine `PROBLEM`-Zeile je Befund, damit es aus einem Monitor pollbar ist. `STALE_METRICS_MIN = 55` ist aus gemessenen Validierungsdauern (12–29 min für 750 Batches unter eager) abgeleitet; die VRAM-Warnung feuert bewusst nur beim **Paar** hohe Belegung *und* niedrige Auslastung, weil eine volle Karte allein kein Problem ist (ein früherer Alarm bei 7.877 MiB / 100 % war ein Fehlalarm). | **[I]** |
+| `build_training_curve.py` | 142 | Aggregiert die Auswertungen aller Zwischen-Checkpoints zu `docs/results/training_curve.csv` — Lokalisierung als Funktion der **Trainingsdauer** statt nur von λ. Gibt zusätzlich eine **Plateau-Diagnose** aus: die Zuwachsrate je 1.000 Batches im letzten Abschnitt; eine Rate, die nicht gegen null fällt, heißt abgeschnitten statt konvergiert. Die Lauf-Verzeichnisse stehen **fest eingetragen** in `ARMS` — die Experimentnamen sind Präfixe voneinander (`…lambda0` steckt in `…lambda01`), und eine Teilstringsuche hatte genau deshalb schon einmal den falschen Lauf getroffen. | **[K]** — liefert die zweite Ergebnisachse |
+| `run_relevance_queue.ps1` | 66 | Verkettet Kontroll- und Regularisierungslauf. Sequenziell aus Notwendigkeit: Gate G2 maß 7,57 GB Spitze auf einer 8-GB-Karte, zwei gleichzeitige Läufe spillten in den geteilten Speicher und wären je um rund eine Größenordnung langsamer. Startet Run 1 **auch dann**, wenn Run 0 mit Fehler endet — die beiden sind unabhängige Messungen. | **[I]** |
+| `run_lambda_sweep.ps1` | 87 | Fährt die drei Sweep-Arme (λ = 0 / 0,02 / 0,1) nacheinander und wertet jeden Checkpoint anschließend gegen dieselben 624 Test-Clips aus. | **[I]** |
+| `rerun_lambda_arms.ps1` | 102 | Wiederholt **nur** die λ > 0-Arme, damit jeder Arm einen Batch-6.000-Checkpoint hat. Der Grund ist belegrelevant und steht im Kopfkommentar: `save_top_k=2` mit `mode=min` hörte auf zu speichern, sobald `val/loss` stieg — was bei jedem Arm mit Strafterm zwangsläufig passiert, denn genau dieser Anstieg *ist* der gemessene Trade-off. Die λ > 0-Arme waren dadurch bei Batch 3.000, die Kontrolle bei 6.000 ausgewertet; die Kurve mischte Punkte unterschiedlicher Trainingsdauer. Die Kontrolle wird **nicht** wiederholt (ihr `val/loss` fällt, ihre Checkpoints liefen durch) und dient als Kontrollprobe. | **[K]** — erklärt die Korrektur der Ergebnistabelle |
+| `eval_training_curve.ps1` | 71 | Wertet jeden Zwischen-Checkpoint aus (12 Punkte, ~30 min), möglich ohne Neutraining, weil `save_top_k: -1` jede Validierung sichert. Bereits bei Batch 6.000 ausgewertete Checkpoints werden übersprungen und wiederverwendet. | **[I]** |
 
 ## Reproduzierbarkeit — was der Code garantiert
 
