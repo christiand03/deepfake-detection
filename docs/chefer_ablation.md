@@ -870,7 +870,7 @@ beantworten offene Fragen des Betreuers.
 | Renderer-Variante „nur Magnitude" (`magnitude_global`) | **erledigt** (WP4) |
 | Frontend: Typen, Client, Hook, dreistufiger Schalter, Hinweistexte | **erledigt** (WP5) |
 | `--relevance chefer` + `--split demo` in `scripts/eval_localization.py` | **erledigt** (WP3) |
-| 2×2-Auswertung fahren | **vorläufig** (demo, 17 Clips — §9.1); Referenz-Chunk-Satz offen |
+| 2×3-Auswertung fahren (inkl. Kontrollarm λ=0) | **erledigt** — test-Split, 911 Chunks / 624 Clips, §9.3 |
 | `tests/test_chefer.py` (16 Tests) + `tests/test_lxt_patch_neutralize.py` (12) | **erledigt** (WP0/WP1) |
 | Doku: `docs/xai.md`, `docs/vollstaendigkeitsliste/04_xai.md`, `06`–`08`, `commands.md` | **erledigt** (WP6) |
 
