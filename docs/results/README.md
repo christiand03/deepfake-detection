@@ -55,6 +55,41 @@ bedeutet, dass der Lauf abgeschnitten und nicht ausgelaufen ist.
 > `…lambda01`), und eine Teilstring-Suche hatte genau deshalb schon einmal den falschen
 > Lauf getroffen.
 
+## `relevance_method_ablation.csv` — LRP-unabhängige Gegenprobe
+
+Beantwortet die Frage, die der λ-Sweep nicht beantworten kann: Ist der
+Lokalisierungsgewinn eine Eigenschaft des **Modells** oder nur der Grösse, auf die
+optimiert wurde? Der Loss minimiert ein Massenverhältnis auf AttnLRP-Relevanz; Chefer
+et al. (ICCV 2021) teilt damit keine Berechnung und ist deshalb die unabhängige Probe.
+
+2 Methoden × 3 Arme (Baseline, Kontrolle λ=0, λ=0,02), alle auf denselben 911 maskierten
+Test-Chunks aus 624 Clips. `_tests.csv` enthält die gepaarten Wilcoxon-Tests über Clips.
+
+| `ratio_over_chance` | Baseline | Kontrolle | λ=0,02 | reg/Kontrolle |
+|---|---|---|---|---|
+| AttnLRP (bivariat) | 1,953 | 1,898 | 7,910 | 4,17× |
+| Chefer | 1,574 | 1,536 | 2,360 | 1,54× |
+
+| `pointing_game` | Baseline | Kontrolle | λ=0,02 |
+|---|---|---|---|
+| AttnLRP (bivariat) | 0,299 | 0,280 | 0,769 |
+| Chefer | 0,263 | 0,221 | 0,747 |
+
+Kernaussage (§9.3 in [`../chefer_ablation.md`](../chefer_ablation.md)): Die Kontrolle
+liegt in **beiden** Methoden unter der Baseline (0,97×) — Weitertrainieren allein
+lokalisiert nicht. Beim Pointing Game, der einzigen auf [0,1] beschränkten und damit
+methodenübergreifend vergleichbaren Metrik, landen beide Verfahren fast auf demselben
+Endwert. Die Massenkonzentration steigt dagegen unter AttnLRP rund dreimal stärker als
+unter Chefer, weil sie die optimierte Grösse ist.
+
+```bash
+python -m scripts.build_method_ablation
+```
+
+> Die absoluten `ratio_over_chance`-Höhen sind zwischen den Methoden **nicht**
+> vergleichbar (Chefer ist bauartbedingt nicht-negativ und flacher). Vergleichbar sind
+> die Verhältnisse innerhalb einer Methode und das Pointing Game.
+
 ## Format
 
 Jede Datei enthält pro Metrik den Mittelwert über Clips und ein 95-%-Bootstrap-Intervall:

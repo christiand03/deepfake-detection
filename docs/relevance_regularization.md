@@ -779,6 +779,18 @@ Auf drei Nachkommastellen unverändert. Zusammen mit dem Vergleich zur Baseline
 das: **Weitertrainieren allein bewegt die Lokalisierung nicht.** Der gesamte Gewinn der
 λ-Arme ist dem Strafterm zuzurechnen, ohne Abschlag.
 
+> **Unabhängig bestätigt (2026-08-22).** Dieses Argument stand zunächst allein auf
+> AttnLRP — also auf genau der Grösse, die der Loss optimiert. Die Chefer-Gegenprobe
+> (`docs/chefer_ablation.md` §9.3) misst dieselben 911 Chunks mit einem Verfahren, das
+> keine Berechnung mit dem Loss teilt, und setzt die Kontrolle ebenfalls unter die
+> Baseline (0,976×, p = 2,8e−81). Zwei Methoden ohne gemeinsame Grundlage kommen zum
+> selben Schluss.
+>
+> Dieselbe Gegenprobe schränkt allerdings die **Höhe** des Effekts ein: Beim Pointing
+> Game reproduziert Chefer den Sprung fast exakt (0,221 → 0,747 gegenüber 0,280 → 0,769),
+> bei der Massenkonzentration nur zu etwa einem Drittel (1,54× gegenüber 4,17×). Für den
+> Beleg ist deshalb das Pointing Game die belastbarere Leitzahl als die 8,210.
+
 > Genauigkeitshinweis: Für die Kontrolle liegen nur **zwei** Messpunkte vor (4.500 und
 > 6.000), weil ihr Lauf noch vor der `save_top_k: -1`-Korrektur entstand und nur zwei
 > Checkpoints speicherte. Die Flachheit ist damit für das letzte Viertel direkt gemessen

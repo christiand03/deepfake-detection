@@ -387,6 +387,10 @@ breiteren Karte aussagekräftig.
 
 ### 9.1 Vorläufiges Ergebnis (demo-Split, 2026-08-20)
 
+> **Überholt durch §9.3** (test-Split, 624 statt 17 Clips, zusätzlich mit Kontroll-Arm).
+> Die Zahlen hier replizieren dort fast unverändert und bleiben als Vorab-Messung stehen;
+> zitiert werden sollten die aus §9.3.
+
 Erhoben auf dem `demo`-Split: **25 maskierte Chunks über 17 Clips**, beide Methoden auf
 denselben Chunks, Maskenspeicher lokal gebaut (Gate G0: `in_segment_frac` = 1,000,
 Maskenfläche 0,0067 — beides im geforderten Band).
@@ -479,6 +483,134 @@ bei 2,0e-06, das von LRP bei 2,9e-05 — ein Faktor 14, der nichts aussagt, weil
 Attention-Rollout und Input×Gradient keine gemeinsame Einheit haben. Vergleichbar ist
 allein die *Form* der Verteilung, nicht ihre Höhe. Daraus folgt der Caveat in §12,
 Punkt 12.
+
+---
+
+### 9.3 Vollständiges Ergebnis (test-Split, 2026-08-22)
+
+Die in §9.1 geforderte Bedingung ist erfüllt: beide Methoden auf **demselben Chunk-Satz**,
+auf dem auch die AttnLRP-Referenz aus `relevance_regularization.md` §13 erhoben wurde —
+**911 maskierte Chunks über 624 Test-Clips**, statt 25 Chunks über 17 Clips im demo-Split.
+
+Der Versuchsplan wurde von 2×2 auf **2×3** erweitert. Der Kontroll-Checkpoint (λ=0, gleich
+lange trainiert) fehlte in §9.1, ist aber die einzige Möglichkeit, eine Verbesserung dem
+Strafterm statt dem zusätzlichen Training zuzuschreiben.
+
+`ratio_over_chance`, klipweise gemittelt:
+
+| | Baseline | Kontrolle λ=0 | λ=0,02 | reg/Kontrolle |
+|---|---|---|---|---|
+| **AttnLRP (bivariat)** | 1,953 | 1,898 | 7,910 | **4,17×** |
+| **Chefer** | 1,574 | 1,536 | 2,360 | **1,54×** |
+
+**Die Vorab-Zahlen aus §9.1 replizieren.** Der demo-Split ergab 4,11× bzw. 1,54× gegen die
+Baseline, der test-Split 4,05× bzw. 1,50× — bei 37-fachem Stichprobenumfang. Die
+Einschränkung „n = 17 Clips" aus §9.1 ist damit ausgeräumt, ohne dass sich die Aussage
+ändert.
+
+**Der Kontroll-Arm bestätigt sich methodenunabhängig.** Beide Methoden setzen die
+Kontrolle *unter* die Baseline:
+
+| | Kontrolle/Baseline | median Δ | p (Wilcoxon, 624 Clips) |
+|---|---|---|---|
+| AttnLRP (bivariat) | 0,972× | −0,042 | 1,2e−26 |
+| Chefer | 0,976× | −0,035 | 2,8e−81 |
+
+Weitertrainieren allein verbessert die Lokalisierung nicht — es verschlechtert sie
+geringfügig, und zwar signifikant und in beiden Methoden. Das Argument aus
+`relevance_regularization.md` §13.5 stand bisher auf AttnLRP allein; es steht jetzt auf
+zwei Verfahren, die keine Berechnung teilen.
+
+**Alle Effekte sind hochsignifikant** (gepaarter Wilcoxon über 624 Clips, λ=0,02 gegen
+Kontrolle):
+
+| Metrik | AttnLRP: Faktor (p) | Chefer: Faktor (p) |
+|---|---|---|
+| `ratio_over_chance` | 4,17× (4,5e−103) | 1,54× (4,3e−103) |
+| `rma` | 2,91× (1,1e−102) | 1,34× (4,4e−103) |
+| `pointing_game` | 2,75× (6,6e−59) | **3,37×** (6,9e−64) |
+| `iou` | 1,33× (1,6e−80) | 1,14× (2,2e−66) |
+
+#### Der eigentliche Befund: Spitze und Masse verhalten sich verschieden
+
+Die vier Zeilen erzählen nicht dieselbe Geschichte, und der Unterschied ist die
+interessanteste Zahl des ganzen Experiments.
+
+Bei den **massenbasierten** Metriken (`rma`, `ratio_over_chance`) ist der AttnLRP-Effekt
+rund dreimal so groß wie der von Chefer. Das ist erwartbar: der Loss *ist* ein
+Massenverhältnis auf AttnLRP-Relevanz. Ein Teil des 4,17× ist auf die Metrik hin
+trainiert.
+
+Beim **Pointing Game** kehrt sich das Verhältnis um — Chefer zeigt mit 3,37× den
+*größeren* relativen Sprung, und die Endpunkte liegen praktisch aufeinander:
+
+| | Baseline | Kontrolle | λ=0,02 |
+|---|---|---|---|
+| AttnLRP (bivariat) | 0,299 | 0,280 | **0,769** |
+| Chefer | 0,263 | 0,221 | **0,747** |
+
+Das Pointing Game ist als einzige der vier Metriken auf [0, 1] beschränkt und braucht
+keine Skalennormierung, ist also **ohne Vorbehalt zwischen den Methoden vergleichbar**.
+Zwei Verfahren ohne gemeinsame Berechnung sind sich einig, dass die stärkste Stelle der
+Karte nach dem Training in rund drei von vier Fällen in der Maske liegt — vorher in etwa
+einem von vier.
+
+Die saubere Formulierung lautet deshalb: **Das Training verschiebt, wohin das Modell
+schaut; die zusätzliche Massenkonzentration ist teilweise AttnLRP-spezifisch.** Die
+Aussage „nicht auf LRP overfittet" trifft auf die Spitze uneingeschränkt zu und auf die
+Masse nur eingeschränkt.
+
+**Für den Beleg ist damit das Pointing Game die Leitzahl**, nicht die 7,9 bzw. 8,2. Der
+Sprung von 0,28 auf 0,77 ist der Wert, den ein unabhängiges Verfahren reproduziert; die
+Massenzahl ist es in dieser Höhe nicht.
+
+#### Präzisierung zu Einschränkung 1 aus §9.1
+
+§9.1 hält fest, die absoluten Werte seien zwischen den Methoden nicht vergleichbar. Das
+bleibt richtig. Der dort gezogene Schluss ist aber zu entschärfen: dass Chefer „nur" 2,36
+statt 7,91 erreicht, ist tatsächlich kein Beleg für eine schwächere Wirkung — die
+*Verhältnisse* 4,17× und 1,54× sind jedoch bereits skalenfrei und damit sehr wohl
+vergleichbar. Ihr Unterschied ist real und nicht bloß ein Einheitenartefakt; er ist genau
+das erwartete Muster einer teilweise metrikspezifischen Optimierung. Die Höhe der
+`ratio_over_chance`-Werte darf man nicht vergleichen, den Faktor der Änderung schon.
+
+#### Reproduktion
+
+```bash
+# je Methode x Arm, immer ohne --max-chunks (911 Chunks sind die Referenzmenge)
+python -m scripts.eval_localization --ckpt <ckpt> --split test --relevance {bivariate|chefer} \
+    --resume-csv temp/loc_<methode>_<arm>.csv --summary-json temp/loc_<methode>_<arm>.json
+python -m scripts.build_method_ablation   # -> docs/results/relevance_method_ablation{,_tests}.csv
+```
+
+Laufzeit gemessen: Chefer 5,0 min je Arm, bivariat 7,6 min je Arm (RTX 3060 Ti), zusammen
+38 min für alle sechs — nicht die veranschlagten 1,5 h.
+
+> **Checkpoint-Falle.** Die Arme sind über **Lauf-Verzeichnisse** adressiert, nicht über
+> `checkpoints/`. `checkpoints/sweep_relevance_lambda002.ckpt` ist `global_step` 500, also
+> Batch **1500** und nicht der Batch-6000-Stand aus §13 — der Dateiname sagt das nicht.
+> `build_method_ablation.py` hält die geprüften Pfade fest.
+
+#### Vergleichbarkeit — was geprüft wurde
+
+Vor der Auswertung wurde nachgewiesen, dass ein Unterschied zwischen den Zeilen ein
+Unterschied der *Methode* ist und nicht der Messung:
+
+1. **Checkpoint-Identität** über `global_step` und `loc_lambda`, nie über Dateinamen
+   (reg: step 2000 / λ=0,02; ctrl: step 2000 / λ=0,0).
+2. **Identische Chunk-Menge** in allen sechs Armen — 911 Chunks, 624 Clips, Mengen exakt
+   gleich.
+3. **Identische Masken je Chunk:** maximale Abweichung von `mask_area_frac` über alle 15
+   Arm-Paare = **0,000e+00**. Da `ratio_over_chance` durch diesen Wert teilt, hätte schon
+   eine kleine Drift alles stillschweigend reskaliert.
+4. **Gepaarte Tests statt Konfidenzintervall-Augenmaß:** dieselben Clips unter zwei
+   Bedingungen verlangen einen gepaarten Test; Clips sind die Analyseeinheit, weil Chunks
+   desselben Clips nicht unabhängig sind.
+
+Der Arm „AttnLRP `fake`" aus §13 wurde nicht neu erhoben: der Code-Pfad ist unverändert
+(nur Docstring), und eine Stichprobe reproduzierte die gespeicherten Zeilen auf
+`0,000e+00` in allen fünf Metriken. Seine Werte (1,921 / 1,867 / 8,210) stützen die
+bivariaten Zahlen unabhängig — beide AttnLRP-Varianten liegen eng beieinander.
 
 ---
 
