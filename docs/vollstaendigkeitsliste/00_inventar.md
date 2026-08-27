@@ -1,6 +1,12 @@
 # 00 — Dateiinventar
 
-Zählweise, Verteilung und Abgrenzung der **533 Projektdateien**.
+Zählweise, Verteilung und Abgrenzung der **536 Projektdateien**.
+
+> **Fortschreibung 2026-08-24.** Die Commits `7f0e507` und `c1dec87` legen **drei**
+> Dateien nach — `scripts/build_method_ablation.py` sowie
+> `docs/results/relevance_method_ablation.csv` und `…_tests.csv`. Sie enthalten das
+> Ergebnis der Chefer-Ablation, keine neue Funktionalität; die Zählung steigt damit auf
+> 536, der Repositoriumsstand auf 551.
 
 > **Stand 2026-08-21.** Die Erstaufnahme zählte 485 Dateien (Commit `19dd0d5`). Seither
 > sind über zehn Commits (`b9db3f5` … `ce2075d`) **48 Dateien dazugekommen und keine
@@ -29,12 +35,12 @@ __pycache__/  .pytest_cache/  .ruff_cache/  .mypy_cache/
 > darf nicht mit dem Datenbestand `data/` verwechselt werden — beide heißen gleich, haben
 > aber nichts miteinander zu tun.
 
-**Ergebnis: 533 Projektdateien** (485 zur Erstaufnahme + 48).
+**Ergebnis: 536 Projektdateien** (485 zur Erstaufnahme + 48 + 3).
 
 Der Stichtag der Erstaufnahme war der Stand *vor* Anlage dieses Registers. Die 15 Dateien
 unter `docs/vollstaendigkeitsliste/` sind nicht mitgezählt — ein Register, das sich selbst
 mitzählt, wäre für den Abgleich nur verwirrend. Der Repositoriumsstand liegt entsprechend
-bei 548 Dateien.
+bei 551 Dateien.
 
 > **Warum die Zahl fortgeschrieben und nicht neu erhoben ist.** Ein erneutes `find` über
 > den Arbeitsordner liefert einen kleineren Wert. **Der Quellbaum ist dabei vollständig** —
@@ -62,9 +68,9 @@ bei 548 Dateien.
 | `frontend/` | 78 | React+TS+Vite-Anwendung (62 TS/TSX + Assets + Build-Config). **Nachgezählt 2026-08-21**: 78 getrackt und 78 vorhanden. Die 84 der Erstaufnahme enthielten sechs Build-Artefakte; die Quelldateien sind vollständig | [08](08_frontend.md) |
 | `configs/` | 79 | Hydra-Konfigurationen (Training, Modelle, Callbacks, Experimente) | [10](10_konfiguration.md) |
 | `tests/` | 77 | **52** Pytest-Module + 25 Fixture-Dateien | [09](09_tests.md) |
-| `docs/` | 66 | Projektdokumentation (deutsch), LaTeX-Kapitel des Belegs, **`docs/results/` (8)** | [12](12_dokumentation_vault.md) |
+| `docs/` | 68 | Projektdokumentation (deutsch), LaTeX-Kapitel des Belegs, **`docs/results/` (10 seit dem 2026-08-22)** | [12](12_dokumentation_vault.md) |
 | `src/` | 58 | Kernimplementierung (Python) | [01](01_datenpipeline.md)–[07](07_inference_pipeline.md) |
-| `scripts/` | 29 | Offline-Werkzeuge: Sweeps, Datensatzaufbau, Validierung, **Maskenbau und Lokalisierungsmessung** | [01](01_datenpipeline.md), [04](04_xai.md), [05](05_robustheit_adversarial.md) |
+| `scripts/` | 30 | Offline-Werkzeuge: Sweeps, Datensatzaufbau, Validierung, **Maskenbau, Lokalisierungsmessung und Methodenablation** | [01](01_datenpipeline.md), [04](04_xai.md), [05](05_robustheit_adversarial.md) |
 | Wurzel | 16 | `pyproject.toml`, `Dockerfile`, `CLAUDE.md`, `.gitignore`, … | [11](11_infrastruktur.md) |
 | `.github/` | 5 | CI-Pipeline + Copilot-Instruktionen | [11](11_infrastruktur.md) |
 | `conf/` | 4 | Hydra-Configs außerhalb des Trainings (Preprocessing, Ablation, Clips) | [10](10_konfiguration.md) |
@@ -80,9 +86,9 @@ bei 548 Dateien.
 | Typ | Anzahl | Bemerkung |
 |---|---:|---|
 | `.md` | 137 | Doku + Vault (+2 gegenüber der Erstaufnahme: `chefer_ablation.md`, `docs/results/README.md`). Die Aufteilung der Erstaufnahme lautete 57 in `docs/`, 78 in `vault/`; sie ist filesystembasiert erhoben und deckt sich nicht mit `git ls-files` — dort sind es 38 bzw. 90. Vor einer Übernahme in den Beleg neu erheben. |
-| `.py` | **136** | **32.966 Zeilen** — `src/` 15.684, `scripts/` 7.953, `tests/` 9.152, `launch/` 176 |
+| `.py` | **137** | **33.122 Zeilen** — `src/` 15.684, `scripts/` 8.109, `tests/` 9.152, `launch/` 176. Der Zuwachs vom 2026-08-22 ist genau eine Datei: `scripts/build_method_ablation.py` (156 Zeilen) |
 | `.yaml` / `.yml` | 83 | Hydra-Configs (79), CI, Pre-Commit, Docker-Compose |
-| `.json` / `.csv` (Ergebnisse) | 7 | `docs/results/` — versionierte Lokalisierungsmesswerte |
+| `.json` / `.csv` (Ergebnisse) | 9 | `docs/results/` — versionierte Lokalisierungsmesswerte; seit dem 2026-08-22 auch die Methodenablation (`relevance_method_ablation.csv` und `…_tests.csv`) |
 | `.ps1` | 7 | Lauf-Runbooks; **4 davon neu** für die λ-Sweeps (`run_lambda_sweep`, `run_relevance_queue`, `rerun_lambda_arms`, `eval_training_curve`) |
 | `.tsx` | 49 | React-Komponenten und Erklärinhalte |
 | `.jpg` | 24 | Test-Fixtures (`tests/dummy_data/frames/`) |
@@ -98,7 +104,8 @@ bei 548 Dateien.
 
 Die größten Python-Module machen etwa die Hälfte des Produktivcodes aus. **Der
 Codebestand ist zwischen dem 2026-08-16 und dem 2026-08-20 um rund 30 % gewachsen**
-(25.245 → 32.966 Zeilen Python); der größte Einzelposten sind die Tests (+3.067 Zeilen).
+(25.245 → 32.966 Zeilen Python; der Stand vom 2026-08-22 liegt bei 33.122); der größte
+Einzelposten sind die Tests (+3.067 Zeilen).
 Die Zeilenangaben stehen absteigend; vier neue Module sind darunter:
 
 | Modul | Zeilen | Rolle | Register |
@@ -167,6 +174,11 @@ Beim Inventarisieren fielen drei Punkte auf, die beim Beleg-Abgleich relevant se
 
 5. **Vier PowerShell-Runbooks sind neu und nicht ohne Weiteres portabel.**
    `run_lambda_sweep.ps1`, `run_relevance_queue.ps1`, `rerun_lambda_arms.ps1` und
-   `eval_training_curve.ps1` setzen Windows voraus; `build_training_curve.py` und
-   `eval_training_curve.ps1` tragen zudem **fest eingetragene Lauf-Verzeichnisse**. Beides
+   `eval_training_curve.ps1` setzen Windows voraus; `build_training_curve.py`,
+   `eval_training_curve.ps1` und seit dem 2026-08-22 auch `build_method_ablation.py`
+   tragen zudem **fest eingetragene Lauf-Verzeichnisse**. Beides
    ist im Beleg als Einschränkung der Reproduzierbarkeit zu nennen, nicht als Werkzeug.
+   Bei `build_method_ablation.py` ist das Festschreiben allerdings die *Absicherung* und
+   nicht die Nachlässigkeit: `checkpoints/sweep_relevance_lambda002.ckpt` ist `global_step`
+   500 und damit Batch 1.500 statt des ausgewerteten Batch-6.000-Stands, was der Dateiname
+   nicht verrät.

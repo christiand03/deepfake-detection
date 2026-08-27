@@ -1,7 +1,7 @@
 # 12 — Dokumentation und Forschungs-Vault
 
-Bestandsaufnahme von `docs/` (**60 Dateien**, 57 bis 2026-08-15) und `vault/`
-(104 Dateien). Kein Code, aber für den Beleg-Abgleich zentral: Hier steht, was bereits
+Bestandsaufnahme von `docs/` (**62 Dateien**, 57 bis 2026-08-15, 60 bis 2026-08-21) und
+`vault/` (104 Dateien). Kein Code, aber für den Beleg-Abgleich zentral: Hier steht, was bereits
 geschrieben ist und wo die Ergebnisse dokumentiert sind.
 
 > **Der Zuwachs ist nicht nur Umfang, sondern eine Verschiebung.** Bis Juli 2026 lagen die
@@ -41,7 +41,7 @@ geschrieben ist und wo die Ergebnisse dokumentiert sind.
 | `xai_pipeline_reference.md` | 21 KB | **Technische Referenz:** exakte Berechnungen, Normierungsstufen und Display-Tuning jeder xAI-Stufe — mit Zahlen. Die Quelle für die Abbildungslegenden. |
 | `frontend_roadmap.md` | 51 KB | **Die größte Datei in `docs/`.** Roadmap der Weboberfläche; die Kürzel `I1`–`I4`, `A1`, `A2-Box`, `E1`, `E2`, `H2` aus den Code-Kommentaren stammen von hier. |
 | `relevance_regularization.md` | 48 KB | **Umgesetzt und gemessen — siehe Kasten unten.** Diagnose (§1–§5), Entscheidung (§6), Implementierung (§7), Ablaufplan (§8) und seit dem 2026-08-16 die **Ergebnisse (§13)** mit Trade-off-Kurve, Kontrolllauf, Trainingsdauer-Achse, Aux-Head und Fehlerprotokoll. |
-| `chefer_ablation.md` | 44 KB | **Die LRP-unabhängige Zweitmethode.** Warum sie nötig ist (§1), welches Chefer-Paper (§2), die Regel formal (§3), die zwei erzwungenen Abweichungen von VideoMAE (§4), der dreistufige Vergleich (§5), die Auflösungsfrage (§6), Confidence gegen Relevanz (§7), die quantitative Auswertung (§9), Grenzen (§10), technische Designentscheidungen (§11), **13 Pflicht-Erwähnungen im Beleg (§12)** und die Folge für den Abgleich (§14). |
+| `chefer_ablation.md` | 44 KB | **Die LRP-unabhängige Zweitmethode.** Warum sie nötig ist (§1), welches Chefer-Paper (§2), die Regel formal (§3), die zwei erzwungenen Abweichungen von VideoMAE (§4), der dreistufige Vergleich (§5), die Auflösungsfrage (§6), Confidence gegen Relevanz (§7), die quantitative Auswertung (§9 — **§9.1 vorläufig auf dem demo-Split, §9.3 die endgültige 2 × 3-Messung auf dem test-Split**, dazwischen die Verteilungsanalyse §9.2), Grenzen (§10), technische Designentscheidungen (§11), **13 Pflicht-Erwähnungen im Beleg (§12)** und die Folge für den Abgleich (§14). |
 
 **Novelty-Anspruch — in `attnlrp_relevance_explanations_and_decision.md` §7 bereits
 entschieden und vorformuliert.** Das Dokument prüft die Frage am AttnLRP- und am
@@ -138,9 +138,26 @@ gemessen, nicht auf der hier verwendeten contrastiven Variante.
 > optimiert. Eine Verbesserung dort ist nicht selbsttragend. Chefer et al. (ICCV 2021)
 > teilt keine Berechnung mit diesem Verlust und liefert die unabhängige Zweitmessung.
 >
-> **Ergebnis (vorläufig, Demo-Split, 17 Clips):** `ratio_over_chance` steigt nach der
-> Regularisierung bei **beiden** Methoden signifikant — AttnLRP +6,30, Chefer +0,848,
-> beide p = 0,0003.
+> **Ergebnis (§9.3, test-Split, 911 Chunks aus 624 Clips, 2026-08-22):** 2 × 3 statt der
+> ursprünglich geplanten 2 × 2 — der Kontrollarm λ=0 kam hinzu, weil eine Verbesserung
+> sonst nicht dem Strafterm statt dem zusätzlichen Training zuzuschreiben wäre.
+> `ratio_over_chance` gegen die Kontrolle: AttnLRP (bivariat) 1,898 → 7,910 (4,17×),
+> Chefer 1,536 → 2,360 (1,54×), beide p ≈ 4e−103. **Beide** Methoden setzen die Kontrolle
+> unter die Baseline (0,972× / 0,976×) — Weitertrainieren allein lokalisiert nicht.
+>
+> **Die Leitzahl ist das Pointing Game, nicht die 7,910.** Es ist die einzige der vier
+> Metriken auf [0, 1] und damit die einzige, die zwischen den Methoden ohne Vorbehalt
+> vergleichbar ist: 0,280 → 0,769 (AttnLRP) gegen 0,221 → 0,747 (Chefer), der relative
+> Sprung ist bei Chefer sogar größer (3,37× gegen 2,75×). Die Massenkonzentration steigt
+> dagegen unter AttnLRP rund dreimal stärker, weil sie die optimierte Größe ist. Sauber
+> formuliert: Das Training verschiebt belegbar, *wohin* das Modell schaut; die Höhe des
+> Massengewinns ist teilweise AttnLRP-spezifisch. Die vorläufigen Demo-Split-Zahlen (17
+> Clips, +6,30 / +0,848 bei p = 0,0003) sind damit abgelöst — sie replizierten.
+>
+> **Wer die Zahlen nebeneinanderstellt, muss die Modusspalte mitnennen.** Die Ablation
+> misst den bivariaten Arm, die Ergebnistabelle in §1.2b und F25d den Einzelziel-Arm
+> `fake`; beide Reihen liegen eng beieinander (1,921 / 1,867 / 8,210 gegen
+> 1,953 / 1,898 / 7,910), sind aber nicht dieselbe Größe.
 >
 > §12 listet **13 Pflicht-Erwähnungen im Beleg**, §14 die Folge für die Abgleichmatrix:
 > **F57 („Attention Rollout ist nirgends implementiert") ist überholt.** Ein
@@ -151,7 +168,8 @@ gemessen, nicht auf der hier verwendeten contrastiven Variante.
 
 ### 1.2b `docs/results/` — versionierte Ergebnisartefakte **[K]**
 
-Neu seit 2026-08-17, 8 Dateien. Der Grund steht im eigenen `README.md`: Die Zahlen lagen
+Neu seit 2026-08-17, **10 Dateien** (zwei kamen am 2026-08-22 mit der Methodenablation
+hinzu). Der Grund steht im eigenen `README.md`: Die Zahlen lagen
 zuvor nur in `temp/`, und *„ein Ergebnisdokument, dessen Zahlen sich nicht aus dem
 Repositorium nachvollziehen lassen, ist nur halb belegt."*
 
@@ -164,6 +182,8 @@ Repositorium nachvollziehen lassen, ist nur halb belegt."*
 | `loc_lambda002.json` · `loc_lambda01.json` | die beiden λ-Arme, 8,210 und 11,418 |
 | `loc_aux_head.json` | Aux-Kopf, 2,200 |
 | `training_curve.csv` | 12 Messpunkte: Lokalisierung als Funktion der Trainingsdauer, je Metrik mit Bootstrap-Intervall, plus `val_loss`/`val_auc_video` aus der `metrics.csv` des Laufs |
+| `relevance_method_ablation.csv` | Die 2 × 3-Methodenablation: je Methode (`bivariate`, `chefer`) und Arm (`base`, `ctrl`, `reg`) eine Zeile mit vier Metriken und Bootstrap-Intervallen, dazu der geprüfte Checkpoint-Pfad. `ratio_over_chance` bivariat 1,953 / 1,898 / 7,910, Chefer 1,574 / 1,536 / 2,360 |
+| `relevance_method_ablation_tests.csv` | 24 gepaarte Wilcoxon-Tests über 624 Clips: je Methode drei Vergleiche (`reg_vs_ctrl`, `ctrl_vs_base`, `reg_vs_base`) über vier Metriken, mit Verhältnis, Mediandifferenz und p-Wert |
 
 Jede JSON enthält je Metrik Mittelwert und 95-%-Bootstrap-Intervall sowie `n_clips`. Die
 Per-Chunk-CSVs bleiben bewusst in `temp/` und sind nicht versioniert; sie lassen sich mit
@@ -409,6 +429,6 @@ die Entscheidung, ISTVT *nicht* zu implementieren (Backbone ist VideoMAE).
 | `03Related Work.tex` | `vault/Sources/Papers/` (48), `Knowledge/Claim Map.md`, `references.bib` (46 Einträge, alle zitiert) |
 | `04Methodology.tex` | Registerdokumente [01](01_datenpipeline.md)–[05](05_robustheit_adversarial.md), `docs/model.md`, `docs/concepts.md`, `docs/attnlrp_relevance_explanations_and_decision.md`, `docs/relevance_regularization.md` §6–§7, `docs/chefer_ablation.md` §3–§4 |
 | `05Experimental_Setup.tex` | [10](10_konfiguration.md), [11](11_infrastruktur.md), `docs/commands.md` |
-| `06Results.tex` | `vault/Results/` (8 Notizen + 3 Abbildungen) **für Phase 1–4**; für die xAI-Lokalisierung dagegen `docs/results/` (versionierte JSON + `training_curve.csv`), `docs/relevance_regularization.md` §13 und `docs/chefer_ablation.md` §9 — im Vault nicht vorhanden |
+| `06Results.tex` | `vault/Results/` (8 Notizen + 3 Abbildungen) **für Phase 1–4**; für die xAI-Lokalisierung dagegen `docs/results/` (versionierte JSON, `training_curve.csv` und die beiden Ablationstabellen `relevance_method_ablation{,_tests}.csv`), `docs/relevance_regularization.md` §13 und `docs/chefer_ablation.md` §9.3 — im Vault nicht vorhanden |
 | `07Discussion_Limitations.tex` | `Knowledge/Research Gaps.md`, `docs/audit_2026-06.md` |
 | `09Appendix.tex` | [09](09_tests.md), [11](11_infrastruktur.md) |

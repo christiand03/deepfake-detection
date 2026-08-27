@@ -349,11 +349,27 @@ verloren ist (`--per-region`).
 | `summarize(rows, clip_level=True)` | L262 | **Aggregiert zuerst je Clip**, damit lange Clips die Statistik nicht dominieren. |
 | `evaluate(...)` | L297 | Die Schleife über die Chunks mit Maske. |
 
-Ergebnisdateien: `docs/results/loc_*.json` (je Metrik Mittelwert und Bootstrap-Intervall)
-sowie `docs/results/training_curve.csv`. Die Per-Chunk-CSVs bleiben in `temp/` und sind
-bewusst nicht versioniert.
+Ergebnisdateien: `docs/results/loc_*.json` (je Metrik Mittelwert und Bootstrap-Intervall),
+`docs/results/training_curve.csv` sowie seit dem 2026-08-22
+`docs/results/relevance_method_ablation.csv` und `…_tests.csv`. Die Per-Chunk-CSVs bleiben
+in `temp/` und sind bewusst nicht versioniert.
 
 Getestet in `tests/test_eval_localization.py` (20 Tests).
+
+### `scripts/build_method_ablation.py` — die sechs Arme zu einer Tabelle **[K]**
+
+156 Zeilen. Aggregiert die sechs Einzelläufe (2 Methoden × 3 Arme) zu
+`docs/results/relevance_method_ablation.csv` und rechnet die gepaarten Tests nach
+`…_tests.csv`. Drei Entscheidungen darin sind belegrelevant:
+
+| Entscheidung | Zeilen | Warum |
+|---|---|---|
+| Checkpoints über **Lauf-Verzeichnisse** festgeschrieben (`ARMS`) | L39 | Dieselbe Falle wie bei `build_training_curve.py`, nur schärfer: `checkpoints/sweep_relevance_lambda002.ckpt` ist `global_step` 500, also Batch 1.500 statt des Batch-6.000-Stands — der Dateiname sagt das nicht. Die Identität wird über `global_step` und `loc_lambda` geprüft, nie über den Namen. |
+| `check_pairing` bricht ab, wenn die Clipmengen abweichen | L56 | Ohne identische Mengen wäre der gepaarte Test eine Fiktion. Geprüft und gehalten: 911 Chunks, 624 Clips, in allen sechs Armen exakt dieselben — und `mask_area_frac` weicht über alle 15 Arm-Paare um **0,000e+00** ab, was zählt, weil `ratio_over_chance` durch diesen Wert teilt. |
+| Gepaarter Wilcoxon **über Clips**, nicht über Chunks | L100 | Chunks desselben Clips sind nicht unabhängig; die Analyseeinheit ist damit dieselbe wie in `summarize()`. Verglichen werden `reg` gegen `ctrl` (isoliert den Strafterm), `ctrl` gegen `base` (isoliert das zusätzliche Training) und `reg` gegen `base`. |
+
+Laufzeit der Messung selbst: Chefer 5,0 min je Arm, bivariat 7,6 min je Arm auf einer
+RTX 3060 Ti, zusammen 38 min für alle sechs.
 
 ### Die zwei Gates — `scripts/smoke_*.py` **[E]**
 
@@ -376,7 +392,9 @@ src/utils/chefer.py                    Rollout-Regel, modellagnostisch (wie attn
         ↑ genutzt von
 VideoMAEModule.explain_chefer()        Token→Frame-Abbildung, laeuft un-gepatcht
         ↑ genutzt von
-scripts/eval_localization.py           --relevance chefer  (Messung)
+scripts/eval_localization.py           --relevance chefer  (Messung, je Arm ein Lauf)
+        ↓
+scripts/build_method_ablation.py       6 Arme -> eine Tabelle + gepaarte Tests
 src/api/inference.py                   _compute_heatmaps_chefer  (Frontend-Overlay)
 ```
 
@@ -399,10 +417,48 @@ LRP-Pseudogradient. Alle API-Router teilen sich seit 2026-08-20 **einen** Execut
 (`src/api/executor.py`), damit das Ent-Patchen nicht mit einem parallelen
 Relevanzlauf kollidiert.
 
-**Ergebnis (vorläufig, demo-Split, 17 Clips).** `ratio_over_chance` steigt nach der
-Regularisierung bei beiden Methoden signifikant (AttnLRP +6,30, Chefer +0,848, beide
-p = 0,0003). Chefers Karte ist dabei deutlich flacher: Formfaktor `p99/p50` von 2,5
-gegenüber 13,4 bei der LRP-Magnitude — beide identisch normiert.
+**Ergebnis (test-Split, 2026-08-22).** Der Versuchsplan ist **2 × 3** — beide Methoden auf
+Baseline, Kontrolle λ=0 und λ=0,02 —, alle sechs Arme auf denselben **911 maskierten
+Chunks aus 624 Test-Clips**, also demselben Satz, auf dem auch die AttnLRP-Referenz aus
+`relevance_regularization.md` §13 erhoben wurde. Die vorläufige Messung auf dem
+demo-Split (25 Chunks, 17 Clips) ist damit abgelöst; sie replizierte bei 37-fachem
+Stichprobenumfang.
+
+| `ratio_over_chance` | Baseline | Kontrolle λ=0 | λ=0,02 | reg/Kontrolle |
+|---|---|---|---|---|
+| AttnLRP (bivariat) | 1,953 | 1,898 | 7,910 | **4,17×** (p = 4,5e−103) |
+| Chefer | 1,574 | 1,536 | 2,360 | **1,54×** (p = 4,3e−103) |
+
+Zwei Befunde, die ohne die zweite Methode nicht zu haben sind. **Erstens setzen beide
+Methoden die Kontrolle unter die Baseline** (0,972× bzw. 0,976×, p = 1,2e−26 bzw.
+2,8e−81): Weitertrainieren allein verbessert die Lokalisierung nicht, es verschlechtert
+sie geringfügig. Das Argument aus `relevance_regularization.md` §13.5 stand bisher auf
+AttnLRP allein und steht jetzt auf zwei Verfahren, die keine Berechnung teilen.
+
+**Zweitens verhalten sich Spitze und Masse verschieden.** Bei den massenbasierten Metriken
+ist der AttnLRP-Effekt rund dreimal so groß wie der von Chefer (`rma` 2,91× gegen 1,34×)
+— erwartbar, denn der Verlust *ist* ein Massenverhältnis auf AttnLRP-Relevanz. Beim
+Pointing Game kehrt sich das Verhältnis um: Chefer zeigt mit **3,37×** den größeren
+relativen Sprung, und die Endwerte liegen mit 0,769 (AttnLRP) und 0,747 (Chefer)
+praktisch aufeinander, ausgehend von 0,280 bzw. 0,221. Als einzige der vier Metriken ist
+das Pointing Game auf [0, 1] beschränkt und braucht keine Skalennormierung, ist also
+**ohne Vorbehalt zwischen den Methoden vergleichbar**. Die belastbare Aussage lautet
+deshalb: Das Training verschiebt, *wohin* das Modell schaut; die zusätzliche
+Massenkonzentration ist teilweise AttnLRP-spezifisch. **Für den Beleg ist damit das
+Pointing Game die Leitzahl**, nicht die 7,910.
+
+Chefers Karte ist dabei deutlich flacher: Formfaktor `p99/p50` von 2,5 gegenüber 13,4 bei
+der LRP-Magnitude — beide identisch normiert, beide klippen exakt 1,00 %. Die absoluten
+`ratio_over_chance`-Höhen sind zwischen den Methoden deshalb **nicht** vergleichbar; die
+Verhältnisse innerhalb einer Methode und das Pointing Game sind es.
+
+> **Zwei AttnLRP-Varianten, zwei Zahlenreihen.** Die Ablation misst `bivariate`
+> (1,953 / 1,898 / 7,910), die Ergebnistabelle in [12 §1.2b](12_dokumentation_vault.md)
+> und Registerzeile F25d dagegen den Einzelziel-Arm `fake` (1,921 / 1,867 / 8,210). Beide
+> Arme liegen eng beieinander und stützen sich gegenseitig; wer sie nebeneinanderstellt,
+> muss die Modusspalte mitnennen. Der `fake`-Arm wurde nicht neu erhoben — sein Codepfad
+> ist unverändert, eine Stichprobe reproduzierte die gespeicherten Zeilen in allen fünf
+> Metriken auf 0,000e+00.
 
 ### `src/utils/chefer.py` auf Funktionsebene
 

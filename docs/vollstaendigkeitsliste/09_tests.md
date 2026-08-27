@@ -180,3 +180,9 @@ das ist der CI-Pfad.
   Tests**: sie brauchen Checkpoint und GPU und laufen nicht in der CI.
 - **Keine numerische Prüfung der Renderfunktionen.** `_array_to_data_uri`,
   `_upproject_heatmap` und `seismicColormap.ts` sind nur indirekt abgedeckt.
+- **Die beiden Aggregationsskripte sind ungetestet.** `build_training_curve.py` und
+  `build_method_ablation.py` erzeugen die Ergebnisdateien in `docs/results/`, ohne dass ein
+  Test ihre Statistik prüft. Beide sichern sich stattdessen im Skript selbst ab:
+  `build_method_ablation.check_pairing` bricht ab, sobald zwei Arme unterschiedliche
+  Clipmengen abdecken, und macht damit den einen Fehler unmöglich, der den gepaarten
+  Wilcoxon-Test stillschweigend entwerten würde.

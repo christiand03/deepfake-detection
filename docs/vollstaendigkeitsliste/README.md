@@ -14,11 +14,11 @@ Das Register ist *deskriptiv* — es dokumentiert, was da ist, nicht was da sein
 
 | Dokument | Umfang | Inhalt |
 |---|---|---|
-| [00_inventar.md](00_inventar.md) | 533 Dateien | Vollständiges Dateiinventar, Zählweise, Abgrenzungen |
+| [00_inventar.md](00_inventar.md) | 536 Dateien | Vollständiges Dateiinventar, Zählweise, Abgrenzungen |
 | [01_datenpipeline.md](01_datenpipeline.md) | 16 Module + 12 Skripte | Rohvideo → Face-Crop → HDF5 → DataLoader, **Manipulationsmasken** |
 | [02_modelle.md](02_modelle.md) | 7 Module | VideoMAE, Wav2Vec2, Cross-Attention-Fusion, Basisklasse, Metriken, **Lokalisierungskopf** |
 | [03_training_evaluation.md](03_training_evaluation.md) | 11 Module + 6 Werkzeuge | Trainings-/Eval-Entrypoints, Lightning-Utilities, LR-Schedules, **Trainingswächter, Sweep-Runbooks** |
-| [04_xai.md](04_xai.md) | 8 Module | AttnLRP-Kern, bivariate Relevanz, Audio-3-Schichten-xAI, Explain-Skripte, **Lokalisierungsmetrik, Chefer-Rollout, Messskript** |
+| [04_xai.md](04_xai.md) | 8 Module | AttnLRP-Kern, bivariate Relevanz, Audio-3-Schichten-xAI, Explain-Skripte, **Lokalisierungsmetrik, Chefer-Rollout, Messskript, Methodenablation** |
 | [05_robustheit_adversarial.md](05_robustheit_adversarial.md) | 8 Module + 2 Runbooks | Phase 3 (Degradation) + Phase 4 (FGSM/PGD/UAP/Adv-Training) |
 | [06_backend_api.md](06_backend_api.md) | 13 Module | FastAPI-App, Router, Schemas, Clip-Registry, Cache |
 | [07_inference_pipeline.md](07_inference_pipeline.md) | 1 Modul, 85 Funktionen | `src/api/inference.py` — die Laufzeit-Analysepipeline |
@@ -26,7 +26,7 @@ Das Register ist *deskriptiv* — es dokumentiert, was da ist, nicht was da sein
 | [09_tests.md](09_tests.md) | 52 Testmodule | Testabdeckung nach geprüftem Verhalten |
 | [10_konfiguration.md](10_konfiguration.md) | 79 YAML | Hydra-Configs: Experimente, Modelle, Callbacks, Preprocessing |
 | [11_infrastruktur.md](11_infrastruktur.md) | 30 Dateien | Docker, CI, Pre-Commit, W&B-Launch, Projektmetadaten |
-| [12_dokumentation_vault.md](12_dokumentation_vault.md) | 170 Dateien | Bestandsaufnahme `docs/` und `vault/`, **`docs/results/`** |
+| [12_dokumentation_vault.md](12_dokumentation_vault.md) | 172 Dateien | Bestandsaufnahme `docs/` und `vault/`, **`docs/results/` (10)** |
 | [99_abgleich_beleg.md](99_abgleich_beleg.md) | Matrix | **Abgleichmatrix Code → Beleg-Kapitel** |
 
 ---
@@ -114,17 +114,43 @@ Bewusst ausgeschlossen sind die Datenbestände und generierten Artefakte:
 | `checkpoints/` | 4 | Trainierte Gewichte (3,5 GB) |
 | `outputs/`, `wandb/`, `logs/` | 104 | Laufartefakte |
 
-Damit bleiben **485 Projektdateien**, die dieses Register vollständig erfasst.
+Damit bleiben **536 Projektdateien**, die dieses Register vollständig erfasst (485 zur
+Erstaufnahme, seither 51 hinzugekommen).
 
 ---
 
 ## Stand und Pflege
 
-- **Erstellt:** 2026-08-02 · **Zuletzt nachgezogen:** 2026-08-21
-- **Code-Stand:** Branch `main`, HEAD `ce2075d`. Ausgangspunkt der Erstaufnahme war Commit
+- **Erstellt:** 2026-08-02 · **Zuletzt nachgezogen:** 2026-08-24
+- **Code-Stand:** Branch `main`, HEAD `c1dec87`. Ausgangspunkt der Erstaufnahme war Commit
   `19dd0d5` (*Add L3 Audio Confidence Statement*, 2026-07-21).
-- **Erfasst:** 533 Dateien; **136 Python-Module (32.966 Zeilen)**, 62 TS/TSX-Module,
+- **Erfasst:** 536 Dateien; **137 Python-Module (33.122 Zeilen)**, 62 TS/TSX-Module,
   83 YAML-/YML-Dateien (davon 79 Hydra-Configs, der Rest CI, Pre-Commit, Compose)
+
+### Nachtrag 2026-08-24 — die Chefer-Ablation ist ausgewertet
+
+Zwei Commits (`7f0e507`, `c1dec87`) bringen **keine neue Funktionalität, sondern
+Ergebnisse**: die 2 × 3-Methodenablation auf dem test-Split, gemessen an denselben 911
+maskierten Chunks aus 624 Clips, auf denen auch die AttnLRP-Referenz erhoben wurde. Neu
+sind `scripts/build_method_ablation.py` (156 Zeilen) sowie
+`docs/results/relevance_method_ablation.csv` und `…_tests.csv`; ausgewertet ist der Lauf
+in `docs/chefer_ablation.md` §9.3.
+
+| Befund | Zahl |
+|---|---|
+| Lokalisierungsgewinn gegenüber der Kontrolle λ=0 | AttnLRP (bivariat) 4,17×, Chefer 1,54× (`ratio_over_chance`) |
+| Kontrolle gegen Baseline, **in beiden Methoden** unter 1 | 0,972× bzw. 0,976× — Weitertrainieren allein lokalisiert nicht |
+| Pointing Game, die einzige methodenübergreifend vergleichbare Metrik | 0,280 → 0,769 (AttnLRP) gegen 0,221 → 0,747 (Chefer) |
+
+Nachgezogen wurden [00](00_inventar.md), [03](03_training_evaluation.md),
+[04](04_xai.md), [09](09_tests.md), [12](12_dokumentation_vault.md) und
+[99](99_abgleich_beleg.md) (F60 mit den endgültigen Zahlen, F65 und F66 neu).
+
+> **Die Gegenprobe bestätigt die Richtung, nicht die Höhe.** Bei der Massenkonzentration
+> steigt AttnLRP rund dreimal stärker als Chefer, weil sie die optimierte Größe ist; beim
+> Pointing Game liegen beide Endwerte praktisch aufeinander. Für den Beleg heißt das:
+> **das Training verschiebt, wohin das Modell schaut** — die 7,910 bzw. 8,210 sind die
+> schwächere Leitzahl, siehe Registerzeile F65.
 
 ### Nachtrag 2026-08-21 — Relevanz-Regularisierung und Chefer-Ablation
 
@@ -151,12 +177,15 @@ unverändert.
 > Befundkasten in [12](12_dokumentation_vault.md) ist ersetzt, F25b umgeschrieben und um
 > **F25d–F25g** (Ergebnis, Vorbehalte, Anti-Gaming-Nachweis, Metrik≡Verlust) ergänzt.
 
-> **Die neuen Matrixzeilen stehen fast alle auf `✗`.** Die Kapitelskizzen stammen vom
-> 2026-08-01, die Implementierung ist zweieinhalb Wochen jünger — sie kann dort nicht
-> vermerkt sein. Konkret: A48–A51, B22–B25, C20–C22, D50–D54, E13, F25d–F25g, F58–F64
-> und Q38–Q42 sind **vollständig ungeschrieben**. Vier davon sind in
+> ~~**Die neuen Matrixzeilen stehen fast alle auf `✗`.**~~ **Korrigiert am 2026-08-24.**
+> Die Zeilen A48–A51, B22–B25, C20–C22, D50–D54, E13, F25b–F25g, F58–F66 und Q38–Q42 sind
+> **nicht** ungeschrieben: Sie haben sämtlich einen Modus-A-Block in ihrer Kapiteldatei,
+> angelegt in derselben Runde am 2026-08-21, nur ohne Nachführung der Statusspalte. Sie
+> stehen jetzt auf `○`, zwei auf `✓` (F25d, F64 — ausgeschrieben in
+> `06Results.tex:641-742`). Vier bleiben in
 > [99 §Lückenkandidaten](99_abgleich_beleg.md) als **P0** eingeordnet, darunter das
-> Lokalisierungsergebnis selbst.
+> Lokalisierungsergebnis selbst — dort geht es jetzt um das Ausschreiben, nicht mehr um
+> das Auffinden.
 
 > **Wer nur den Vault abgleicht, übersieht die gesamte Strecke.** Bis Juli 2026 lagen die
 > Ergebniszahlen in `vault/Research/deepfake-detection/Results/`. Zu keinem der sechs
