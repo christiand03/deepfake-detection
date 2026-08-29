@@ -265,9 +265,11 @@ Jede Operation beschreibt eine wortebene-Änderung, die durch das LLM generiert 
 
 **Wichtig:** `start` / `end` der Operation entspricht dem `fake_segment`-Zeitbereich — diese Felder erlauben eine präzise frame-genaue Fake-Lokalisierung innerhalb eines Segments.
 
-## 6. Metadaten-Analyse: Lokales Subset (`scripts/analyze_metadata.py`)
+## 6. Metadaten-Analyse: Lokales Subset — Stand vor der Erweiterung (`scripts/analyze_metadata.py`)
 
 Analysiert mit `scripts/analyze_metadata.py` über alle 30.530 JSON-Sidecars des lokalen ~15-GB-Subsets.
+
+> **Ausbaustufe:** Dieser Abschnitt beschreibt das Subset mit **75 Identitäten**, also den Stand *vor* der Erweiterung. Der Bestand, auf dem die berichteten Läufe trainiert wurden, umfasst **165 Identitäten** — die aktuellen Zahlen stehen in [§7](#7-aktueller-bestand-stand-2026-08-29-chunk-ebene-splits-accounting). Die qualitativen Befunde dieses Abschnitts (wortgenaue Manipulationen, Label-Feld-Wahl, partielle Fake-Segmente) gelten unverändert.
 
 ### Subset-Umfang
 
@@ -369,7 +371,202 @@ Segmentdauer** (Bruchteil-Kriterium für Segmente kürzer als 0,1 s — Minimum 
 Effekt: `label_video`-Fake-Rate ~7 % → ~5 % — die Differenz sind exakt die grenzwertig
 überlappenden Boundary-Chunks. Details: `audit_2026-06.md` §1.2.
 
-## 7. Quality Assurance (QA) Check
+## 7. Aktueller Bestand (Stand 2026-08-29): Chunk-Ebene, Splits, Accounting
+
+§6 beschreibt den Stand **vor** der Erweiterung (75 Identitäten, 30.530 JSON-Sidecars).
+Dieser Abschnitt hält den Bestand fest, auf dem die berichteten Läufe tatsächlich
+trainiert und evaluiert wurden: **165 Identitäten**. Die beiden Abschnitte sind zwei
+Ausbaustufen desselben Subsets, kein Widerspruch. Gegenüber dem Audit-Stand vom Juni 2026
+(`audit_2026-06.md` §3: 12.000 Videos, 32 Identitäten, 157.726 Chunks) hat sich vor allem
+die **Identitätsvielfalt** vervielfacht (32 → 165), nicht das Volumen — das ist der Punkt
+der Erweiterung.
+
+Reproduktion:
+
+```bash
+python scripts/analyze_metadata.py            # Videoebene (JSON-Sidecars)
+python scripts/analyze_chunk_distribution.py  # Chunk-Ebene (data/processed/*_metadata.csv)
+python -m scripts.validate_processed          # QA-Lauf
+```
+
+### 7.1 Umfang und Splits (Chunk-Ebene)
+
+| Split | Chunks | Videos | Identitäten |
+|---|---:|---:|---:|
+| train | 116.170 | 9.482 | 119 |
+| val | 17.219 | 1.382 | 22 |
+| test | 18.298 | 1.471 | 24 |
+| **gesamt** | **151.687** | **12.335** | **165** |
+
+Die Splits sind identitätsdisjunkt (verifiziert, §7.6). Der Test-Split mit 1.471 Videos
+ist derselbe, auf dem die Phase-3-Robustheits- und Phase-4-Adversarial-Sweeps laufen.
+
+### 7.2 `modify_type` je Split (Chunk-Ebene)
+
+| `modify_type` | train | val | test | gesamt |
+|---|---:|---:|---:|---:|
+| `visual_modified` | 29.106 (25,1 %) | 4.303 (25,0 %) | 4.577 (25,0 %) | 37.986 (25,0 %) |
+| `audio_modified` | 29.027 (25,0 %) | 4.312 (25,0 %) | 4.574 (25,0 %) | 37.913 (25,0 %) |
+| `both_modified` | 29.014 (25,0 %) | 4.312 (25,0 %) | 4.579 (25,0 %) | 37.905 (25,0 %) |
+| `real` | 29.023 (25,0 %) | 4.292 (24,9 %) | 4.568 (25,0 %) | 37.883 (25,0 %) |
+
+Die Viertelung der Videokategorien überträgt sich sauber auf die Chunk-Ebene und auf jeden
+Split — die Balance aus §6 übersteht Face-Skip und Split-Zuweisung unverändert.
+
+### 7.3 Fake-Rate je Label-Spalte und Split (Chunk-Ebene)
+
+| Split | `label` | `label_video` | `label_audio` |
+|---|---:|---:|---:|
+| train | 10.184 / 116.170 (8,8 %) | 6.846 / 116.170 (5,9 %) | 6.766 / 116.170 (5,8 %) |
+| val | 1.547 / 17.219 (9,0 %) | 1.037 / 17.219 (6,0 %) | 1.036 / 17.219 (6,0 %) |
+| test | 1.648 / 18.298 (9,0 %) | 1.108 / 18.298 (6,1 %) | 1.101 / 18.298 (6,0 %) |
+
+**Das ist der Kernunterschied zur Videoebene in §6.** Dort ist der Datensatz bei
+`label_video` 50:50 balanciert — das gilt für *Videos*. Auf Chunk-Ebene, der Ebene, auf
+der trainiert wird, sind nur **~6 %** der Chunks fake: Die Manipulationen sind wortgenau
+und treffen pro Video nur wenige der 16-Frame-Fenster. Die Fake-Rate ist über alle drei
+Splits nahezu identisch (5,8–6,1 %), das Klassenverhältnis also nicht split-abhängig.
+Genau diese Schieflage begründet `class_weights: auto` und das Balanced Sampling im
+Training.
+
+### 7.4 `split` × `modify_type` × `label*` (Chunk-Ebene)
+
+| Split | `modify_type` | Chunks | `label`=1 | `label_video`=1 | `label_audio`=1 |
+|---|---|---:|---:|---:|---:|
+| train | `real` | 29.023 | 0 (0,0 %) | 0 (0,0 %) | 0 (0,0 %) |
+| train | `visual_modified` | 29.106 | 3.449 (11,8 %) | 3.449 (11,8 %) | 31 (0,1 %) |
+| train | `audio_modified` | 29.027 | 3.370 (11,6 %) | 32 (0,1 %) | 3.370 (11,6 %) |
+| train | `both_modified` | 29.014 | 3.365 (11,6 %) | 3.365 (11,6 %) | 3.365 (11,6 %) |
+| val | `real` | 4.292 | 0 (0,0 %) | 0 (0,0 %) | 0 (0,0 %) |
+| val | `visual_modified` | 4.303 | 516 (12,0 %) | 516 (12,0 %) | 5 (0,1 %) |
+| val | `audio_modified` | 4.312 | 514 (11,9 %) | 4 (0,1 %) | 514 (11,9 %) |
+| val | `both_modified` | 4.312 | 517 (12,0 %) | 517 (12,0 %) | 517 (12,0 %) |
+| test | `real` | 4.568 | 0 (0,0 %) | 0 (0,0 %) | 0 (0,0 %) |
+| test | `visual_modified` | 4.577 | 554 (12,1 %) | 554 (12,1 %) | 7 (0,2 %) |
+| test | `audio_modified` | 4.574 | 547 (12,0 %) | 7 (0,2 %) | 547 (12,0 %) |
+| test | `both_modified` | 4.579 | 547 (11,9 %) | 547 (11,9 %) | 547 (11,9 %) |
+
+Vier Beobachtungen:
+
+1. **`real` ist sauber:** Kein einziger Chunk eines `real`-Videos trägt in irgendeiner
+   Spalte ein Fake-Label. Der Überlappungsfilter erzeugt keine falsch-positiven Labels.
+2. **Innerhalb einer Fake-Kategorie sind nur ~12 % der Chunks fake.** Ein als
+   `visual_modified` geführtes Video besteht zu ~88 % aus unmanipulierten Fenstern. Für
+   die Modelle heißt das: Die Videoebene ist balanciert, die Chunk-Ebene ist es nicht,
+   und die Aggregation Chunk → Video bei der Evaluation ist deshalb kein Detail, sondern
+   der eigentliche Auswertungsschritt.
+3. **Bei `both_modified` fallen die drei Spalten exakt zusammen** (3.365 / 517 / 547).
+   AV-Deepfake1M manipuliert dort dasselbe Wort in beiden Modalitäten; visuelles und
+   akustisches Fake-Segment decken denselben Zeitbereich ab. Für die multimodale Phase 2
+   heißt das: In dieser Kategorie ist keine der beiden Modalitäten die alleinige
+   Evidenzquelle.
+4. **Die Kreuzbesetzung ist minimal, aber nicht null:** 31–32 Chunks im Train (0,1 %)
+   tragen ein Fake-Label in der jeweils *anderen* Modalität, als der `modify_type`
+   erwarten lässt. Ursache sind Sidecars, die für eine nominell einmodale Manipulation
+   zusätzlich ein Segment der Gegenmodalität führen. Bei 0,1 % ist das für Training und
+   Auswertung ohne Belang; für die Interpretation einzelner Chunks in xAI-Fallstudien ist
+   es zu kennen.
+
+### 7.5 Preprocessing-Accounting
+
+**Kein Preprocessing-Log des finalen Laufs liegt auf der Platte vor** — weder unter
+`logs/` noch unter `outputs/` findet sich die Abschlusszeile mit Fehlerquote und
+`face-skip[...]`-Raten. Die **Fehlerquote des Laufs ist damit nicht rekonstruierbar**; die
+0,03 % aus `audit_2026-06.md` §3 gehören zur früheren Ausbaustufe mit 12.000 Videos und
+sind auf diesen Bestand nicht übertragbar.
+
+Die **Face-Skip-Rate ist dagegen aus den Daten rekonstruierbar**: Ein übersprungener Chunk
+hinterlässt eine Lücke in der `chunkNNNNN`-Nummerierung seines Videos. Aufsummiert über
+alle Videos ergibt das eine **Untergrenze** — Skips am Videoende sind unsichtbar, weil sie
+keine Lücke erzeugen, sondern nur einen kürzeren Indexbereich:
+
+| `modify_type` | Videos | Chunks | Chunk-Slots | übersprungen | Skip-Rate (Untergrenze) |
+|---|---:|---:|---:|---:|---:|
+| `audio_modified` | 3.085 | 37.913 | 39.054 | 1.141 | 2,92 % |
+| `both_modified` | 3.084 | 37.905 | 39.062 | 1.157 | 2,96 % |
+| `visual_modified` | 3.084 | 37.986 | 39.139 | 1.153 | 2,95 % |
+| `real` | 3.082 | 37.883 | 39.018 | 1.135 | 2,91 % |
+| **gesamt** | **12.335** | **151.687** | **156.273** | **4.586** | **2,93 %** |
+
+1.650 Videos (13,4 % der verarbeiteten) haben mindestens einen übersprungenen Chunk.
+
+**Entscheidend ist nicht die Höhe, sondern die Gleichverteilung:** 2,91 % bis 2,96 % über
+alle vier Kategorien. Ein Klassenbias im Face-Skip — MediaPipe scheitert häufiger an
+manipulierten Gesichtern und entfernt damit selektiv die schwierigen Fake-Chunks — ist die
+Fehlerquelle, die diese Aufstellung ausschließen soll (`audit_2026-06.md` §1.7). Die
+Spreizung beträgt 0,05 Prozentpunkte; ein solcher Bias liegt nicht vor. Der Wert ist
+**nicht** direkt mit den 8,1 % aus `audit_2026-06.md` §3 vergleichbar: Dort zählt der
+Runner jeden Fehlversuch mit, hier zählen nur die Lücken.
+
+**Abdeckung des MP4-Bestands.** Verarbeitet wurde ein Ausschnitt, kein Vollbestand:
+
+| `modify_type` | MP4 vorhanden | verarbeitet | ohne Chunks | Abdeckung |
+|---|---:|---:|---:|---:|
+| `real` | 16.482 | 3.082 | 13.400 | 18,7 % |
+| `audio_modified` | 16.450 | 3.085 | 13.365 | 18,8 % |
+| `visual_modified` | 16.420 | 3.084 | 13.336 | 18,8 % |
+| `both_modified` | 16.357 | 3.084 | 13.273 | 18,9 % |
+| **gesamt** | **65.709** | **12.335** | **53.374** | **18,8 %** |
+
+Die Abdeckung ist über alle vier Kategorien identisch (18,7–18,9 %). Das ist die Signatur
+des `run.max_videos`-Deckels aus `conf/preprocess.yaml`, nicht die von
+Verarbeitungsfehlern: Fehler träfen einzelne Kategorien unterschiedlich hart und lägen um
+Größenordnungen niedriger. Die Fehlerquote lässt sich aus dieser Aufstellung deshalb
+**nicht** ablesen — nicht verarbeitete und fehlgeschlagene Videos sind darin nicht
+unterscheidbar.
+
+### 7.6 QA-Lauf `validate_processed.py`
+
+`python -m scripts.validate_processed` auf dem finalen Bestand:
+
+```text
+=== train (data\processed\train.h5)
+  ok:   116170 chunks, shapes/dtypes verified
+  ok:   CSV row count, h5_index permutation, CSV<->HDF5 labels verified
+  label       : 10184/116170 fake (8.8%)
+  label_video : 6846/116170 fake (5.9%)
+  label_audio : 6766/116170 fake (5.8%)
+  ok:   crop boxes positive, in-frame, square
+  pixel mean over 32 sampled chunks: 92.5 (std 30.7)
+  ok:   sampled chunks look like real images
+  audio RMS over 32 sampled chunks: median 0.0383
+  ok:   sampled audio finite and non-silent
+
+=== val (data\processed\val.h5)
+  ok:   17219 chunks, shapes/dtypes verified
+  ok:   CSV row count, h5_index permutation, CSV<->HDF5 labels verified
+  label       : 1547/17219 fake (9.0%)
+  label_video : 1037/17219 fake (6.0%)
+  label_audio : 1036/17219 fake (6.0%)
+  ok:   crop boxes positive, in-frame, square
+  pixel mean over 32 sampled chunks: 93.6 (std 33.4)
+  ok:   sampled chunks look like real images
+  audio RMS over 32 sampled chunks: median 0.0548
+  ok:   sampled audio finite and non-silent
+
+=== test (data\processed\test.h5)
+  ok:   18298 chunks, shapes/dtypes verified
+  ok:   CSV row count, h5_index permutation, CSV<->HDF5 labels verified
+  label       : 1648/18298 fake (9.0%)
+  label_video : 1108/18298 fake (6.1%)
+  label_audio : 1101/18298 fake (6.0%)
+  ok:   crop boxes positive, in-frame, square
+  pixel mean over 32 sampled chunks: 95.0 (std 24.6)
+  ok:   sampled chunks look like real images
+  audio RMS over 32 sampled chunks: median 0.0571
+  ok:   sampled audio finite and non-silent
+
+=== identity disjointness
+  ok:   splits identity-disjoint ({'train': 119, 'val': 22, 'test': 24})
+
+PASSED: 0 failure(s), 0 warning(s)
+```
+
+Alle Prüfungen bestanden, keine Warnungen. Insbesondere: keine Identität in mehr als einem
+Split (Leakage-Check), Crop-Boxen quadratisch und im Bild, CSV- und HDF5-Labels
+byte-identisch. Was im Einzelnen geprüft wird, steht in §8.
+
+## 8. Quality Assurance (QA) Check
 
 **Pflicht nach jedem Preprocessing/Relabeling (Audit Juni 2026):**
 ```bash
@@ -387,7 +584,7 @@ und Audio-Statistik (finit, nicht still) auf Zufallsstichproben.
 Sitzt das Cropping? Zittert das Bild? Ist es zeitsynchron?
 (Alternativ `scripts/sanity_check.py` für eine vollständige `.mp4`-Rekonstruktion.)
 
-## 8. Weiterführende Recherche
+## 9. Weiterführende Recherche
 - AV-Deepfake1M Paper: arxiv:2311.15308
 - SWAN-DF Paper: „Vulnerability of Automatic Identity Recognition to Audio-Visual Deepfakes" (IJCB 2023)
 - HDF5 File format for Deep Learning.
